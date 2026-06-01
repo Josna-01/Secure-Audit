@@ -1,0 +1,228 @@
+import axios, { AxiosInstance } from 'axios'
+import type {
+  Case, CreateCasePayload, Evidence, DetectionResult,
+  BNSResult, AuditLog, Notification, PersonalNote, Storyboard,
+  ApiResponse, PaginatedResponse
+} from '../types'
+
+const BASE_URL = import.meta.env.VITE_API_BASE_URL || 'http://localhost:8000'
+
+class ApiService {
+  private client: AxiosInstance
+
+  constructor() {
+    this.client = axios.create({
+      baseURL: BASE_URL,
+
+      timeout: 30000,
+      headers: { 'Content-Type': 'application/json' }
+    })
+
+    // Attach JWT on every request
+    this.client.interceptors.request.use((config) => {
+      const token = localStorage.getItem('sa_token')
+      if (token) config.headers.Authorization = `Bearer ${token}`
+      return config
+    })
+
+    // Handle 401 globally
+    this.client.interceptors.response.use(
+      (res) => res,
+      (err) => {
+        if (err.response?.status === 401) {
+          localStorage.removeItem('sa_token')
+          window.location.href = '/login'
+        }
+        return Promise.reject(err)
+      }
+    )
+  }
+
+  // ── AUTH ────────────────────────────────────────────────────────────────
+  async sendOTP(email: string, password: string) {
+    const { data } = await this.client.post<ApiResponse<{ message: string }>>('/auth/send-otp', { email, password })
+    return data
+  }
+
+  async verifyOTP(email: string, otp: string) {
+    const { data } = await this.client.post<ApiResponse<{ token: string; user: object }>>('/auth/verify-otp', { email, otp })
+    return data
+  }
+
+  async register(payload: {
+    name: string; badge_id: string; email: string;
+    department: string; phone?: string; password: string
+  }) {
+    const { data } = await this.client.post<ApiResponse<{ message: string }>>('/auth/register', payload)
+    return data
+  }
+
+  async forgotPassword(email: string) {
+    const { data } = await this.client.post<ApiResponse<{ message: string }>>('/auth/forgot-password', { email })
+    return data
+  }
+
+  async getMe() {
+    const { data } = await this.client.get<ApiResponse<object>>('/auth/me')
+    return data
+  }
+
+  async logout() {
+    const { data } = await this.client.post<ApiResponse<{ message: string }>>('/auth/logout')
+    return data
+  }
+
+  // ── CASES ───────────────────────────────────────────────────────────────
+  async getCases(params?: { status?: string; search?: string; page?: number; per_page?: number }) {
+    const { data } = await this.client.get<PaginatedResponse<Case>>('/cases', { params })
+    return data
+  }
+
+  async getCase(id: string) {
+    const { data } = await this.client.get<ApiResponse<Case>>(`/cases/${id}`)
+    return data
+  }
+
+  async createCase(payload: CreateCasePayload) {
+    const { data } = await this.client.post<ApiResponse<Case>>('/cases', payload)
+    return data
+  }
+
+  async updateCase(id: string, payload: Partial<CreateCasePayload>) {
+    const { data } = await this.client.patch<ApiResponse<Case>>(`/cases/${id}`, payload)
+    return data
+  }
+
+  async getCaseStats() {
+    const { data } = await this.client.get<ApiResponse<{
+      active: number; total_evidence: number; tamper_alerts: number; bns_classified: number
+    }>>('/cases/stats')
+    return data
+  }
+
+  // ── EVIDENCE ────────────────────────────────────────────────────────────
+  async getEvidence(caseId?: string) {
+    const { data } = await this.client.get<ApiResponse<Evidence[]>>('/evidence', {
+      params: caseId ? { case_id: caseId } : undefined
+    })
+    return data
+  }
+
+  async uploadEvidence(caseId: string, file: File, meta: { description?: string; evidence_type: string; language?: string }) {
+    const form = new FormData()
+    form.append('file', file)
+    form.append('case_id', caseId)
+    form.append('evidence_type', meta.evidence_type)
+    if (meta.description) form.append('description', meta.description)
+    if (meta.language) form.append('language', meta.language)
+    const { data } = await this.client.post<ApiResponse<Evidence>>('/evidence/upload', form, {
+      headers: { 'Content-Type': 'multipart/form-data' }
+    })
+    return data
+  }
+
+  async verifyHash(evidenceId: string) {
+    const { data } = await this.client.post<ApiResponse<{ verified: boolean; stored_hash: string; computed_hash: string }>>(`/evidence/${evidenceId}/verify`)
+    return data
+  }
+
+  // ── DETECTION ───────────────────────────────────────────────────────────
+  async runDetection(evidenceId: string, caseId: string) {
+    const { data } = await this.client.post<ApiResponse<DetectionResult>>('/ai/detect', { evidence_id: evidenceId, case_id: caseId })
+    return data
+  }
+
+  async getDetectionResults(caseId: string) {
+    const { data } = await this.client.get<ApiResponse<DetectionResult[]>>(`/ai/detect/case/${caseId}`)
+    return data
+  }
+
+  // ── GRAPH ───────────────────────────────────────────────────────────────
+  async getCaseGraph(caseId: string) {
+    const { data } = await this.client.get<any>(`/cases/${caseId}/graph`)
+    return data
+  }
+
+  // ── OCR ─────────────────────────────────────────────────────────────────
+  async runOCR(evidenceId: string, language?: string) {
+    const { data } = await this.client.post<ApiResponse<{ extracted_text: string; translated_text?: string; detected_language: string }>>('/ai/ocr', { evidence_id: evidenceId, language })
+    return data
+  }
+
+  // ── BNS ─────────────────────────────────────────────────────────────────
+  async predictBNS(firText: string) {
+    const { data } = await this.client.post<any>('/bns/predict', { fir_text: firText })
+    return data
+  }
+
+  async storeBNS(caseId: string, result: any, firText: string) {
+    const { data } = await this.client.post<any>('/bns/store', { 
+      case_id: caseId, 
+      crime_type: result.crime_type, 
+      sections: result.bns,
+      fir_text: firText
+    })
+    return data
+  }
+
+  async getBNSResults(caseId: string) {
+    const { data } = await this.client.get<any>(`/bns/case/${caseId}`)
+    return data
+  }
+
+  // ── STORYBOARD ──────────────────────────────────────────────────────────
+  async generateStoryboard(caseId: string) {
+    const { data } = await this.client.post<ApiResponse<Storyboard>>('/ai/storyboard', { case_id: caseId })
+    return data
+  }
+
+  // ── AUDIT LOG ───────────────────────────────────────────────────────────
+  async getAuditLogs(params?: { action?: string; user_id?: string; case_id?: string; page?: number }) {
+    const { data } = await this.client.get<PaginatedResponse<AuditLog>>('/audit', { params })
+    return data
+  }
+
+  // ── NOTIFICATIONS ────────────────────────────────────────────────────────
+  async getNotifications() {
+    const { data } = await this.client.get<ApiResponse<Notification[]>>('/notifications')
+    return data
+  }
+
+  async markNotificationRead(id: string) {
+    const { data } = await this.client.patch<ApiResponse<{ message: string }>>(`/notifications/${id}/read`)
+    return data
+  }
+
+  async markAllNotificationsRead() {
+    const { data } = await this.client.patch<ApiResponse<{ message: string }>>('/notifications/read-all')
+    return data
+  }
+
+  // ── PERSONAL NOTES ───────────────────────────────────────────────────────
+  async getNotes() {
+    const { data } = await this.client.get<ApiResponse<PersonalNote[]>>('/notes')
+    return data
+  }
+
+  async createNote(payload: { title: string; content: string; tags: string[]; sketch_data?: string }) {
+    const { data } = await this.client.post<ApiResponse<PersonalNote>>('/notes', payload)
+    return data
+  }
+
+  async updateNote(id: string, payload: Partial<{ title: string; content: string; tags: string[]; sketch_data?: string }>) {
+    const { data } = await this.client.patch<ApiResponse<PersonalNote>>(`/notes/${id}`, payload)
+    return data
+  }
+
+  async deleteNote(id: string) {
+    const { data } = await this.client.delete<ApiResponse<{ message: string }>>(`/notes/${id}`)
+    return data
+  }
+
+  async addNoteToCaseAsNote(noteId: string, caseId: string, options: { include_notes: boolean; include_sketch: boolean; destination: string }) {
+    const { data } = await this.client.post<ApiResponse<{ message: string }>>(`/notes/${noteId}/link-to-case`, { case_id: caseId, ...options })
+    return data
+  }
+}
+
+export const api = new ApiService()

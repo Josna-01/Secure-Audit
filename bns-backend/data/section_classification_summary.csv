@@ -1,0 +1,12 @@
+Metric,Value
+Total Sections,57
+Sections with ROC-AUC,57
+Mean ROC-AUC,0.9997
+Mean PR-AUC,0.9873
+Micro-Avg ROC-AUC,1.0000
+Macro-Avg ROC-AUC,0.9997
+Micro-Avg PR-AUC,0.9995
+Macro-Avg PR-AUC,0.9873
+Mean Precision,0.9755
+Mean Recall,0.9960
+Mean F1-Score,0.9840

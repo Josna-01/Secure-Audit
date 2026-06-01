@@ -1,0 +1,18 @@
+Metric,Value
+Total Sections,57
+Total Test Samples,1500
+Total TP (across all sections),3813
+Total FP (across all sections),76
+Total FN (across all sections),24
+Total TN (across all sections),81587
+Mean Precision,0.9755
+Median Precision,1.0000
+Mean Recall,0.9960
+Median Recall,1.0000
+Mean F1-Score,0.9840
+Median F1-Score,1.0000
+Mean Specificity,0.9991
+Mean Accuracy,0.9988
+Std F1-Score,0.0497
+Best Section (F1),101 (1.0000)
+Worst Section (F1),118(1) (0.7419)

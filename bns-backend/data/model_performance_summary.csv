@@ -1,0 +1,17 @@
+Metric,Value
+BNS F1-Micro,0.9871
+BNS F1-Macro,0.9840
+BNS F1-Weighted,0.9880
+BNS Precision,0.9835
+BNS Recall,0.9937
+BNS Hamming Accuracy,0.9988
+Crime F1-Micro,0.9927
+Crime F1-Macro,0.9954
+Crime F1-Weighted,0.9927
+Crime Precision,0.9927
+Crime Recall,0.9927
+Crime Accuracy,0.9927
+Final Train Loss,0.001929
+Final Val Loss,0.006406
+Epochs Trained,63
+Test Set Size,1500

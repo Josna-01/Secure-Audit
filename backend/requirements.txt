@@ -1,0 +1,7 @@
+fastapi
+uvicorn
+supabase<2.5
+python-multipart
+python-dotenv
+pydantic
+roboflow
