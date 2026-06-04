@@ -14,3 +14,10 @@ venv
 *.pyc
 uploads
 *.zip
+bns-backend/venv310
+backend/venv
+*.pth
+*.pt
+*.dll
+*.lib
+audit-frontend/node_modules
