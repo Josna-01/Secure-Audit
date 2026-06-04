@@ -2,6 +2,11 @@ import os
 import shutil
 import uuid
 import datetime
+import random
+import string
+import smtplib
+from email.mime.text import MIMEText
+from email.mime.multipart import MIMEMultipart
 from fastapi import FastAPI, File, UploadFile, HTTPException, Form, BackgroundTasks, Request
 from fastapi.responses import JSONResponse
 from fastapi.middleware.cors import CORSMiddleware
@@ -9,19 +14,25 @@ from pydantic import BaseModel
 from typing import List, Optional, Dict, Any
 from fastapi.staticfiles import StaticFiles
 from supabase import create_client, Client
+from gotrue.errors import AuthApiError
 import hashlib
+import jwt as pyjwt
 from dotenv import load_dotenv
 from roboflow import Roboflow
 import requests
 
-# Load environment variables
 load_dotenv()
 
 SUPABASE_URL = os.environ.get("SUPABASE_URL")
 SUPABASE_KEY = os.environ.get("SUPABASE_KEY")
+SUPABASE_SERVICE_ROLE_KEY = os.environ.get("SUPABASE_SERVICE_ROLE_KEY")
 ROBOFLOW_API_KEY = os.environ.get("ROBOFLOW_API_KEY")
+JWT_SECRET = os.environ.get("JWT_SECRET")
+EMAIL_USER = os.environ.get("EMAIL_USER")
+EMAIL_PASSWORD = os.environ.get("EMAIL_PASSWORD")
 
 supabase: Client = create_client(SUPABASE_URL, SUPABASE_KEY)
+supabase_admin: Client = create_client(SUPABASE_URL, SUPABASE_SERVICE_ROLE_KEY)
 
 app = FastAPI()
 
@@ -67,11 +78,12 @@ class DetectionRequest(BaseModel):
 
 class LoginRequest(BaseModel):
     email: str
-    password: str
+    password: Optional[str] = None
 
 class VerifyOTPRequest(BaseModel):
     email: str
     otp: str
+    password: Optional[str] = None
 
 class RegisterRequest(BaseModel):
     name: str
@@ -84,174 +96,224 @@ class RegisterRequest(BaseModel):
 class ForgotPasswordRequest(BaseModel):
     email: str
 
+class DirectLoginRequest(BaseModel):
+    email: str
+    password: str
+    department: Optional[str] = None
+    role: Optional[str] = None
+
 
 @app.get("/")
 def home():
     return {"message": "API is running"}
 
+# ====== EMAIL HELPER ======
+def send_otp_email(to_email: str, otp: str, officer_name: str):
+    msg = MIMEMultipart("alternative")
+    msg["Subject"] = "Secure Audits — Your Access Token"
+    msg["From"] = EMAIL_USER
+    msg["To"] = to_email
+
+    body = f"""
+    <html><body style="font-family: monospace; background: #0a0a0a; color: #00ff88; padding: 32px;">
+    <h2 style="color: #00ff88;">SECURE AUDITS</h2>
+    <p style="color: #ccc;">Officer {officer_name},</p>
+    <p style="color: #ccc;">Your one-time access token:</p>
+    <h1 style="letter-spacing: 8px; color: #00ff88; font-size: 48px;">{otp}</h1>
+    <p style="color: #888;">Valid for 5 minutes. Do not share this token.</p>
+    <p style="color: #444; font-size: 11px;">Secure Audits — Digital Evidence Investigation System</p>
+    </body></html>
+    """
+
+    msg.attach(MIMEText(body, "html"))
+
+    with smtplib.SMTP_SSL("smtp.gmail.com", 465) as server:
+        server.login(EMAIL_USER, EMAIL_PASSWORD)
+        server.sendmail(EMAIL_USER, to_email, msg.as_string())
+
+
+# ====== JWT HELPER ======
+def create_jwt(user_id: str, email: str, role: str, name: str) -> str:
+    payload = {
+        "sub": user_id,
+        "email": email,
+        "role": role,
+        "name": name,
+        "iat": datetime.datetime.utcnow(),
+        "exp": datetime.datetime.utcnow() + datetime.timedelta(hours=24)
+    }
+    return pyjwt.encode(payload, JWT_SECRET, algorithm="HS256")
+
+
+def decode_jwt(token: str) -> dict:
+    return pyjwt.decode(token, JWT_SECRET, algorithms=["HS256"])
+
+
 # ====== AUTH ENDPOINTS ======
-@app.post("/auth/register")
-def register_user(req: RegisterRequest):
-    try:
-        signup_res = supabase.auth.sign_up({
-            "email": req.email,
-            "password": req.password,
-            "options": {
-                "data": {
-                    "name": req.name,
-                    "badge_id": req.badge_id,
-                    "department": req.department,
-                    "role": "investigator",
-                    "status": "pending"
-                }
-            }
-        })
-        
-        if signup_res.user:
-            return {"success": True, "message": "Registration successful. Pending admin approval.", "data": {}}
-        
-        raise HTTPException(status_code=400, detail="Registration failed")
-    except Exception as e:
-        error_msg = str(e)
-        if "already registered" in error_msg.lower() or "already exists" in error_msg.lower():
-            raise HTTPException(status_code=400, detail="An account with this email already exists.")
-        raise HTTPException(status_code=400, detail=f"Registration failed: {error_msg}")
 
 @app.post("/auth/send-otp")
 def send_otp(req: LoginRequest):
-    if req.email == "demo@cid.gov.in" and req.password == "password":
-        return {"success": True, "message": "Demo OTP sent. Use code 123456.", "data": {"message": "OTP sent"}}
-        
+    """Step 1 — officer enters email, gets OTP sent to their registered email."""
+    # Look up officer in users table
     try:
-        try:
-            sign_in_res = supabase.auth.sign_in_with_password({
-                "email": req.email,
-                "password": req.password
-            })
-            
-            user_meta = sign_in_res.user.user_metadata if sign_in_res.user else {}
-            if user_meta.get("status", "active") == "pending":
-                raise HTTPException(status_code=403, detail="Account is pending admin approval.")
-        except Exception as e:
-            if "pending admin approval" in str(e):
-                raise
-            raise HTTPException(status_code=401, detail="Invalid email or password.")
-            
-        try:
-            supabase.auth.sign_in_with_otp({
-                "email": req.email,
-                "options": {
-                    "should_create_user": False
-                }
-            })
-        except Exception as otp_err:
-            print(f"[AUTH WARNING] Supabase OTP send failed: {otp_err}. Falling back to mock verification.")
-            return {"success": True, "message": "OTP sent. Falling back to mock verification.", "data": {"message": "OTP sent"}}
-            
-        return {"success": True, "message": "OTP sent successfully.", "data": {"message": "OTP sent"}}
+        user_res = supabase_admin.table("users").select("*").eq("email", req.email).eq("is_active", True).execute()
+        if not user_res.data:
+            raise HTTPException(status_code=404, detail="No active account found for this email.")
+        user = user_res.data[0]
     except HTTPException:
         raise
     except Exception as e:
-        raise HTTPException(status_code=500, detail=f"Authentication error: {str(e)}")
+        raise HTTPException(status_code=500, detail=f"Database error: {str(e)}")
+
+    # Generate 6-digit OTP
+    otp = "".join(random.choices(string.digits, k=6))
+    expires_at = (datetime.datetime.utcnow() + datetime.timedelta(minutes=5)).isoformat()
+
+    # Store OTP in otp_tokens table
+    try:
+        supabase_admin.table("otp_tokens").insert({
+            "user_id": user["id"],
+            "token": otp,
+            "expires_at": expires_at,
+            "used": False
+        }).execute()
+    except Exception as e:
+        raise HTTPException(status_code=500, detail=f"Failed to store OTP: {str(e)}")
+
+    # Send OTP via Gmail
+    try:
+        send_otp_email(user["email"], otp, user["full_name"])
+    except Exception as e:
+        raise HTTPException(status_code=500, detail=f"Failed to send email: {str(e)}")
+
+    return {"success": True, "message": f"Token sent to {user['email']}. Valid for 5 minutes."}
+
 
 @app.post("/auth/verify-otp")
-def verify_user_otp(req: VerifyOTPRequest):
-    if req.email == "demo@cid.gov.in" or req.otp in ["123456", "000000"]:
-        return {
-            "success": True,
-            "data": {
-                "token": "demo_token",
-                "user": {
-                    "id": "demo_user",
-                    "name": "Demo User",
-                    "email": req.email or "demo@cid.gov.in",
-                    "badge_id": "CID-DEMO",
-                    "department": "CID",
-                    "role": "admin",
-                    "status": "active",
-                    "created_at": datetime.datetime.now(datetime.timezone.utc).isoformat()
-                }
-            }
-        }
-    
+def verify_otp(req: VerifyOTPRequest):
+    """Step 2 — officer enters password + OTP, gets JWT back."""
+    # Look up officer
     try:
-        res = supabase.auth.verify_otp({
-            "email": req.email,
-            "token": req.otp,
-            "type": "email"
-        })
-        
-        user_data = res.user
-        if not user_data:
-            raise HTTPException(status_code=400, detail="Invalid OTP or user not found.")
-            
-        status = user_data.user_metadata.get("status", "pending")
-        if status == "pending":
-            raise HTTPException(status_code=403, detail="Account is pending admin approval.")
-            
-        frontend_user = {
-            "id": user_data.id,
-            "name": user_data.user_metadata.get("name", "Unknown"),
-            "email": user_data.email,
-            "badge_id": user_data.user_metadata.get("badge_id", ""),
-            "department": user_data.user_metadata.get("department", ""),
-            "role": user_data.user_metadata.get("role", "investigator"),
-            "status": status,
-            "created_at": user_data.created_at
-        }
-        
-        return {
-            "success": True,
-            "data": {
-                "token": res.session.access_token,
-                "user": frontend_user
-            }
-        }
+        user_res = supabase_admin.table("users").select("*").eq("email", req.email).eq("is_active", True).execute()
+        if not user_res.data:
+            raise HTTPException(status_code=404, detail="Account not found.")
+        user = user_res.data[0]
     except HTTPException:
         raise
     except Exception as e:
-        raise HTTPException(status_code=400, detail=f"OTP verification failed: {str(e)}")
+        raise HTTPException(status_code=500, detail=f"Database error: {str(e)}")
+
+    # Verify password via Supabase Auth
+    try:
+        sign_in_res = supabase.auth.sign_in_with_password({
+            "email": req.email,
+            "password": req.password
+        })
+        if not sign_in_res.user:
+            raise HTTPException(status_code=401, detail="Invalid password.")
+    except AuthApiError:
+        raise HTTPException(status_code=401, detail="Invalid password.")
+    except HTTPException:
+        raise
+    except Exception as e:
+        raise HTTPException(status_code=401, detail="Invalid password.")
+
+    # Verify OTP — find latest unused, non-expired token
+    try:
+        otp_res = supabase_admin.table("otp_tokens")\
+            .select("*")\
+            .eq("user_id", user["id"])\
+            .eq("token", req.otp)\
+            .eq("used", False)\
+            .gte("expires_at", datetime.datetime.utcnow().isoformat())\
+            .order("created_at", desc=True)\
+            .limit(1)\
+            .execute()
+
+        if not otp_res.data:
+            raise HTTPException(status_code=401, detail="Invalid or expired token. Request a new one.")
+
+        otp_record = otp_res.data[0]
+    except HTTPException:
+        raise
+    except Exception as e:
+        raise HTTPException(status_code=500, detail=f"OTP verification error: {str(e)}")
+
+    # Mark OTP as used
+    supabase_admin.table("otp_tokens").update({"used": True}).eq("id", otp_record["id"]).execute()
+
+    # Issue JWT
+    token = create_jwt(
+        user_id=user["id"],
+        email=user["email"],
+        role=user["role"],
+        name=user["full_name"]
+    )
+
+    write_audit_log(
+        user_id=user["id"],
+        action="Investigator Logged In",
+        metadata={"email": user["email"], "role": user["role"]}
+    )
+
+    return {
+        "success": True,
+        "data": {
+            "token": token,
+            "user": {
+                "id": user["id"],
+                "name": user["full_name"],
+                "email": user["email"],
+                "badge_id": user.get("badge_number", ""),
+                "department": user.get("department", ""),
+                "role": user["role"],
+                "clearance_level": user.get("clearance_level", 1),
+                "status": "active"
+            }
+        }
+    }
+
 
 @app.get("/auth/me")
 def get_me(request: Request):
+    """Validates JWT and returns current officer profile."""
     auth_header = request.headers.get("Authorization")
     if not auth_header or not auth_header.startswith("Bearer "):
-        raise HTTPException(status_code=401, detail="Missing or invalid authorization token")
-    
+        raise HTTPException(status_code=401, detail="Missing or invalid authorization token.")
+
     token = auth_header.split(" ")[1]
-    
-    if token in ["demo_token", "mock_token"] or token == SUPABASE_KEY:
-        return {
-            "success": True,
-            "data": {
-                "id": "demo_user",
-                "name": "Demo User",
-                "email": "demo@cid.gov.in",
-                "badge_id": "CID-DEMO",
-                "department": "CID",
-                "role": "admin",
-                "status": "active",
-                "created_at": datetime.datetime.now(datetime.timezone.utc).isoformat()
-            }
-        }
-    
+
     try:
-        user_res = supabase.auth.get_user(token)
-        user_data = user_res.user
-        
-        frontend_user = {
-            "id": user_data.id,
-            "name": user_data.user_metadata.get("name", "Unknown"),
-            "email": user_data.email,
-            "badge_id": user_data.user_metadata.get("badge_id", ""),
-            "department": user_data.user_metadata.get("department", ""),
-            "role": user_data.user_metadata.get("role", "investigator"),
-            "status": user_data.user_metadata.get("status", "active"),
-            "created_at": user_data.created_at
-        }
-        return {"success": True, "data": frontend_user}
+        payload = decode_jwt(token)
+    except pyjwt.ExpiredSignatureError:
+        raise HTTPException(status_code=401, detail="Token expired. Please log in again.")
+    except pyjwt.InvalidTokenError:
+        raise HTTPException(status_code=401, detail="Invalid token.")
+
+    try:
+        user_res = supabase_admin.table("users").select("*").eq("id", payload["sub"]).execute()
+        if not user_res.data:
+            raise HTTPException(status_code=404, detail="User not found.")
+        user = user_res.data[0]
+    except HTTPException:
+        raise
     except Exception as e:
-        raise HTTPException(status_code=401, detail=f"Invalid or expired token: {str(e)}")
+        raise HTTPException(status_code=500, detail=f"Database error: {str(e)}")
+
+    return {
+        "success": True,
+        "data": {
+            "id": user["id"],
+            "name": user["full_name"],
+            "email": user["email"],
+            "badge_id": user.get("badge_number", ""),
+            "department": user.get("department", ""),
+            "role": user["role"],
+            "clearance_level": user.get("clearance_level", 1),
+            "status": "active" if user["is_active"] else "inactive"
+        }
+    }
+
 
 @app.post("/auth/logout")
 def logout():
@@ -260,14 +322,6 @@ def logout():
     except Exception:
         pass
     return {"success": True, "message": "Logged out successfully."}
-
-@app.post("/auth/forgot-password")
-def forgot_password(req: ForgotPasswordRequest):
-    try:
-        supabase.auth.reset_password_for_email(req.email)
-        return {"success": True, "message": "Reset OTP sent successfully."}
-    except Exception as e:
-        return {"success": True, "message": "If the email exists, a reset code has been sent."}
 
 # ====== AUDIT LOG HELPER ======
 def write_audit_log(user_id: str, action: str, case_id: str = None, file_hash: str = None, metadata: dict = None):

@@ -1,294 +1,466 @@
-import React, { useState, useRef, useEffect } from 'react'
+import React, { useState, useEffect } from 'react'
 import { useNavigate } from 'react-router-dom'
 import { useAuth } from '../context/AuthContext'
 import { api } from '../services/api'
 import { Btn, AlertBox } from '../components/UI'
 import type { User } from '../types'
 
-type Step = 'login' | 'otp' | 'register' | 'forgot' | 'pending'
-
-function LogoHeader() {
-  return (
-    <div style={{ display: 'flex', alignItems: 'center', gap: '10px', marginBottom: '20px', justifyContent: 'center' }}>
-      <div style={{ width: '36px', height: '36px', background: 'var(--blue)', borderRadius: '8px', display: 'flex', alignItems: 'center', justifyContent: 'center', color: 'white' }}>
-        <svg width="20" height="20" viewBox="0 0 24 24"><path d="M12 2L3 6v6c0 5.25 3.8 10.15 9 11.5 5.2-1.35 9-6.25 9-11.5V6L12 2z" fill="white"/></svg>
-      </div>
-      <div style={{ fontSize: '15px', fontWeight: 600, color: 'var(--text)' }}>Secure Audits</div>
-    </div>
-  )
-}
-
-const cardStyle: React.CSSProperties = {
-  background: 'var(--bg2)', border: '1px solid var(--border)',
-  borderRadius: 'var(--r3)', padding: '32px', width: '430px', maxWidth: '100%'
-}
-const flbl: React.CSSProperties = { fontSize: '11px', color: 'var(--text3)', display: 'block', marginBottom: '4px', textTransform: 'uppercase', letterSpacing: '.4px' }
-const finput: React.CSSProperties = { width: '100%', background: 'var(--bg3)', border: '1px solid var(--border)', borderRadius: 'var(--r)', padding: '7px 10px', fontSize: '13px', color: 'var(--text)', fontFamily: 'var(--font)', outline: 'none' }
-
-function PwInput({ id, placeholder, value, onChange }: { id: string; placeholder: string; value: string; onChange: (v: string) => void }) {
-  const [show, setShow] = useState(false)
-  return (
-    <div style={{ position: 'relative' }}>
-      <input id={id} type={show ? 'text' : 'password'} placeholder={placeholder} value={value} onChange={(e) => onChange(e.target.value)}
-        style={{ ...finput, paddingRight: '36px' }} />
-      <span onClick={() => setShow((s) => !s)} style={{ position: 'absolute', right: '10px', top: '50%', transform: 'translateY(-50%)', cursor: 'pointer', color: 'var(--text3)', fontSize: '12px', userSelect: 'none' }}>
-        {show ? 'Hide' : 'Show'}
-      </span>
-    </div>
-  )
-}
-
-function PwStrength({ value }: { value: string }) {
-  let score = 0
-  if (value.length >= 8) score++
-  if (/[A-Z]/.test(value)) score++
-  if (/[0-9]/.test(value)) score++
-  if (/[^A-Za-z0-9]/.test(value)) score++
-  const colors = ['', 'var(--red)', 'var(--amber)', 'var(--amber)', 'var(--green)']
-  const labels = ['', 'Weak', 'Fair', 'Good', 'Strong']
-  if (!value) return null
-  return (
-    <div style={{ marginTop: '4px' }}>
-      <div style={{ height: '3px', borderRadius: '2px', background: 'var(--bg4)', overflow: 'hidden' }}>
-        <div style={{ height: '100%', width: `${score * 25}%`, background: colors[score], transition: 'all .3s' }} />
-      </div>
-      <div style={{ fontSize: '10px', color: colors[score], marginTop: '2px' }}>{labels[score]}</div>
-    </div>
-  )
-}
-
 export default function AuthPage() {
   const navigate = useNavigate()
   const { login, isAuthenticated } = useAuth()
-  
+
   useEffect(() => {
     if (isAuthenticated) {
       navigate('/dashboard')
     }
   }, [isAuthenticated, navigate])
 
-  const [step, setStep] = useState<Step>('login')
+  // Form states
   const [email, setEmail] = useState('')
+  const [role, setRole] = useState('investigator')
   const [password, setPassword] = useState('')
-  const [regPw, setRegPw] = useState('')
-  const [otp, setOtp] = useState(['', '', '', '', '', ''])
+  const [tokenInput, setTokenInput] = useState('')
+  
+  // Transition states
+  const [tokenSent, setTokenSent] = useState(false)
+  const [tokenLoading, setTokenLoading] = useState(false)
+  const [signInLoading, setSignInLoading] = useState(false)
+  
+  // UI states
   const [error, setError] = useState('')
-  const [success, setSuccess] = useState('')
-  const [loading, setLoading] = useState(false)
-  const [otpSeconds, setOtpSeconds] = useState(120)
-  const [resendSeconds, setResendSeconds] = useState(30)
-  const otpRefs = useRef<(HTMLInputElement | null)[]>([])
+  const [successMsg, setSuccessMsg] = useState('')
+  const [showPassword, setShowPassword] = useState(false)
 
-  useEffect(() => {
-    if (step !== 'otp') return
-    const iv = setInterval(() => setOtpSeconds((s) => Math.max(0, s - 1)), 1000)
-    const rv = setInterval(() => setResendSeconds((s) => Math.max(0, s - 1)), 1000)
-    return () => { clearInterval(iv); clearInterval(rv) }
-  }, [step])
-
-  useEffect(() => { if (step === 'otp') setTimeout(() => otpRefs.current[0]?.focus(), 100) }, [step])
-
-  const fmtTime = (s: number) => `${String(Math.floor(s / 60)).padStart(2, '0')}:${String(s % 60).padStart(2, '0')}`
-
-  const handleOtpInput = (i: number, val: string) => {
-    const clean = val.replace(/\D/g, '').slice(0, 1)
-    const next = [...otp]; next[i] = clean; setOtp(next)
-    if (clean && i < 5) otpRefs.current[i + 1]?.focus()
-  }
-
-  const handleOtpKeyDown = (i: number, e: React.KeyboardEvent) => {
-    if (e.key === 'Backspace' && !otp[i] && i > 0) { otpRefs.current[i - 1]?.focus() }
-  }
-
-  const handleOtpPaste = (e: React.ClipboardEvent) => {
-    const text = e.clipboardData.getData('text').replace(/\D/g, '').slice(0, 6)
-    const arr = text.split('')
-    setOtp(arr.concat(Array(6 - arr.length).fill('')))
-  }
-
-  const doSendOTP = async () => {
+  const handleGetToken = async (e: React.MouseEvent) => {
+    e.preventDefault()
     setError('')
-    if (!email) { setError('Please enter your official email.'); return }
-    if (!email.includes('@')) { setError('Invalid email format.'); return }
-    if (!password) { setError('Please enter your password.'); return }
-    setLoading(true)
+    setSuccessMsg('')
+    
+    if (!email) {
+      setError('Official email or Officer ID is required to request a token.')
+      return
+    }
+    
+    setTokenLoading(true)
     try {
-      await api.sendOTP(email, password)
-      setOtpSeconds(120); setResendSeconds(30)
-      setStep('otp')
-    } catch (err: unknown) {
-      const e = err as { response?: { data?: { detail?: string } } }
-      setError(e.response?.data?.detail || 'Failed to send OTP. Check your credentials.')
-    } finally { setLoading(false) }
+      const res = await api.sendOTP(email)
+      setTokenSent(true)
+      setSuccessMsg(res.message || 'Verification token sent successfully. Please check your inbox.')
+    } catch (err: any) {
+      setError(err.response?.data?.detail || 'Failed to send token. Please check email address.')
+    } finally {
+      setTokenLoading(false)
+    }
   }
 
-  const doVerifyOTP = async () => {
-    const code = otp.join('')
-    if (code.length < 6) { setError('Enter all 6 digits.'); return }
-    setLoading(true); setError('')
+  const handleSecureSignIn = async (e: React.FormEvent) => {
+    e.preventDefault()
+    setError('')
+    
+    if (!email) {
+      setError('Official email or Officer ID is required.')
+      return
+    }
+    if (!password) {
+      setError('Security passphrase is required.')
+      return
+    }
+    if (!tokenInput) {
+      setError('Access token is required.')
+      return
+    }
+    
+    setSignInLoading(true)
     try {
-      const res = await api.verifyOTP(email, code)
-      login(res.data.token as string, res.data.user as User)
+      const res = await api.verifyOTP(email, tokenInput, password)
+      
+      // Login context update
+      login(res.data.token, {
+        ...res.data.user,
+        role: role
+      } as User)
       navigate('/dashboard')
-    } catch {
-      setError('Invalid OTP. Please try again.')
-    } finally { setLoading(false) }
+    } catch (err: any) {
+      setError(err.response?.data?.detail || 'Authentication failed. Please verify credentials and role.')
+    } finally {
+      setSignInLoading(false)
+    }
   }
-
-  const doRegister = async () => {
-    const name = (document.getElementById('reg-name') as HTMLInputElement)?.value
-    const badge = (document.getElementById('reg-badge') as HTMLInputElement)?.value
-    const regEmail = (document.getElementById('reg-email') as HTMLInputElement)?.value
-    const dept = (document.getElementById('reg-dept') as HTMLInputElement)?.value
-    if (!name || !badge || !regEmail || !dept || !regPw) { setError('All fields are required.'); return }
-    setLoading(true); setError('')
-    try {
-      await api.register({ name, badge_id: badge, email: regEmail, department: dept, password: regPw })
-      setStep('pending')
-    } catch (err: unknown) {
-      const e = err as { response?: { data?: { detail?: string } } }
-      setError(e.response?.data?.detail || 'Registration failed.')
-    } finally { setLoading(false) }
-  }
-
-  const doForgot = async () => {
-    const fEmail = (document.getElementById('forgot-email') as HTMLInputElement)?.value
-    if (!fEmail) { setError('Enter your email.'); return }
-    setLoading(true); setError('')
-    try {
-      await api.forgotPassword(fEmail)
-      setEmail(fEmail)
-      setSuccess('OTP sent to ' + fEmail + '. Redirecting...')
-      setTimeout(() => { setSuccess(''); setOtpSeconds(120); setResendSeconds(30); setStep('otp') }, 1500)
-    } catch {
-      setError('Email not found.')
-    } finally { setLoading(false) }
-  }
-
-  const authLink: React.CSSProperties = { color: 'var(--blue)', cursor: 'pointer', fontSize: '12px' }
 
   return (
-    <div style={{ display: 'flex', alignItems: 'center', justifyContent: 'center', minHeight: '100vh', background: 'var(--bg)', padding: '20px' }}>
-      <div style={cardStyle}>
-        <LogoHeader />
+    <div style={{
+      display: 'flex',
+      flexDirection: 'column',
+      justifyContent: 'center',
+      alignItems: 'center',
+      minHeight: '100vh',
+      background: '#080c10',
+      color: 'var(--text)',
+      fontFamily: 'var(--font)',
+      padding: '40px 20px',
+      position: 'relative',
+      overflowX: 'hidden'
+    }}>
+      
+      {/* Background grid accent */}
+      <div style={{
+        position: 'absolute',
+        top: 0,
+        left: 0,
+        right: 0,
+        bottom: 0,
+        backgroundImage: 'radial-gradient(var(--border) 1px, transparent 1px)',
+        backgroundSize: '24px 24px',
+        opacity: 0.15,
+        pointerEvents: 'none'
+      }} />
 
-        {step === 'login' && (
-          <>
-            <div style={{ fontSize: '18px', fontWeight: 600, color: 'var(--text)', marginBottom: '4px', textAlign: 'center' }}>Welcome Back</div>
-            <div style={{ fontSize: '13px', color: 'var(--text3)', textAlign: 'center', marginBottom: '6px' }}>Sign in to your investigator account</div>
-            <div style={{ display: 'flex', alignItems: 'center', justifyContent: 'center', gap: '6px', fontSize: '11px', color: 'var(--text3)', marginBottom: '20px' }}>
-              <span>[Lock] Secure Authentication</span><span>·</span><span>[*] Authorized Personnel Only</span>
-            </div>
-            {error && <div style={{ marginBottom: '12px' }}><AlertBox type="error">{error}</AlertBox></div>}
-            <div style={{ marginBottom: '12px' }}>
-              <label style={flbl}>Official Email</label>
-              <input style={finput} type="email" placeholder="name@cid.gov.in" value={email} onChange={(e) => { setEmail(e.target.value); setError('') }} />
-              <div style={{ fontSize: '10px', color: 'var(--text3)', marginTop: '3px' }}>Only official department email addresses accepted</div>
-            </div>
-            <div style={{ marginBottom: '18px' }}>
-              <label style={flbl}>Password</label>
-              <PwInput id="login-pass" placeholder="Enter your password" value={password} onChange={(v) => { setPassword(v); setError('') }} />
-            </div>
-            <div style={{ fontSize: '10px', color: 'var(--text3)', marginBottom: '8px', textAlign: 'center' }}>Step 1 of 2 — Enter credentials · Step 2 — Verify OTP</div>
-            <Btn variant="primary" full loading={loading} onClick={doSendOTP} style={{ marginBottom: '12px' }}>Send OTP</Btn>
-            <div style={{ display: 'flex', justifyContent: 'space-between' }}>
-              <span style={authLink} onClick={() => { setError(''); setStep('forgot') }}>Forgot password?</span>
-              <span style={authLink} onClick={() => { setError(''); setStep('register') }}>Register account</span>
-            </div>
-          </>
-        )}
+      {/* Floating Logo & Header Above Card */}
+      <div style={{
+        display: 'flex',
+        flexDirection: 'column',
+        alignItems: 'center',
+        marginBottom: '28px',
+        textAlign: 'center',
+        zIndex: 5
+      }}>
+        <div style={{
+          width: '48px',
+          height: '48px',
+          background: 'var(--blue-bg)',
+          border: '1.5px solid var(--blue)',
+          borderRadius: '12px',
+          display: 'flex',
+          alignItems: 'center',
+          justifyContent: 'center',
+          color: 'var(--blue)',
+          marginBottom: '10px',
+          boxShadow: '0 0 15px rgba(77, 132, 245, 0.2)'
+        }}>
+          <svg width="26" height="26" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2.5">
+            <path d="M12 22s8-4 8-10V5l-8-3-8 3v7c0 6 8 10 8 10z"/>
+          </svg>
+        </div>
+        <h1 style={{
+          fontSize: '24px',
+          fontWeight: 700,
+          letterSpacing: '0.8px',
+          color: 'var(--text)',
+          margin: 0
+        }}>SECURE AUDITS</h1>
+        <div style={{
+          fontSize: '10px',
+          fontWeight: 600,
+          color: 'var(--text2)',
+          textTransform: 'uppercase',
+          letterSpacing: '1.5px',
+          marginTop: '4px'
+        }}>DIGITAL EVIDENCE & INVESTIGATION SYSTEM</div>
+      </div>
 
-        {step === 'otp' && (
-          <>
-            <div style={{ display: 'flex', alignItems: 'center', justifyContent: 'center', gap: '8px', marginBottom: '20px' }}>
-              {[0, 1].map((i) => <div key={i} style={{ width: i === 1 ? '20px' : '8px', height: '8px', borderRadius: i === 1 ? '4px' : '50%', background: i === 0 ? 'var(--green)' : 'var(--blue)' }} />)}
+      {/* Centered Login Card */}
+      <div style={{
+        width: '460px',
+        maxWidth: '100%',
+        background: '#161b27',
+        border: '1px solid var(--border)',
+        borderRadius: 'var(--r3)',
+        padding: '36px 40px',
+        boxShadow: '0 20px 50px rgba(0,0,0,0.5)',
+        backdropFilter: 'blur(10px)',
+        position: 'relative',
+        zIndex: 5,
+        marginBottom: '32px'
+      }}>
+        <form onSubmit={handleSecureSignIn}>
+          
+          {/* Badge text */}
+          <div style={{ marginBottom: '10px', display: 'flex' }}>
+            <span style={{
+              background: 'var(--blue-bg)',
+              border: '1px solid var(--blue)',
+              color: 'var(--blue)',
+              padding: '2px 8px',
+              borderRadius: '4px',
+              fontSize: '9px',
+              fontWeight: 700,
+              textTransform: 'uppercase',
+              letterSpacing: '1px',
+              fontFamily: 'var(--mono)'
+            }}>SYSTEM SIGN IN</span>
+          </div>
+
+          <h2 style={{
+            fontSize: '20px',
+            fontWeight: 700,
+            color: 'var(--text)',
+            marginBottom: '6px',
+            letterSpacing: '-0.2px'
+          }}>Authorized Access Portal</h2>
+          
+          <p style={{
+            fontSize: '13px',
+            color: 'var(--text2)',
+            marginBottom: '24px'
+          }}>Provide official credentials to authenticate.</p>
+
+          {/* Feedback Alerts */}
+          {error && <div style={{ marginBottom: '18px' }}><AlertBox type="error">{error}</AlertBox></div>}
+          {successMsg && <div style={{ marginBottom: '18px' }}><AlertBox type="success">{successMsg}</AlertBox></div>}
+
+          {/* Email input field */}
+          <div style={{ marginBottom: '16px' }}>
+            <label style={{
+              fontSize: '11px',
+              color: 'var(--text2)',
+              fontWeight: 600,
+              display: 'block',
+              marginBottom: '6px',
+              textTransform: 'uppercase',
+              letterSpacing: '0.4px'
+            }}>OFFICIAL EMAIL / OFFICER ID</label>
+            <input
+              type="email"
+              required
+              placeholder="inspector.sharma@ksp.gov.in"
+              value={email}
+              onChange={(e) => { setEmail(e.target.value); setError(''); setSuccessMsg('') }}
+              style={{
+                width: '100%',
+                background: 'var(--bg3)',
+                border: '1px solid var(--border)',
+                borderRadius: 'var(--r)',
+                padding: '10px 12px',
+                fontSize: '13px',
+                color: 'var(--text)',
+                outline: 'none',
+                transition: 'border-color 0.2s'
+              }}
+              onFocus={(e) => e.target.style.borderColor = 'var(--blue)'}
+              onBlur={(e) => e.target.style.borderColor = 'var(--border)'}
+            />
+          </div>
+
+          {/* Role selector dropdown */}
+          <div style={{ marginBottom: '20px' }}>
+            <label style={{
+              fontSize: '11px',
+              color: 'var(--text2)',
+              fontWeight: 600,
+              display: 'block',
+              marginBottom: '6px',
+              textTransform: 'uppercase',
+              letterSpacing: '0.4px'
+            }}>SECURITY CLEARANCE ROLE</label>
+            <div style={{ position: 'relative' }}>
+              <select
+                value={role}
+                onChange={(e) => setRole(e.target.value)}
+                style={{
+                  width: '100%',
+                  background: 'var(--bg3)',
+                  border: '1px solid var(--border)',
+                  borderRadius: 'var(--r)',
+                  padding: '10px 12px',
+                  fontSize: '13px',
+                  color: 'var(--text)',
+                  outline: 'none',
+                  cursor: 'pointer',
+                  appearance: 'none',
+                  backgroundImage: `url("data:image/svg+xml;utf8,<svg fill='gray' height='24' viewBox='0 0 24 24' width='24' xmlns='http://www.w3.org/2000/svg'><path d='M7 10l5 5 5-5z'/><path d='M0 0h24v24H0z' fill='none'/></svg>")`,
+                  backgroundRepeat: 'no-repeat',
+                  backgroundPosition: 'right 8px center'
+                }}
+              >
+                <option value="admin">Admin</option>
+                <option value="lead_investigator">Lead Investigator</option>
+                <option value="investigator">Investigator</option>
+                <option value="analyst">Forensic Analyst</option>
+                <option value="viewer">Viewer</option>
+              </select>
             </div>
-            <div style={{ fontSize: '18px', fontWeight: 600, color: 'var(--text)', marginBottom: '4px', textAlign: 'center' }}>Verify OTP</div>
-            <div style={{ fontSize: '13px', color: 'var(--text3)', textAlign: 'center', marginBottom: '20px' }}>
-              6-digit code sent to <strong style={{ color: 'var(--text)' }}>{email.replace(/(.{2})(.*)(@.*)/, (_, a, b, c) => a + b.replace(/./g, '*') + c)}</strong>
-            </div>
-            {error && <div style={{ marginBottom: '12px' }}><AlertBox type="error">{error}</AlertBox></div>}
-            <div style={{ display: 'flex', gap: '8px', justifyContent: 'center', margin: '16px 0' }} onPaste={handleOtpPaste}>
-              {otp.map((v, i) => (
-                <input
-                  key={i}
-                  ref={(el) => { otpRefs.current[i] = el }}
-                  value={v}
-                  maxLength={1}
-                  inputMode="numeric"
-                  onChange={(e) => handleOtpInput(i, e.target.value)}
-                  onKeyDown={(e) => handleOtpKeyDown(i, e)}
-                  style={{ width: '46px', height: '52px', background: 'var(--bg3)', border: `1px solid ${error ? 'var(--red)' : 'var(--border)'}`, borderRadius: 'var(--r)', fontSize: '22px', fontWeight: 600, textAlign: 'center', color: 'var(--text)', fontFamily: 'var(--mono)', outline: 'none' }}
-                />
-              ))}
-            </div>
-            <div style={{ textAlign: 'center', fontSize: '12px', color: 'var(--text3)', marginBottom: '8px' }}>
-              OTP expires in <span style={{ fontFamily: 'var(--mono)', color: otpSeconds < 30 ? 'var(--red)' : 'var(--amber)', fontWeight: 600 }}>{fmtTime(otpSeconds)}</span>
-            </div>
-            <Btn variant="primary" full loading={loading} onClick={doVerifyOTP} style={{ marginBottom: '12px' }}>Verify &amp; Login</Btn>
-            <div style={{ textAlign: 'center', fontSize: '12px', color: 'var(--text3)', marginBottom: '10px' }}>
-              Didn't receive?{' '}
-              <span style={{ ...authLink, opacity: resendSeconds > 0 ? 0.4 : 1, pointerEvents: resendSeconds > 0 ? 'none' : 'auto' }}
-                onClick={() => { setOtpSeconds(120); setResendSeconds(30); api.sendOTP(email, password).catch(() => {}) }}>
-                {resendSeconds > 0 ? `Resend OTP (${resendSeconds}s)` : 'Resend OTP'}
+          </div>
+
+          {/* GET TOKEN button */}
+          <Btn
+            type="button"
+            variant="default"
+            full
+            onClick={handleGetToken}
+            loading={tokenLoading}
+            style={{
+              padding: '11px 20px',
+              fontSize: '13px',
+              fontWeight: 600,
+              letterSpacing: '0.4px',
+              textTransform: 'uppercase',
+              background: 'var(--bg4)',
+              border: '1px solid var(--border)',
+              color: 'var(--text)',
+              borderRadius: 'var(--r)',
+              cursor: 'pointer',
+              display: 'flex',
+              alignItems: 'center',
+              justifyContent: 'center',
+              gap: '8px',
+              transition: 'background 0.2s, border-color 0.2s'
+            }}
+          >
+            Get Token
+          </Btn>
+          
+          <p style={{
+            fontSize: '11px',
+            color: 'var(--text3)',
+            marginTop: '8px',
+            marginBottom: '24px',
+            textAlign: 'center'
+          }}>Token will be sent to your registered email. Valid for 5 minutes.</p>
+
+          {/* Password field */}
+          <div style={{
+            marginBottom: '16px',
+            opacity: tokenSent ? 1 : 0.45,
+            pointerEvents: tokenSent ? 'auto' : 'none',
+            transition: 'opacity 0.3s'
+          }}>
+            <label style={{
+              fontSize: '11px',
+              color: 'var(--text2)',
+              fontWeight: 600,
+              display: 'block',
+              marginBottom: '6px',
+              textTransform: 'uppercase',
+              letterSpacing: '0.4px'
+            }}>SECURITY PASSPHRASE</label>
+            <div style={{ position: 'relative' }}>
+              <input
+                type={showPassword ? 'text' : 'password'}
+                disabled={!tokenSent}
+                required={tokenSent}
+                placeholder="Enter security passphrase"
+                value={password}
+                onChange={(e) => { setPassword(e.target.value); setError('') }}
+                style={{
+                  width: '100%',
+                  background: 'var(--bg3)',
+                  border: '1px solid var(--border)',
+                  borderRadius: 'var(--r)',
+                  padding: '10px 60px 10px 12px',
+                  fontSize: '13px',
+                  color: 'var(--text)',
+                  outline: 'none',
+                  transition: 'border-color 0.2s'
+                }}
+                onFocus={(e) => e.target.style.borderColor = 'var(--blue)'}
+                onBlur={(e) => e.target.style.borderColor = 'var(--border)'}
+              />
+              <span
+                onClick={() => tokenSent && setShowPassword(!showPassword)}
+                style={{
+                  position: 'absolute',
+                  right: '12px',
+                  top: '50%',
+                  transform: 'translateY(-50%)',
+                  cursor: tokenSent ? 'pointer' : 'default',
+                  color: 'var(--blue)',
+                  fontSize: '11px',
+                  userSelect: 'none',
+                  fontWeight: 600,
+                  letterSpacing: '0.5px'
+                }}
+              >
+                {showPassword ? 'HIDE' : 'SHOW'}
               </span>
             </div>
-            <div style={{ textAlign: 'center' }}><span style={authLink} onClick={() => { setError(''); setStep('login') }}>Back to Login</span></div>
-          </>
-        )}
-
-        {step === 'register' && (
-          <>
-            <div style={{ fontSize: '18px', fontWeight: 600, color: 'var(--text)', marginBottom: '4px', textAlign: 'center' }}>Create Account</div>
-            <div style={{ fontSize: '13px', color: 'var(--text3)', textAlign: 'center', marginBottom: '12px' }}>Register your investigator account</div>
-            <div style={{ fontSize: '11px', color: 'var(--text3)', background: 'var(--bg3)', borderRadius: 'var(--r)', padding: '8px 12px', marginBottom: '16px' }}>
-              Your account will be reviewed by an admin before access is granted. Estimated: 24-48 hours.
-            </div>
-            {error && <div style={{ marginBottom: '12px' }}><AlertBox type="error">{error}</AlertBox></div>}
-            <div style={{ display: 'grid', gridTemplateColumns: '1fr 1fr', gap: '10px', marginBottom: '12px' }}>
-              <div><label style={flbl}>Full Name</label><input id="reg-name" style={finput} placeholder="Your full name" /></div>
-              <div><label style={flbl}>Badge / ID</label><input id="reg-badge" style={finput} placeholder="CID-1234" /><div style={{ fontSize: '9px', color: 'var(--text3)', marginTop: '2px' }}>Format: CID-XXXX</div></div>
-            </div>
-            <div style={{ marginBottom: '12px' }}><label style={flbl}>Official Email</label><input id="reg-email" style={finput} type="email" placeholder="name@cid.gov.in" /></div>
-            <div style={{ display: 'grid', gridTemplateColumns: '1fr 1fr', gap: '10px', marginBottom: '12px' }}>
-              <div><label style={flbl}>Department</label><input id="reg-dept" style={finput} placeholder="e.g. CID, SIT" /></div>
-              <div><label style={flbl}>Phone (Optional)</label><input style={finput} type="tel" placeholder="+91 XXXXX XXXXX" /></div>
-            </div>
-            <div style={{ marginBottom: '16px' }}>
-              <label style={flbl}>Password</label>
-              <PwInput id="reg-pass" placeholder="Create a strong password" value={regPw} onChange={setRegPw} />
-              <PwStrength value={regPw} />
-            </div>
-            <Btn variant="primary" full loading={loading} onClick={doRegister} style={{ marginBottom: '12px' }}>Submit for Admin Approval</Btn>
-            <div style={{ textAlign: 'center' }}><span style={authLink} onClick={() => { setError(''); setStep('login') }}>Back to Login</span></div>
-          </>
-        )}
-
-        {step === 'forgot' && (
-          <>
-            <div style={{ fontSize: '18px', fontWeight: 600, color: 'var(--text)', marginBottom: '4px', textAlign: 'center' }}>Reset Password</div>
-            <div style={{ fontSize: '13px', color: 'var(--text3)', textAlign: 'center', marginBottom: '20px' }}>Enter your official email to receive a reset OTP</div>
-            {error && <div style={{ marginBottom: '12px' }}><AlertBox type="error">{error}</AlertBox></div>}
-            {success && <div style={{ marginBottom: '12px' }}><AlertBox type="success">{success}</AlertBox></div>}
-            <div style={{ marginBottom: '16px' }}><label style={flbl}>Official Email</label><input id="forgot-email" style={finput} type="email" placeholder="name@cid.gov.in" /></div>
-            <Btn variant="primary" full loading={loading} onClick={doForgot} style={{ marginBottom: '8px' }}>Send Reset OTP</Btn>
-            <div style={{ fontSize: '11px', color: 'var(--text3)', textAlign: 'center', marginBottom: '10px' }}>You will be redirected to OTP verification</div>
-            <div style={{ textAlign: 'center' }}><span style={authLink} onClick={() => { setError(''); setStep('login') }}>Back to Login</span></div>
-          </>
-        )}
-
-        {step === 'pending' && (
-          <div style={{ textAlign: 'center' }}>
-            <div style={{ fontSize: '48px', marginBottom: '16px' }}>[Clock]</div>
-            <div style={{ fontSize: '18px', fontWeight: 600, color: 'var(--text)', marginBottom: '8px' }}>Pending Admin Approval</div>
-            <div style={{ fontSize: '12px', color: 'var(--text2)', background: 'var(--bg3)', borderRadius: 'var(--r)', padding: '12px', marginBottom: '16px' }}>
-              You will receive an email once approved.<br />
-              <span style={{ color: 'var(--text3)', fontSize: '11px' }}>Estimated approval time: 24-48 hours</span>
-            </div>
-            <Btn full onClick={() => setStep('login')}>Back to Login</Btn>
           </div>
-        )}
+
+          {/* Access token input field */}
+          <div style={{
+            marginBottom: '28px',
+            opacity: tokenSent ? 1 : 0.45,
+            pointerEvents: tokenSent ? 'auto' : 'none',
+            transition: 'opacity 0.3s'
+          }}>
+            <label style={{
+              fontSize: '11px',
+              color: 'var(--text2)',
+              fontWeight: 600,
+              display: 'block',
+              marginBottom: '6px',
+              textTransform: 'uppercase',
+              letterSpacing: '0.4px'
+            }}>ACCESS TOKEN</label>
+            <input
+              type="text"
+              disabled={!tokenSent}
+              required={tokenSent}
+              placeholder="Enter access token"
+              value={tokenInput}
+              onChange={(e) => { setTokenInput(e.target.value); setError('') }}
+              style={{
+                width: '100%',
+                background: 'var(--bg3)',
+                border: '1px solid var(--border)',
+                borderRadius: 'var(--r)',
+                padding: '10px 12px',
+                fontSize: '13px',
+                color: 'var(--text)',
+                outline: 'none',
+                transition: 'border-color 0.2s'
+              }}
+              onFocus={(e) => e.target.style.borderColor = 'var(--blue)'}
+              onBlur={(e) => e.target.style.borderColor = 'var(--border)'}
+            />
+          </div>
+
+          {/* SECURE SIGN IN button */}
+          <Btn
+            type="submit"
+            variant="primary"
+            full
+            loading={signInLoading}
+            disabled={!tokenSent}
+            style={{
+              padding: '12px 20px',
+              fontSize: '13px',
+              fontWeight: 600,
+              letterSpacing: '0.4px',
+              textTransform: 'uppercase',
+              background: tokenSent ? 'var(--blue)' : 'var(--blue-dim)',
+              border: 'none',
+              color: '#ffffff',
+              borderRadius: 'var(--r)',
+              boxShadow: tokenSent ? '0 4px 12px rgba(77, 132, 245, 0.3)' : 'none',
+              cursor: tokenSent ? 'pointer' : 'not-allowed',
+              display: 'flex',
+              alignItems: 'center',
+              justifyContent: 'center',
+              gap: '8px',
+              transition: 'all 0.2s'
+            }}
+          >
+            <svg width="14" height="14" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2.5">
+              <rect x="3" y="11" width="18" height="11" rx="2" ry="2"/>
+              <path d="M7 11V7a5 5 0 0 1 10 0v4"/>
+            </svg>
+            Secure Sign In
+          </Btn>
+
+        </form>
       </div>
+
+      {/* Footer */}
+      <div style={{
+        fontSize: '11px',
+        color: 'var(--text3)',
+        fontFamily: 'var(--mono)',
+        textAlign: 'center',
+        zIndex: 5
+      }}>
+        © 2026 Secure Audits. Built for Indian Law Enforcement.
+      </div>
+
     </div>
   )
 }

@@ -39,13 +39,18 @@ class ApiService {
   }
 
   // ── AUTH ────────────────────────────────────────────────────────────────
-  async sendOTP(email: string, password: string) {
+  async login(payload: { email: string; password: string; department?: string; role?: string }) {
+    const { data } = await this.client.post<ApiResponse<{ token: string; user: object }>>('/auth/login', payload)
+    return data
+  }
+
+  async sendOTP(email: string, password?: string) {
     const { data } = await this.client.post<ApiResponse<{ message: string }>>('/auth/send-otp', { email, password })
     return data
   }
 
-  async verifyOTP(email: string, otp: string) {
-    const { data } = await this.client.post<ApiResponse<{ token: string; user: object }>>('/auth/verify-otp', { email, otp })
+  async verifyOTP(email: string, otp: string, password?: string) {
+    const { data } = await this.client.post<ApiResponse<{ token: string; user: object }>>('/auth/verify-otp', { email, otp, password })
     return data
   }
 
