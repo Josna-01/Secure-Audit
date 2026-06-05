@@ -2,11 +2,12 @@
 import React, { useEffect, useRef, useState } from 'react'
 import { useNavigate, useParams } from 'react-router-dom'
 import { AppShell } from '../components/Layout'
-import { Card, CardTitle, CardHeader, Btn, Badge, HashChip, AlertBox, FutureNotice, UploadZone, InfoRow } from '../components/UI'
+import { Card, CardTitle, CardHeader, Btn, Badge, HashChip, AlertBox, FutureNotice, UploadZone, InfoRow, Spinner, Tabs } from '../components/UI'
 import { api } from '../services/api'
 import type { Evidence, Case } from '../types'
 import { format } from 'date-fns'
 import { useAuth } from '../context/AuthContext'
+import axios from 'axios'
 
 // ── EVIDENCE ──────────────────────────────────────────────────────────────
 export function EvidencePage() {
@@ -48,13 +49,13 @@ export function EvidencePage() {
       await api.uploadEvidence(selectedCase.id, file, { evidence_type: evidenceType, description, language })
       setUploadDone(true); setFile(null)
       await fetchEvidence()
-    } catch (error: any) { 
+    } catch (error: any) {
       console.error("[DEBUG] Upload Error:", error.response?.data || error)
       const errorDetail = error.response?.data?.detail || error.message || 'Unknown error'
       if (Array.isArray(errorDetail)) {
         setErr(`Upload failed: ${errorDetail[0]?.msg} (${errorDetail[0]?.loc?.join('.')})`)
       } else {
-        setErr(`Upload failed: ${errorDetail}`) 
+        setErr(`Upload failed: ${errorDetail}`)
       }
     }
     finally { setUploading(false) }
@@ -110,7 +111,7 @@ export function EvidencePage() {
               <div>
                 <label style={{ fontSize: '11px', color: 'var(--text3)', display: 'block', marginBottom: '4px', textTransform: 'uppercase', letterSpacing: '.4px' }}>Language</label>
                 <select value={language} onChange={(e) => setLanguage(e.target.value)} style={{ width: '100%', background: 'var(--bg3)', border: '1px solid var(--border)', borderRadius: 'var(--r)', padding: '7px 10px', fontSize: '12px', color: 'var(--text)', fontFamily: 'var(--font)', outline: 'none' }}>
-                  {[['auto','Auto Detect'],['en','English'],['hi','Hindi'],['kn','Kannada']].map(([v,l]) => <option key={v} value={v}>{l}</option>)}
+                  {[['auto', 'Auto Detect'], ['en', 'English'], ['hi', 'Hindi'], ['kn', 'Kannada']].map(([v, l]) => <option key={v} value={v}>{l}</option>)}
                 </select>
               </div>
             </div>
@@ -204,10 +205,10 @@ export function DetectionPage() {
       }
       const res = await api.runDetection(evId, selectedCase.id)
       setResult(res.data)
-    } catch (error: any) { 
+    } catch (error: any) {
       console.error("[DEBUG] Detection API Error:", error.response?.data || error)
       const errorDetail = error.response?.data?.detail || error.message || 'Unknown error'
-      setErr(`Detection failed: ${errorDetail}`) 
+      setErr(`Detection failed: ${errorDetail}`)
     }
     finally { setRunning(false) }
   }
@@ -226,7 +227,7 @@ export function DetectionPage() {
               <input value={caseSearch} onChange={(e) => { setCaseSearch(e.target.value); searchCases(e.target.value) }} placeholder="Search case..." style={{ width: '100%', background: 'var(--bg3)', border: '1px solid var(--border)', borderRadius: 'var(--r)', padding: '7px 10px', fontSize: '13px', color: 'var(--text)', fontFamily: 'var(--font)', outline: 'none' }} />
               {caseResults.length > 0 && !selectedCase && (
                 <div style={{ background: 'var(--bg2)', border: '1px solid var(--border)', borderRadius: 'var(--r)', marginTop: '4px' }}>
-                  {caseResults.map((c) => <div key={c.id} onClick={() => selectCase(c)} style={{ padding: '8px 10px', cursor: 'pointer', fontSize: '12px', borderBottom: '1px solid var(--border)' }} onMouseEnter={(e) => { e.currentTarget.style.background='var(--bg3)' }} onMouseLeave={(e) => { e.currentTarget.style.background='transparent' }}><span style={{ fontFamily: 'var(--mono)', color: 'var(--blue)' }}>{c.case_number}</span> — {c.title}</div>)}
+                  {caseResults.map((c) => <div key={c.id} onClick={() => selectCase(c)} style={{ padding: '8px 10px', cursor: 'pointer', fontSize: '12px', borderBottom: '1px solid var(--border)' }} onMouseEnter={(e) => { e.currentTarget.style.background = 'var(--bg3)' }} onMouseLeave={(e) => { e.currentTarget.style.background = 'transparent' }}><span style={{ fontFamily: 'var(--mono)', color: 'var(--blue)' }}>{c.case_number}</span> — {c.title}</div>)}
                 </div>
               )}
               {selectedCase && <div style={{ marginTop: '6px', fontSize: '12px', color: 'var(--blue)', fontWeight: 500 }}>{selectedCase.case_number} — {selectedCase.title}</div>}
@@ -244,10 +245,10 @@ export function DetectionPage() {
             {imgSource === 'upload' && (
               <>
                 <input ref={fileRef} type="file" accept="image/*" style={{ display: 'none' }} onChange={(e) => setFile(e.target.files?.[0] || null)} />
-                <UploadZone 
-                  title={file ? file.name : 'Drag & Drop or Click to Upload'} 
-                  sub="JPG · PNG · Max 20MB" 
-                  onClick={() => fileRef.current?.click()} 
+                <UploadZone
+                  title={file ? file.name : 'Drag & Drop or Click to Upload'}
+                  sub="JPG · PNG · Max 20MB"
+                  onClick={() => fileRef.current?.click()}
                   onDropFile={(f) => setFile(f)}
                 />
               </>
@@ -390,7 +391,7 @@ export function BNSPage() {
               <input value={caseSearch} onChange={(e) => { setCaseSearch(e.target.value); searchCases(e.target.value) }} placeholder="Search case to auto-fill FIR..." style={{ width: '100%', background: 'var(--bg3)', border: '1px solid var(--border)', borderRadius: 'var(--r)', padding: '7px 10px', fontSize: '13px', color: 'var(--text)', fontFamily: 'var(--font)', outline: 'none' }} />
               {caseResults.length > 0 && !selectedCase && (
                 <div style={{ background: 'var(--bg2)', border: '1px solid var(--border)', borderRadius: 'var(--r)', marginTop: '4px' }}>
-                  {caseResults.map((c) => <div key={c.id} onClick={() => selectCase(c)} style={{ padding: '8px 10px', cursor: 'pointer', fontSize: '12px', borderBottom: '1px solid var(--border)' }} onMouseEnter={(e) => { e.currentTarget.style.background='var(--bg3)' }} onMouseLeave={(e) => { e.currentTarget.style.background='transparent' }}><span style={{ fontFamily: 'var(--mono)', color: 'var(--blue)' }}>{c.case_number}</span> — {c.title}</div>)}
+                  {caseResults.map((c) => <div key={c.id} onClick={() => selectCase(c)} style={{ padding: '8px 10px', cursor: 'pointer', fontSize: '12px', borderBottom: '1px solid var(--border)' }} onMouseEnter={(e) => { e.currentTarget.style.background = 'var(--bg3)' }} onMouseLeave={(e) => { e.currentTarget.style.background = 'transparent' }}><span style={{ fontFamily: 'var(--mono)', color: 'var(--blue)' }}>{c.case_number}</span> — {c.title}</div>)}
                 </div>
               )}
               {selectedCase && <div style={{ marginTop: '4px', fontSize: '11px', color: 'var(--blue)' }}>{selectedCase.case_number} — {selectedCase.title}</div>}
@@ -399,7 +400,7 @@ export function BNSPage() {
             <div style={{ display: 'flex', alignItems: 'center', justifyContent: 'space-between', marginBottom: '6px' }}>
               <label style={{ fontSize: '11px', color: 'var(--text3)', textTransform: 'uppercase', letterSpacing: '.4px' }}>FIR Narrative</label>
               <select value={language} onChange={(e) => setLanguage(e.target.value)} style={{ background: 'var(--bg3)', border: '1px solid var(--border)', borderRadius: 'var(--r)', padding: '3px 8px', fontSize: '11px', color: 'var(--text)', fontFamily: 'var(--font)', outline: 'none' }}>
-                {[['auto','Auto Detect'],['en','English'],['hi','Hindi'],['kn','Kannada']].map(([v,l]) => <option key={v} value={v}>{l}</option>)}
+                {[['auto', 'Auto Detect'], ['en', 'English'], ['hi', 'Hindi'], ['kn', 'Kannada']].map(([v, l]) => <option key={v} value={v}>{l}</option>)}
               </select>
             </div>
             <textarea value={firText} onChange={(e) => setFirText(e.target.value)} rows={20} placeholder="FIR text (auto-filled from case or enter manually)..." style={{ width: '100%', background: 'var(--bg3)', border: '1px solid var(--border)', borderRadius: 'var(--r)', padding: '9px 12px', fontSize: '13px', color: 'var(--text)', fontFamily: 'var(--font)', outline: 'none', resize: 'vertical', lineHeight: 1.6, marginBottom: '12px' }} />
@@ -479,23 +480,23 @@ export function OCRPage() {
           <Card>
             <CardTitle>Upload Scanned FIR / Document</CardTitle>
             <input ref={fileRef} type="file" accept="image/*,.pdf" style={{ display: 'none' }} onChange={(e) => setFile(e.target.files?.[0] || null)} />
-            <UploadZone 
-              title={file ? file.name : 'Upload scanned FIR for OCR extraction'} 
-              sub="JPG · PNG · PDF · Handwritten text supported" 
-              onClick={() => fileRef.current?.click()} 
+            <UploadZone
+              title={file ? file.name : 'Upload scanned FIR for OCR extraction'}
+              sub="JPG · PNG · PDF · Handwritten text supported"
+              onClick={() => fileRef.current?.click()}
               onDropFile={(f) => setFile(f)}
             />
             <div style={{ marginBottom: '12px' }}>
               <label style={{ fontSize: '11px', color: 'var(--text3)', display: 'block', marginBottom: '4px', textTransform: 'uppercase', letterSpacing: '.4px' }}>Document Language</label>
               <select value={language} onChange={(e) => setLanguage(e.target.value)} style={{ width: '100%', background: 'var(--bg3)', border: '1px solid var(--border)', borderRadius: 'var(--r)', padding: '7px 10px', fontSize: '12px', color: 'var(--text)', fontFamily: 'var(--font)', outline: 'none' }}>
-                {[['auto','Auto Detect'],['en','English'],['hi','Hindi'],['kn','Kannada'],['ml','Malayalam']].map(([v,l]) => <option key={v} value={v}>{l}</option>)}
+                {[['auto', 'Auto Detect'], ['en', 'English'], ['hi', 'Hindi'], ['kn', 'Kannada'], ['ml', 'Malayalam']].map(([v, l]) => <option key={v} value={v}>{l}</option>)}
               </select>
             </div>
             <Btn variant="primary" full loading={running} onClick={run}>Extract Text via Tesseract</Btn>
           </Card>
           <Card>
             <CardTitle>Reference</CardTitle>
-            {[['Engine','Tesseract 4.0 + LSTM'],['Accuracy','96.87% word accuracy'],['Preprocessing','Leptonica binarisation'],['Reference','Al Sayem et al. (2023)'],['Output','Original + English translation']].map(([k,v]) => (
+            {[['Engine', 'Tesseract 4.0 + LSTM'], ['Accuracy', '96.87% word accuracy'], ['Preprocessing', 'Leptonica binarisation'], ['Reference', 'Al Sayem et al. (2023)'], ['Output', 'Original + English translation']].map(([k, v]) => (
               <div key={k} style={{ display: 'flex', gap: '10px', padding: '5px 0', borderBottom: '1px solid var(--border)' }}>
                 <span style={{ fontSize: '11px', color: 'var(--text3)', minWidth: '100px' }}>{k}</span>
                 <span style={{ fontSize: '11px', color: 'var(--text2)' }}>{v}</span>
@@ -547,33 +548,230 @@ export function PlaceholderPage({ title, description }: { title: string; descrip
 }
 
 // ── AUDIT LOG ─────────────────────────────────────────────────────────────
+function StatusBadge({ status }: { status: string }) {
+  const isWarning = status === 'Warning'
+  const isFailed = status === 'Failed'
+  const bg = isWarning ? 'var(--amber-bg)' : isFailed ? 'var(--red-bg)' : 'var(--green-bg)'
+  const color = isWarning ? 'var(--amber)' : isFailed ? 'var(--red)' : 'var(--green)'
+  return (
+    <span style={{
+      fontSize: '10px',
+      fontWeight: 600,
+      padding: '2px 8px',
+      borderRadius: '20px',
+      background: bg,
+      color: color,
+      display: 'inline-block'
+    }}>
+      {status}
+    </span>
+  )
+}
+
+function formatUserEventDescription(log: any) {
+  if (log.metadata?.description) {
+    return log.metadata.description
+  }
+  const updates = log.metadata?.updates
+  if (updates) {
+    const changes: string[] = []
+    if (updates.role !== undefined) {
+      changes.push(`Role changed to ${updates.role}`)
+    }
+    if (updates.is_active !== undefined) {
+      changes.push(updates.is_active ? 'Officer account activated' : 'Officer account deactivated')
+    }
+    if (updates.full_name !== undefined) {
+      changes.push(`Name changed to ${updates.full_name}`)
+    }
+    if (updates.department !== undefined) {
+      changes.push(`Department changed to ${updates.department}`)
+    }
+    if (updates.badge_number !== undefined) {
+      changes.push(`Badge ID changed to ${updates.badge_number}`)
+    }
+    if (changes.length > 0) {
+      return changes.join(', ')
+    }
+  }
+  if (log.action === 'User Created') {
+    return `Officer account created for ${log.metadata?.target_user_name || 'new user'} with role ${log.metadata?.target_user_role || 'Investigator'}`
+  }
+  if (log.action === 'Reset Access') {
+    return 'Password recovery request generated'
+  }
+  if (log.action === 'Password Changed') {
+    return 'Password updated by user'
+  }
+  return 'Account details updated'
+}
+
 export function AuditPage() {
-  const [logs, setLogs] = useState<AuditLog[]>([])
-  const [total, setTotal] = useState(0)
-  const [loading, setLoading] = useState(true)
-  const [action, setAction] = useState('All Actions')
-  const [page, setPage] = useState(1)
+  const { user } = useAuth()
+  const currentRole = user?.role || 'Investigator'
   const navigate = useNavigate()
 
-  const uniqueActions = ['All Actions', 'Login', 'Case Created', 'Evidence Upload', 'YOLO Scan', 'BNS Classified', 'Hash Verified', 'Tamper Detected', 'Case Access']
+  const [logs, setLogs] = useState<any[]>([])
+  const [total, setTotal] = useState(0)
+  const [loading, setLoading] = useState(true)
+  const [page, setPage] = useState(1)
 
-  const fetch = () => {
-    setLoading(true)
-    api.getAuditLogs({ action: action === 'All Actions' ? undefined : action, page }).then((res) => {
-      setLogs(res.data); setTotal(res.total)
-    }).finally(() => setLoading(false))
+  // Filter states
+  const [action, setAction] = useState('All Actions')
+  const [selectedRole, setSelectedRole] = useState('All Roles')
+  const [userId, setUserId] = useState('All Users')
+  const [dateRange, setDateRange] = useState('All Dates')
+  const [startDate, setStartDate] = useState('')
+  const [endDate, setEndDate] = useState('')
+  const [search, setSearch] = useState('')
+  const [dynamicUsers, setDynamicUsers] = useState<any[]>([])
+  const [expandedLogId, setExpandedLogId] = useState<string | null>(null)
+
+  const actionsList = [
+    'All Actions',
+    'Login Successful',
+    'Logout Successful',
+    'Case Created',
+    'Evidence Upload',
+    'YOLO Scan',
+    'BNS Classified',
+    'Hash Verified',
+    'Tamper Detected'
+  ]
+
+  const rolesList = ['All Roles', 'Admin', 'Investigator']
+  const dateRangeOptions = ['All Dates', 'Today', 'Last 7 Days', 'Last 30 Days', 'Custom Range']
+
+  // Fetch dynamic users for dropdown if Admin
+  useEffect(() => {
+    if (currentRole === 'Admin') {
+      api.getUsers().then((res) => {
+        setDynamicUsers(res.data)
+      }).catch(console.error)
+    }
+  }, [currentRole])
+
+  const getParams = () => {
+    let apiAction = action === 'All Actions' ? undefined : action
+    let apiRole = selectedRole === 'All Roles' ? undefined : selectedRole
+    let apiUserId = userId === 'All Users' ? undefined : userId
+
+    let apiStart: string | undefined = undefined
+    let apiEnd: string | undefined = undefined
+
+    const now = new Date()
+    if (dateRange === 'Today') {
+      const today = new Date(now.getFullYear(), now.getMonth(), now.getDate())
+      apiStart = today.toISOString()
+    } else if (dateRange === 'Last 7 Days') {
+      const past = new Date(now.getTime() - 7 * 24 * 60 * 60 * 1000)
+      apiStart = past.toISOString()
+    } else if (dateRange === 'Last 30 Days') {
+      const past = new Date(now.getTime() - 30 * 24 * 60 * 60 * 1000)
+      apiStart = past.toISOString()
+    } else if (dateRange === 'Custom Range') {
+      if (startDate) apiStart = new Date(startDate).toISOString()
+      if (endDate) {
+        const end = new Date(endDate)
+        end.setHours(23, 59, 59, 999)
+        apiEnd = end.toISOString()
+      }
+    }
+
+    return {
+      action: apiAction,
+      role: apiRole,
+      user_id: apiUserId,
+      start_date: apiStart,
+      end_date: apiEnd,
+      search: search.trim() || undefined,
+      page
+    }
   }
 
-  useEffect(() => { fetch() }, [action, page])
+  const fetchLogs = () => {
+    setLoading(true)
+    const params = getParams()
+    api.getAuditLogs(params).then((res) => {
+      setLogs(res.data)
+      setTotal(res.total)
+    }).catch(console.error)
+      .finally(() => setLoading(false))
+  }
+
+  // Refresh logs when any filter changes
+  useEffect(() => {
+    fetchLogs()
+  }, [action, selectedRole, userId, dateRange, startDate, endDate, search, page])
+
+  const handleFilterChange = (setter: any, val: any) => {
+    setter(val)
+    setPage(1)
+  }
 
   return (
     <AppShell title="Audit Log">
-      <div style={{ display: 'flex', gap: '10px', flexWrap: 'wrap', alignItems: 'center', marginBottom: '16px' }}>
-        <select value={action} onChange={(e) => { setAction(e.target.value); setPage(1) }} style={{ background: 'var(--bg2)', border: '1px solid var(--border)', borderRadius: 'var(--r)', padding: '7px 10px', fontSize: '12px', color: 'var(--text)', fontFamily: 'var(--font)', outline: 'none', width: '200px' }}>
-          {uniqueActions.map((a) => <option key={a}>{a}</option>)}
-        </select>
-        <span style={{ fontSize: '12px', color: 'var(--text3)' }}>{total} entries</span>
-      </div>
+      {/* Filters Card */}
+      <Card style={{ marginBottom: '16px' }}>
+        <div style={{ display: 'grid', gridTemplateColumns: 'repeat(auto-fit, minmax(180px, 1fr))', gap: '12px', alignItems: 'end' }}>
+          <div>
+            <label style={{ fontSize: '11px', color: 'var(--text3)', display: 'block', marginBottom: '4px', textTransform: 'uppercase', letterSpacing: '.4px' }}>Action</label>
+            <select value={action} onChange={(e) => handleFilterChange(setAction, e.target.value)} style={{ width: '100%', background: 'var(--bg3)', border: '1px solid var(--border)', borderRadius: 'var(--r)', padding: '7px 10px', fontSize: '12px', color: 'var(--text)', fontFamily: 'var(--font)', outline: 'none' }}>
+              {actionsList.map((a) => <option key={a}>{a}</option>)}
+            </select>
+          </div>
+
+          {currentRole === 'Admin' && (
+            <>
+              <div>
+                <label style={{ fontSize: '11px', color: 'var(--text3)', display: 'block', marginBottom: '4px', textTransform: 'uppercase', letterSpacing: '.4px' }}>Role</label>
+                <select value={selectedRole} onChange={(e) => handleFilterChange(setSelectedRole, e.target.value)} style={{ width: '100%', background: 'var(--bg3)', border: '1px solid var(--border)', borderRadius: 'var(--r)', padding: '7px 10px', fontSize: '12px', color: 'var(--text)', fontFamily: 'var(--font)', outline: 'none' }}>
+                  {rolesList.map((r) => <option key={r}>{r}</option>)}
+                </select>
+              </div>
+
+              <div>
+                <label style={{ fontSize: '11px', color: 'var(--text3)', display: 'block', marginBottom: '4px', textTransform: 'uppercase', letterSpacing: '.4px' }}>User</label>
+                <select value={userId} onChange={(e) => handleFilterChange(setUserId, e.target.value)} style={{ width: '100%', background: 'var(--bg3)', border: '1px solid var(--border)', borderRadius: 'var(--r)', padding: '7px 10px', fontSize: '12px', color: 'var(--text)', fontFamily: 'var(--font)', outline: 'none' }}>
+                  <option value="All Users">All Users</option>
+                  {dynamicUsers.map((u) => <option key={u.id} value={u.id}>{u.full_name}</option>)}
+                </select>
+              </div>
+            </>
+          )}
+
+          <div>
+            <label style={{ fontSize: '11px', color: 'var(--text3)', display: 'block', marginBottom: '4px', textTransform: 'uppercase', letterSpacing: '.4px' }}>Date Range</label>
+            <select value={dateRange} onChange={(e) => handleFilterChange(setDateRange, e.target.value)} style={{ width: '100%', background: 'var(--bg3)', border: '1px solid var(--border)', borderRadius: 'var(--r)', padding: '7px 10px', fontSize: '12px', color: 'var(--text)', fontFamily: 'var(--font)', outline: 'none' }}>
+              {dateRangeOptions.map((o) => <option key={o}>{o}</option>)}
+            </select>
+          </div>
+
+          <div style={{ gridColumn: 'span 1' }}>
+            <label style={{ fontSize: '11px', color: 'var(--text3)', display: 'block', marginBottom: '4px', textTransform: 'uppercase', letterSpacing: '.4px' }}>Search Logs</label>
+            <input
+              value={search}
+              onChange={(e) => handleFilterChange(setSearch, e.target.value)}
+              placeholder="Search user, action, case title..."
+              style={{ width: '100%', background: 'var(--bg3)', border: '1px solid var(--border)', borderRadius: 'var(--r)', padding: '7px 10px', fontSize: '12px', color: 'var(--text)', fontFamily: 'var(--font)', outline: 'none' }}
+            />
+          </div>
+        </div>
+
+        {dateRange === 'Custom Range' && (
+          <div style={{ display: 'flex', gap: '12px', marginTop: '12px', borderTop: '1px solid var(--border)', paddingTop: '12px' }}>
+            <div>
+              <label style={{ fontSize: '11px', color: 'var(--text3)', display: 'block', marginBottom: '4px', textTransform: 'uppercase', letterSpacing: '.4px' }}>Start Date</label>
+              <input type="date" value={startDate} onChange={(e) => handleFilterChange(setStartDate, e.target.value)} style={{ background: 'var(--bg3)', border: '1px solid var(--border)', borderRadius: 'var(--r)', padding: '6px 10px', fontSize: '12px', color: 'var(--text)', fontFamily: 'var(--font)', outline: 'none' }} />
+            </div>
+            <div>
+              <label style={{ fontSize: '11px', color: 'var(--text3)', display: 'block', marginBottom: '4px', textTransform: 'uppercase', letterSpacing: '.4px' }}>End Date</label>
+              <input type="date" value={endDate} onChange={(e) => handleFilterChange(setEndDate, e.target.value)} style={{ background: 'var(--bg3)', border: '1px solid var(--border)', borderRadius: 'var(--r)', padding: '6px 10px', fontSize: '12px', color: 'var(--text)', fontFamily: 'var(--font)', outline: 'none' }} />
+            </div>
+          </div>
+        )}
+      </Card>
+
       <Card>
         <CardHeader>
           <CardTitle>Immutable Audit Trail</CardTitle>
@@ -582,29 +780,325 @@ export function AuditPage() {
         <div style={{ overflowX: 'auto' }}>
           <table style={{ width: '100%', borderCollapse: 'collapse', fontSize: '12px' }}>
             <thead>
-              <tr>
-                {['Date', 'Time', 'User', 'Action', 'Case', 'Hash'].map((h) => (
-                  <th key={h} style={{ textAlign: 'left', padding: '8px 10px', color: 'var(--text3)', fontWeight: 500, borderBottom: '1px solid var(--border)', fontSize: '11px' }}>{h}</th>
+              <tr style={{ borderBottom: '1px solid var(--border)' }}>
+                {['Date', 'Time', 'User', 'Role', 'Action', 'Status', 'Case', ''].map((h) => (
+                  <th key={h} style={{ textAlign: 'left', padding: '10px 12px', color: 'var(--text3)', fontWeight: 500, fontSize: '11px' }}>{h}</th>
                 ))}
               </tr>
             </thead>
             <tbody>
-              {loading && <tr><td colSpan={6} style={{ padding: '32px', textAlign: 'center', color: 'var(--text3)' }}>Loading...</td></tr>}
-              {!loading && logs.map((log) => {
-                const dt = new Date(log.created_at)
-                return (
-                  <tr key={log.id} onMouseEnter={(e) => { e.currentTarget.style.background = 'var(--bg3)' }} onMouseLeave={(e) => { e.currentTarget.style.background = 'transparent' }}>
-                    <td style={{ padding: '8px 10px', fontFamily: 'var(--mono)', fontSize: '10px', color: 'var(--text3)', borderBottom: '1px solid var(--border)', whiteSpace: 'nowrap' }}>{format(dt, 'dd MMM yyyy')}</td>
-                    <td style={{ padding: '8px 10px', fontFamily: 'var(--mono)', fontSize: '10px', color: 'var(--text3)', borderBottom: '1px solid var(--border)' }}>{format(dt, 'HH:mm:ss')}</td>
-                    <td style={{ padding: '8px 10px', color: 'var(--blue)', fontWeight: 500, borderBottom: '1px solid var(--border)' }}>{log.user_name}</td>
-                    <td style={{ padding: '8px 10px', borderBottom: '1px solid var(--border)' }}>
-                      <span style={{ fontSize: '10px', fontWeight: 500, padding: '2px 8px', borderRadius: '20px', background: 'var(--blue-bg)', color: 'var(--blue)' }}>{log.action}</span>
-                    </td>
-                    <td style={{ padding: '8px 10px', fontFamily: 'var(--mono)', fontSize: '11px', color: log.case_id ? 'var(--blue)' : 'var(--text3)', borderBottom: '1px solid var(--border)', cursor: log.case_id ? 'pointer' : 'default' }} onClick={() => log.case_id && navigate(`/cases/${log.case_id}`)}>{log.case_id || '—'}</td>
-                    <td style={{ padding: '8px 10px', fontFamily: 'var(--mono)', fontSize: '10px', color: 'var(--text3)', borderBottom: '1px solid var(--border)' }}>{log.file_hash ? log.file_hash.slice(0, 10) + '...' : '—'}</td>
-                  </tr>
-                )
-              })}
+              {loading ? (
+                <tr>
+                  <td colSpan={8} style={{ padding: '32px', textAlign: 'center', color: 'var(--text3)' }}>Loading audit logs...</td>
+                </tr>
+              ) : logs.length === 0 ? (
+                <tr>
+                  <td colSpan={8} style={{ padding: '24px', textAlign: 'center', color: 'var(--text3)' }}>No logs found matching current criteria</td>
+                </tr>
+              ) : (
+                logs.map((log) => (
+                  <React.Fragment key={log.id}>
+                    <tr
+                      style={{ borderBottom: '1px solid var(--border)', cursor: 'pointer' }}
+                      onClick={() => setExpandedLogId(expandedLogId === log.id ? null : log.id)}
+                      onMouseEnter={(e) => { e.currentTarget.style.background = 'var(--bg3)' }}
+                      onMouseLeave={(e) => { e.currentTarget.style.background = 'transparent' }}
+                    >
+                      <td style={{ padding: '10px 12px', fontFamily: 'var(--mono)', fontSize: '10px', color: 'var(--text3)' }}>{log.date}</td>
+                      <td style={{ padding: '10px 12px', fontFamily: 'var(--mono)', fontSize: '10px', color: 'var(--text3)' }}>{log.time}</td>
+                      <td style={{ padding: '10px 12px', color: 'var(--blue)', fontWeight: 600 }}>{log.user_name}</td>
+                      <td style={{ padding: '10px 12px', color: 'var(--text2)' }}>{log.user_role}</td>
+                      <td style={{ padding: '10px 12px' }}>
+                        <span style={{ fontSize: '10px', fontWeight: 500, padding: '2px 8px', borderRadius: '20px', background: 'var(--blue-bg)', color: 'var(--blue)' }}>{log.action}</span>
+                      </td>
+                      <td style={{ padding: '10px 12px' }}>
+                        <StatusBadge status={log.status} />
+                      </td>
+                      <td
+                        style={{ padding: '10px 12px', color: log.case_id ? 'var(--blue)' : 'var(--text3)', fontWeight: log.case_id ? 500 : 400 }}
+                        onClick={(e) => {
+                          if (log.case_id) {
+                            e.stopPropagation()
+                            navigate(`/cases/${log.case_id}`)
+                          }
+                        }}
+                      >
+                        {log.case_id ? `${log.case_number} - ${log.case_title}` : '—'}
+                      </td>
+                      <td style={{ padding: '10px 12px', textAlign: 'right' }}>
+                        <span style={{ color: 'var(--text3)', fontSize: '10px' }}>
+                          {expandedLogId === log.id ? '▲ Hide' : '▼ Expand'}
+                        </span>
+                      </td>
+                    </tr>
+
+                    {expandedLogId === log.id && (() => {
+                      const action = log.action || ''
+                      const caseInfo = log.case_id ? `${log.case_number} - ${log.case_title}` : 'N/A'
+                      
+                      let detailContent = null
+                      
+                      if (action === 'User Activated') {
+                        detailContent = (
+                          <div style={{ display: 'grid', gridTemplateColumns: 'repeat(auto-fit, minmax(240px, 1fr))', gap: '16px' }}>
+                            <div>
+                              <div style={{ fontWeight: 600, color: 'var(--text2)', marginBottom: '8px', textTransform: 'uppercase', letterSpacing: '.4px', fontSize: '10px' }}>Account Activation Details</div>
+                              <div style={{ display: 'flex', flexDirection: 'column', gap: '6px' }}>
+                                <div style={{ display: 'flex' }}><span style={{ minWidth: '120px', color: 'var(--text3)' }}>Officer:</span><span style={{ color: 'var(--text)', fontWeight: 600 }}>{log.metadata?.target_user_name || 'N/A'}</span></div>
+                                <div style={{ display: 'flex' }}><span style={{ minWidth: '120px', color: 'var(--text3)' }}>Action:</span><span style={{ color: 'var(--green)', fontWeight: 600 }}>Officer Account Activated</span></div>
+                                <div style={{ display: 'flex' }}><span style={{ minWidth: '120px', color: 'var(--text3)' }}>Performed By:</span><span style={{ color: 'var(--text)' }}>{log.user_name}</span></div>
+                                <div style={{ display: 'flex' }}><span style={{ minWidth: '120px', color: 'var(--text3)' }}>Timestamp:</span><span style={{ fontFamily: 'var(--mono)', color: 'var(--text)' }}>{log.created_at}</span></div>
+                              </div>
+                            </div>
+                          </div>
+                        )
+                      } else if (action === 'User Deactivated') {
+                        detailContent = (
+                          <div style={{ display: 'grid', gridTemplateColumns: 'repeat(auto-fit, minmax(240px, 1fr))', gap: '16px' }}>
+                            <div>
+                              <div style={{ fontWeight: 600, color: 'var(--text2)', marginBottom: '8px', textTransform: 'uppercase', letterSpacing: '.4px', fontSize: '10px' }}>Account Deactivation Details</div>
+                              <div style={{ display: 'flex', flexDirection: 'column', gap: '6px' }}>
+                                <div style={{ display: 'flex' }}><span style={{ minWidth: '120px', color: 'var(--text3)' }}>Officer:</span><span style={{ color: 'var(--text)', fontWeight: 600 }}>{log.metadata?.target_user_name || 'N/A'}</span></div>
+                                <div style={{ display: 'flex' }}><span style={{ minWidth: '120px', color: 'var(--text3)' }}>Action:</span><span style={{ color: 'var(--red)', fontWeight: 600 }}>Officer Account Deactivated</span></div>
+                                <div style={{ display: 'flex' }}><span style={{ minWidth: '120px', color: 'var(--text3)' }}>Performed By:</span><span style={{ color: 'var(--text)' }}>{log.user_name}</span></div>
+                                <div style={{ display: 'flex' }}><span style={{ minWidth: '120px', color: 'var(--text3)' }}>Timestamp:</span><span style={{ fontFamily: 'var(--mono)', color: 'var(--text)' }}>{log.created_at}</span></div>
+                              </div>
+                            </div>
+                          </div>
+                        )
+                      } else if (action === 'User Updated') {
+                        const isRoleChange = log.metadata?.old_role || log.metadata?.new_role || log.metadata?.role || log.metadata?.updates?.role;
+                        detailContent = (
+                          <div style={{ display: 'grid', gridTemplateColumns: 'repeat(auto-fit, minmax(240px, 1fr))', gap: '16px' }}>
+                            <div>
+                              <div style={{ fontWeight: 600, color: 'var(--text2)', marginBottom: '8px', textTransform: 'uppercase', letterSpacing: '.4px', fontSize: '10px' }}>Officer Update Details</div>
+                              <div style={{ display: 'flex', flexDirection: 'column', gap: '6px' }}>
+                                {isRoleChange && (
+                                  <div style={{ display: 'flex', flexDirection: 'column', gap: '2px', marginBottom: '8px', borderBottom: '1px solid var(--border)', paddingBottom: '8px' }}>
+                                    <span style={{ color: 'var(--text)', fontWeight: 700, fontSize: '12px' }}>Role Changed</span>
+                                    <span style={{ color: 'var(--text3)', fontSize: '11px' }}>Previous Role: {log.metadata?.old_role || 'Investigator'}</span>
+                                    <span style={{ color: 'var(--text2)', fontSize: '11px', fontWeight: 600 }}>New Role: {log.metadata?.new_role || log.metadata?.role || log.metadata?.updates?.role || 'Admin'}</span>
+                                  </div>
+                                )}
+                                <div style={{ display: 'flex' }}><span style={{ minWidth: '120px', color: 'var(--text3)' }}>Officer:</span><span style={{ color: 'var(--text)', fontWeight: 600 }}>{log.metadata?.target_user_name || 'N/A'}</span></div>
+                                <div style={{ display: 'flex' }}><span style={{ minWidth: '120px', color: 'var(--text3)' }}>Performed By:</span><span style={{ color: 'var(--text)' }}>{log.user_name}</span></div>
+                                <div style={{ display: 'flex' }}><span style={{ minWidth: '120px', color: 'var(--text3)' }}>Timestamp:</span><span style={{ fontFamily: 'var(--mono)', color: 'var(--text)' }}>{log.created_at}</span></div>
+                              </div>
+                            </div>
+                            {log.metadata?.description && (
+                              <div>
+                                <div style={{ fontWeight: 600, color: 'var(--text2)', marginBottom: '8px', textTransform: 'uppercase', letterSpacing: '.4px', fontSize: '10px' }}>Change Summary</div>
+                                <div style={{ background: 'var(--bg3)', border: '1px solid var(--border)', borderRadius: '6px', padding: '10px 12px', color: 'var(--text2)', minHeight: '50px' }}>
+                                  {log.metadata.description}
+                                </div>
+                              </div>
+                            )}
+                          </div>
+                        )
+                      } else if (action === 'Reset Access') {
+                        detailContent = (
+                          <div style={{ display: 'grid', gridTemplateColumns: 'repeat(auto-fit, minmax(240px, 1fr))', gap: '16px' }}>
+                            <div>
+                              <div style={{ fontWeight: 600, color: 'var(--text2)', marginBottom: '8px', textTransform: 'uppercase', letterSpacing: '.4px', fontSize: '10px' }}>Credential Recovery Details</div>
+                              <div style={{ display: 'flex', flexDirection: 'column', gap: '6px' }}>
+                                <div style={{ display: 'flex' }}><span style={{ minWidth: '180px', color: 'var(--text3)' }}>Officer:</span><span style={{ color: 'var(--text)', fontWeight: 600 }}>{log.metadata?.target_user_name || 'N/A'}</span></div>
+                                <div style={{ display: 'flex' }}><span style={{ minWidth: '180px', color: 'var(--text3)' }}>Password Recovery:</span><span style={{ color: 'var(--amber)', fontWeight: 600 }}>Password Recovery Initiated</span></div>
+                                <div style={{ display: 'flex' }}><span style={{ minWidth: '180px', color: 'var(--text3)' }}>Performed By:</span><span style={{ color: 'var(--text)' }}>{log.user_name}</span></div>
+                                <div style={{ display: 'flex' }}><span style={{ minWidth: '180px', color: 'var(--text3)' }}>Timestamp:</span><span style={{ fontFamily: 'var(--mono)', color: 'var(--text)' }}>{log.created_at}</span></div>
+                              </div>
+                            </div>
+                          </div>
+                        )
+                      } else if (action === 'Evidence Upload') {
+                        detailContent = (
+                          <div style={{ display: 'grid', gridTemplateColumns: 'repeat(auto-fit, minmax(240px, 1fr))', gap: '16px' }}>
+                            <div>
+                              <div style={{ fontWeight: 600, color: 'var(--text2)', marginBottom: '8px', textTransform: 'uppercase', letterSpacing: '.4px', fontSize: '10px' }}>Evidence Upload Details</div>
+                              <div style={{ display: 'flex', flexDirection: 'column', gap: '6px' }}>
+                                <div style={{ display: 'flex' }}><span style={{ minWidth: '120px', color: 'var(--text3)' }}>Case:</span><span style={{ color: 'var(--text)' }}>{caseInfo}</span></div>
+                                <div style={{ display: 'flex' }}><span style={{ minWidth: '120px', color: 'var(--text3)' }}>Evidence ID:</span><span style={{ fontFamily: 'var(--mono)', color: 'var(--text2)' }}>{log.metadata?.evidence_id || 'N/A'}</span></div>
+                                <div style={{ display: 'flex' }}><span style={{ minWidth: '120px', color: 'var(--text3)' }}>Uploaded By:</span><span style={{ color: 'var(--text)' }}>{log.user_name}</span></div>
+                                <div style={{ display: 'flex' }}><span style={{ minWidth: '120px', color: 'var(--text3)' }}>Timestamp:</span><span style={{ fontFamily: 'var(--mono)', color: 'var(--text)' }}>{log.created_at}</span></div>
+                              </div>
+                            </div>
+                            <div>
+                              <div style={{ fontWeight: 600, color: 'var(--text2)', marginBottom: '8px', textTransform: 'uppercase', letterSpacing: '.4px', fontSize: '10px' }}>SHA-256 Hash Signature</div>
+                              <div style={{ background: 'var(--bg3)', border: '1px solid var(--border)', borderRadius: '6px', padding: '10px 12px', fontFamily: 'var(--mono)', fontSize: '11px', color: 'var(--text)', wordBreak: 'break-all' }}>
+                                {log.file_hash || 'N/A'}
+                              </div>
+                            </div>
+                          </div>
+                        )
+                      } else if (action === 'Hash Verified' || action === 'Tamper Detected') {
+                        detailContent = (
+                          <div style={{ display: 'grid', gridTemplateColumns: 'repeat(auto-fit, minmax(240px, 1fr))', gap: '16px' }}>
+                            <div>
+                              <div style={{ fontWeight: 600, color: 'var(--text2)', marginBottom: '8px', textTransform: 'uppercase', letterSpacing: '.4px', fontSize: '10px' }}>Cryptographic Verification</div>
+                              <div style={{ display: 'flex', flexDirection: 'column', gap: '6px' }}>
+                                <div style={{ display: 'flex' }}><span style={{ minWidth: '130px', color: 'var(--text3)' }}>Case:</span><span style={{ color: 'var(--text)' }}>{caseInfo}</span></div>
+                                <div style={{ display: 'flex' }}><span style={{ minWidth: '130px', color: 'var(--text3)' }}>Evidence ID:</span><span style={{ fontFamily: 'var(--mono)', color: 'var(--text2)' }}>{log.metadata?.evidence_id || 'N/A'}</span></div>
+                                <div style={{ display: 'flex' }}><span style={{ minWidth: '130px', color: 'var(--text3)' }}>Verification Result:</span><span><StatusBadge status={log.status} /></span></div>
+                                <div style={{ display: 'flex' }}><span style={{ minWidth: '130px', color: 'var(--text3)' }}>Timestamp:</span><span style={{ fontFamily: 'var(--mono)', color: 'var(--text)' }}>{log.created_at}</span></div>
+                              </div>
+                            </div>
+                            <div>
+                              <div style={{ fontWeight: 600, color: 'var(--text2)', marginBottom: '8px', textTransform: 'uppercase', letterSpacing: '.4px', fontSize: '10px' }}>Recomputed SHA-256 Hash</div>
+                              <div style={{ background: 'var(--bg3)', border: '1px solid var(--border)', borderRadius: '6px', padding: '10px 12px', fontFamily: 'var(--mono)', fontSize: '11px', color: 'var(--text)', wordBreak: 'break-all' }}>
+                                {log.file_hash || 'N/A'}
+                              </div>
+                            </div>
+                          </div>
+                        )
+                      } else if (action === 'Case Created') {
+                        detailContent = (
+                          <div style={{ display: 'grid', gridTemplateColumns: 'repeat(auto-fit, minmax(240px, 1fr))', gap: '16px' }}>
+                            <div>
+                              <div style={{ fontWeight: 600, color: 'var(--text2)', marginBottom: '8px', textTransform: 'uppercase', letterSpacing: '.4px', fontSize: '10px' }}>New Case Details</div>
+                              <div style={{ display: 'flex', flexDirection: 'column', gap: '6px' }}>
+                                <div style={{ display: 'flex' }}><span style={{ minWidth: '120px', color: 'var(--text3)' }}>Case Number:</span><span style={{ color: 'var(--text)', fontFamily: 'var(--mono)', fontWeight: 600 }}>{log.case_number}</span></div>
+                                <div style={{ display: 'flex' }}><span style={{ minWidth: '120px', color: 'var(--text3)' }}>Case Title:</span><span style={{ color: 'var(--text)' }}>{log.case_title}</span></div>
+                                <div style={{ display: 'flex' }}><span style={{ minWidth: '120px', color: 'var(--text3)' }}>Created By:</span><span style={{ color: 'var(--text)' }}>{log.user_name}</span></div>
+                                <div style={{ display: 'flex' }}><span style={{ minWidth: '120px', color: 'var(--text3)' }}>Timestamp:</span><span style={{ fontFamily: 'var(--mono)', color: 'var(--text)' }}>{log.created_at}</span></div>
+                              </div>
+                            </div>
+                          </div>
+                        )
+                      } else if (action === 'YOLO Scan') {
+                        detailContent = (
+                          <div style={{ display: 'grid', gridTemplateColumns: 'repeat(auto-fit, minmax(240px, 1fr))', gap: '16px' }}>
+                            <div>
+                              <div style={{ fontWeight: 600, color: 'var(--text2)', marginBottom: '8px', textTransform: 'uppercase', letterSpacing: '.4px', fontSize: '10px' }}>AI Forensic YOLO Analysis</div>
+                              <div style={{ display: 'flex', flexDirection: 'column', gap: '6px' }}>
+                                <div style={{ display: 'flex' }}><span style={{ minWidth: '120px', color: 'var(--text3)' }}>Case:</span><span style={{ color: 'var(--text)' }}>{caseInfo}</span></div>
+                                <div style={{ display: 'flex' }}><span style={{ minWidth: '120px', color: 'var(--text3)' }}>Evidence ID:</span><span style={{ fontFamily: 'var(--mono)', color: 'var(--text2)' }}>{log.metadata?.evidence_id || 'N/A'}</span></div>
+                                <div style={{ display: 'flex' }}><span style={{ minWidth: '120px', color: 'var(--text3)' }}>Executed By:</span><span style={{ color: 'var(--text)' }}>{log.user_name}</span></div>
+                                <div style={{ display: 'flex' }}><span style={{ minWidth: '120px', color: 'var(--text3)' }}>Model Used:</span><span style={{ color: 'var(--text)' }}>YOLOv8 Weapon Detection</span></div>
+                                <div style={{ display: 'flex' }}><span style={{ minWidth: '120px', color: 'var(--text3)' }}>Timestamp:</span><span style={{ fontFamily: 'var(--mono)', color: 'var(--text)' }}>{log.created_at}</span></div>
+                              </div>
+                            </div>
+                            <div>
+                              <div style={{ fontWeight: 600, color: 'var(--text2)', marginBottom: '8px', textTransform: 'uppercase', letterSpacing: '.4px', fontSize: '10px' }}>Result Summary</div>
+                              <div style={{ background: 'var(--bg3)', border: '1px solid var(--border)', borderRadius: '6px', padding: '10px 12px', color: 'var(--text2)', minHeight: '50px' }}>
+                                {log.metadata?.objects_found ?? 0} weapon(s) / suspicious object(s) detected in evidence file.
+                              </div>
+                            </div>
+                          </div>
+                        )
+                      } else if (action === 'BNS Classified') {
+                        detailContent = (
+                          <div style={{ display: 'grid', gridTemplateColumns: 'repeat(auto-fit, minmax(240px, 1fr))', gap: '16px' }}>
+                            <div>
+                              <div style={{ fontWeight: 600, color: 'var(--text2)', marginBottom: '8px', textTransform: 'uppercase', letterSpacing: '.4px', fontSize: '10px' }}>Legal BNS Classifier</div>
+                              <div style={{ display: 'flex', flexDirection: 'column', gap: '6px' }}>
+                                <div style={{ display: 'flex' }}><span style={{ minWidth: '120px', color: 'var(--text3)' }}>Case:</span><span style={{ color: 'var(--text)' }}>{caseInfo}</span></div>
+                                <div style={{ display: 'flex' }}><span style={{ minWidth: '120px', color: 'var(--text3)' }}>Executed By:</span><span style={{ color: 'var(--text)' }}>{log.user_name}</span></div>
+                                <div style={{ display: 'flex' }}><span style={{ minWidth: '120px', color: 'var(--text3)' }}>Model Used:</span><span style={{ color: 'var(--text)' }}>BNS Legal Classifier</span></div>
+                                <div style={{ display: 'flex' }}><span style={{ minWidth: '120px', color: 'var(--text3)' }}>Timestamp:</span><span style={{ fontFamily: 'var(--mono)', color: 'var(--text)' }}>{log.created_at}</span></div>
+                              </div>
+                            </div>
+                            <div>
+                              <div style={{ fontWeight: 600, color: 'var(--text2)', marginBottom: '8px', textTransform: 'uppercase', letterSpacing: '.4px', fontSize: '10px' }}>Result Summary</div>
+                              <div style={{ background: 'var(--bg3)', border: '1px solid var(--border)', borderRadius: '6px', padding: '10px 12px', color: 'var(--text2)', minHeight: '50px' }}>
+                                Classified crime type: <strong>{log.metadata?.crime_type ?? 'Unknown'}</strong> with {log.metadata?.sections_count ?? 0} BNS sections matching the facts.
+                              </div>
+                            </div>
+                          </div>
+                        )
+                      } else if (action === 'Login Successful' || action === 'Logout Successful') {
+                        detailContent = (
+                          <div style={{ display: 'grid', gridTemplateColumns: 'repeat(auto-fit, minmax(240px, 1fr))', gap: '16px' }}>
+                            <div>
+                              <div style={{ fontWeight: 600, color: 'var(--text2)', marginBottom: '8px', textTransform: 'uppercase', letterSpacing: '.4px', fontSize: '10px' }}>Authentication Activity</div>
+                              <div style={{ display: 'flex', flexDirection: 'column', gap: '6px' }}>
+                                <div style={{ display: 'flex' }}><span style={{ minWidth: '120px', color: 'var(--text3)' }}>Officer Name:</span><span style={{ color: 'var(--text)', fontWeight: 600 }}>{log.user_name}</span></div>
+                                <div style={{ display: 'flex' }}><span style={{ minWidth: '120px', color: 'var(--text3)' }}>Email:</span><span style={{ color: 'var(--text2)' }}>{log.metadata?.email || 'N/A'}</span></div>
+                                <div style={{ display: 'flex' }}><span style={{ minWidth: '120px', color: 'var(--text3)' }}>Role:</span><span style={{ color: 'var(--text)' }}>{log.user_role}</span></div>
+                                <div style={{ display: 'flex' }}><span style={{ minWidth: '120px', color: 'var(--text3)' }}>Action:</span><span style={{ color: 'var(--green)', fontWeight: 500 }}>{action}</span></div>
+                                <div style={{ display: 'flex' }}><span style={{ minWidth: '120px', color: 'var(--text3)' }}>Timestamp:</span><span style={{ fontFamily: 'var(--mono)', color: 'var(--text)' }}>{log.created_at}</span></div>
+                              </div>
+                            </div>
+                          </div>
+                        )
+                      } else if (action === 'Password Changed') {
+                        detailContent = (
+                          <div style={{ display: 'grid', gridTemplateColumns: 'repeat(auto-fit, minmax(240px, 1fr))', gap: '16px' }}>
+                            <div>
+                              <div style={{ fontWeight: 600, color: 'var(--text2)', marginBottom: '8px', textTransform: 'uppercase', letterSpacing: '.4px', fontSize: '10px' }}>Security Settings Change</div>
+                              <div style={{ display: 'flex', flexDirection: 'column', gap: '6px' }}>
+                                <div style={{ display: 'flex' }}><span style={{ minWidth: '120px', color: 'var(--text3)' }}>Officer Name:</span><span style={{ color: 'var(--text)', fontWeight: 600 }}>{log.user_name}</span></div>
+                                <div style={{ display: 'flex' }}><span style={{ minWidth: '120px', color: 'var(--text3)' }}>Email:</span><span style={{ color: 'var(--text2)' }}>{log.metadata?.email || 'N/A'}</span></div>
+                                <div style={{ display: 'flex' }}><span style={{ minWidth: '120px', color: 'var(--text3)' }}>Action:</span><span style={{ color: 'var(--blue)', fontWeight: 500 }}>Password Changed</span></div>
+                                <div style={{ display: 'flex' }}><span style={{ minWidth: '120px', color: 'var(--text3)' }}>Timestamp:</span><span style={{ fontFamily: 'var(--mono)', color: 'var(--text)' }}>{log.created_at}</span></div>
+                              </div>
+                            </div>
+                          </div>
+                        )
+                      } else if (action === 'User Created') {
+                        detailContent = (
+                          <div style={{ display: 'grid', gridTemplateColumns: 'repeat(auto-fit, minmax(240px, 1fr))', gap: '16px' }}>
+                            <div>
+                              <div style={{ fontWeight: 600, color: 'var(--text2)', marginBottom: '8px', textTransform: 'uppercase', letterSpacing: '.4px', fontSize: '10px' }}>Officer Registration Details</div>
+                              <div style={{ display: 'flex', flexDirection: 'column', gap: '6px' }}>
+                                <div style={{ display: 'flex' }}><span style={{ minWidth: '120px', color: 'var(--text3)' }}>Officer Created:</span><span style={{ color: 'var(--text)', fontWeight: 600 }}>{log.metadata?.target_user_name || 'N/A'}</span></div>
+                                <div style={{ display: 'flex' }}><span style={{ minWidth: '120px', color: 'var(--text3)' }}>Assigned Role:</span><span style={{ color: 'var(--text)' }}>{log.metadata?.target_user_role || 'N/A'}</span></div>
+                                <div style={{ display: 'flex' }}><span style={{ minWidth: '120px', color: 'var(--text3)' }}>Created By:</span><span style={{ color: 'var(--text)' }}>{log.user_name}</span></div>
+                                <div style={{ display: 'flex' }}><span style={{ minWidth: '120px', color: 'var(--text3)' }}>Timestamp:</span><span style={{ fontFamily: 'var(--mono)', color: 'var(--text)' }}>{log.created_at}</span></div>
+                              </div>
+                            </div>
+                          </div>
+                        )
+                      } else {
+                        detailContent = (
+                          <div style={{ display: 'grid', gridTemplateColumns: 'repeat(auto-fit, minmax(240px, 1fr))', gap: '16px' }}>
+                            <div>
+                              <div style={{ fontWeight: 600, color: 'var(--text2)', marginBottom: '8px', textTransform: 'uppercase', letterSpacing: '.4px', fontSize: '10px' }}>Forensic Accountability Details</div>
+                              <div style={{ display: 'flex', flexDirection: 'column', gap: '6px' }}>
+                                <div style={{ display: 'flex' }}><span style={{ minWidth: '120px', color: 'var(--text3)' }}>Officer Name:</span><span style={{ color: 'var(--text)' }}>{log.user_name}</span></div>
+                                <div style={{ display: 'flex' }}><span style={{ minWidth: '120px', color: 'var(--text3)' }}>Role:</span><span style={{ color: 'var(--text)' }}>{log.user_role}</span></div>
+                                <div style={{ display: 'flex' }}><span style={{ minWidth: '120px', color: 'var(--text3)' }}>Action:</span><span style={{ color: 'var(--text)' }}>{log.action}</span></div>
+                                <div style={{ display: 'flex' }}><span style={{ minWidth: '120px', color: 'var(--text3)' }}>Status:</span><span><StatusBadge status={log.status} /></span></div>
+                                <div style={{ display: 'flex' }}><span style={{ minWidth: '120px', color: 'var(--text3)' }}>Timestamp:</span><span style={{ fontFamily: 'var(--mono)', color: 'var(--text)' }}>{log.created_at}</span></div>
+                              </div>
+                            </div>
+                            {log.metadata && Object.keys(log.metadata).length > 0 && (
+                              <div>
+                                <div style={{ fontWeight: 600, color: 'var(--text2)', marginBottom: '8px', textTransform: 'uppercase', letterSpacing: '.4px', fontSize: '10px' }}>Additional Context</div>
+                                <div style={{ background: 'var(--bg3)', border: '1px solid var(--border)', borderRadius: '6px', padding: '10px 12px', color: 'var(--text2)', minHeight: '50px', display: 'flex', flexDirection: 'column', gap: '4px' }}>
+                                  {log.metadata?.is_active === false || log.metadata?.updates?.is_active === false ? (
+                                    <span style={{ color: 'var(--red)', fontWeight: 600 }}>Officer Account Deactivated</span>
+                                  ) : log.metadata?.is_active === true || log.metadata?.updates?.is_active === true ? (
+                                    <span style={{ color: 'var(--green)', fontWeight: 600 }}>Officer Account Activated</span>
+                                  ) : log.metadata?.must_change_password === true || log.metadata?.updates?.must_change_password === true ? (
+                                    <span style={{ color: 'var(--amber)', fontWeight: 600 }}>Password Recovery Initiated</span>
+                                  ) : (log.metadata?.role !== undefined || log.metadata?.updates?.role !== undefined) ? (
+                                    <div style={{ display: 'flex', flexDirection: 'column', gap: '2px' }}>
+                                      <div style={{ fontWeight: 700, color: 'var(--text)', fontSize: '12px', marginBottom: '2px' }}>Role Changed</div>
+                                      <div style={{ fontSize: '11px', color: 'var(--text3)' }}>Previous Role: {log.metadata?.old_role || 'Investigator'}</div>
+                                      <div style={{ fontSize: '11px', color: 'var(--text2)', fontWeight: 600 }}>New Role: {log.metadata?.new_role || log.metadata?.role || log.metadata?.updates?.role || 'Admin'}</div>
+                                    </div>
+                                  ) : (
+                                    log.metadata?.description || `Operation metadata: ${Object.entries(log.metadata).map(([k, v]) => `${k}: ${v}`).join(', ')}`
+                                  )}
+                                </div>
+                              </div>
+                            )}
+                          </div>
+                        )
+                      }
+
+                      return (
+                        <tr style={{ background: 'var(--bg2)' }}>
+                          <td colSpan={8} style={{ padding: '16px', borderBottom: '1px solid var(--border)' }}>
+                            <div style={{ fontSize: '12px' }}>
+                              {detailContent}
+                            </div>
+                          </td>
+                        </tr>
+                      )
+                    })()}
+                  </React.Fragment>
+                ))
+              )}
             </tbody>
           </table>
         </div>
@@ -612,7 +1106,7 @@ export function AuditPage() {
           <div style={{ display: 'flex', justifyContent: 'center', gap: '8px', marginTop: '16px' }}>
             <Btn size="xs" disabled={page === 1} onClick={() => setPage((p) => p - 1)}>Prev</Btn>
             <span style={{ fontSize: '12px', color: 'var(--text3)', alignSelf: 'center' }}>Page {page}</span>
-            <Btn size="xs" onClick={() => setPage((p) => p + 1)}>Next</Btn>
+            <Btn size="xs" disabled={logs.length < 20} onClick={() => setPage((p) => p + 1)}>Next</Btn>
           </div>
         )}
       </Card>
@@ -620,83 +1114,7 @@ export function AuditPage() {
   )
 }
 
-// ── PROFILE ───────────────────────────────────────────────────────────────
-export function ProfilePage() {
-  const { user, logout } = useAuth()
-  const navigate = useNavigate()
-  const { theme, toggleTheme } = useTheme()
-  const [pwCurrent, setPwCurrent] = useState('')
-  const [pwNew, setPwNew] = useState('')
-  const [pwConfirm, setPwConfirm] = useState('')
 
-  if (!user) return null
-
-  const initials = user.name.split(' ').map((w) => w[0]).join('').slice(0, 2).toUpperCase()
-
-  return (
-    <AppShell title="My Profile">
-      <div style={{ display: 'grid', gridTemplateColumns: '1fr 1fr', gap: '16px' }}>
-        <div style={{ display: 'flex', flexDirection: 'column', gap: '16px' }}>
-          <Card>
-            <div style={{ display: 'flex', alignItems: 'center', gap: '16px', marginBottom: '20px' }}>
-              <div style={{ width: '72px', height: '72px', borderRadius: '50%', background: 'var(--blue-dim)', display: 'flex', alignItems: 'center', justifyContent: 'center', fontSize: '24px', fontWeight: 700, color: 'var(--blue)', flexShrink: 0 }}>{initials}</div>
-              <div>
-                <div style={{ fontSize: '16px', fontWeight: 600, color: 'var(--text)', marginBottom: '3px' }}>{user.name}</div>
-                <div style={{ fontSize: '12px', color: 'var(--text3)' }}>{user.role === 'admin' ? 'Administrator' : 'Investigator'}</div>
-                <div style={{ marginTop: '6px' }}><Badge label="Active" /></div>
-              </div>
-            </div>
-            <InfoRow label="Badge / ID" value={user.badge_id} />
-            <InfoRow label="Department" value={user.department} />
-            <InfoRow label="Email" value={user.email} />
-            {user.phone && <InfoRow label="Phone" value={user.phone} />}
-            <InfoRow label="Role" value={user.role} />
-            <div style={{ marginTop: '16px', display: 'flex', gap: '8px' }}>
-              <Btn size="sm">Edit Profile</Btn>
-              <Btn size="sm" variant="danger" onClick={() => { if (confirm('Are you sure you want to log out?')) { logout(); navigate('/login') } }}>Log Out</Btn>
-            </div>
-          </Card>
-
-          <Card>
-            <CardTitle>Change Password</CardTitle>
-            <div style={{ display: 'flex', flexDirection: 'column', gap: '10px' }}>
-              {[['Current Password', pwCurrent, setPwCurrent], ['New Password', pwNew, setPwNew], ['Confirm New Password', pwConfirm, setPwConfirm]].map(([label, val, set]) => (
-                <div key={label as string}>
-                  <label style={{ fontSize: '11px', color: 'var(--text3)', display: 'block', marginBottom: '4px', textTransform: 'uppercase', letterSpacing: '.4px' }}>{label as string}</label>
-                  <input type="password" value={val as string} onChange={(e) => (set as (v: string) => void)(e.target.value)} style={{ width: '100%', background: 'var(--bg3)', border: '1px solid var(--border)', borderRadius: 'var(--r)', padding: '7px 10px', fontSize: '13px', color: 'var(--text)', fontFamily: 'var(--font)', outline: 'none' }} />
-                </div>
-              ))}
-              <Btn variant="primary" size="sm" style={{ marginTop: '4px' }}>Update Password</Btn>
-            </div>
-          </Card>
-        </div>
-
-        <div style={{ display: 'flex', flexDirection: 'column', gap: '16px' }}>
-          <Card>
-            <CardTitle>Preferences</CardTitle>
-            <InfoRow label="Theme" value={<Btn size="xs" onClick={toggleTheme}>{theme === 'dark' ? 'Switch to Light' : 'Switch to Dark'}</Btn>} />
-            <InfoRow label="Language" value={
-              <select style={{ background: 'var(--bg3)', border: '1px solid var(--border)', borderRadius: 'var(--r)', padding: '4px 8px', fontSize: '12px', color: 'var(--text)', fontFamily: 'var(--font)', outline: 'none' }}>
-                <option>English</option><option>Kannada</option><option>Hindi</option>
-              </select>
-            } />
-            <InfoRow label="Email Alerts" value={<input type="checkbox" defaultChecked style={{ width: '16px', height: '16px' }} />} />
-          </Card>
-
-          <Card>
-            <CardTitle>System Information</CardTitle>
-            {[['Application','Secure Audits DEIS v2.0'],['Institution','St. Joseph Engineering College'],['Department','Computer Science & Engineering'],['University','VTU Belagavi'],['Academic Year','2026-27'],['Team','Alisha · Amisha · Ancilla · Apeksha'],['Guide','Ms. Shivangi M']].map(([k,v]) => (
-              <div key={k} style={{ display: 'flex', gap: '10px', padding: '5px 0', borderBottom: '1px solid var(--border)' }}>
-                <span style={{ fontSize: '11px', color: 'var(--text3)', minWidth: '100px' }}>{k}</span>
-                <span style={{ fontSize: '11px', color: 'var(--text2)' }}>{v}</span>
-              </div>
-            ))}
-          </Card>
-        </div>
-      </div>
-    </AppShell>
-  )
-}
 
 // ── SETTINGS ──────────────────────────────────────────────────────────────
 export function SettingsPage() {
@@ -706,7 +1124,7 @@ export function SettingsPage() {
         <div style={{ display: 'flex', flexDirection: 'column', gap: '16px' }}>
           <Card>
             <CardTitle>System Configuration</CardTitle>
-            {[['YOLO Model',import.meta.env.VITE_YOLO_MODEL_PATH||'/models/yolov8_forensic.pt'],['FAISS Index',import.meta.env.VITE_FAISS_PATH||'/data/bns_sections.faiss'],['LegalBERT',import.meta.env.VITE_LEGALBERT_PATH||'/models/legalbert-base'],['API Base URL',import.meta.env.VITE_API_BASE_URL||'http://localhost:8000'],['Supabase URL',import.meta.env.VITE_SUPABASE_URL||'Not configured'],['JWT Expiry','8 hours'],['Hash Algorithm','SHA-256 (FIPS 140-2)'],['OCR Engine','Tesseract 4.0 + LSTM']].map(([k,v]) => (
+            {[['YOLO Model', import.meta.env.VITE_YOLO_MODEL_PATH || '/models/yolov8_forensic.pt'], ['FAISS Index', import.meta.env.VITE_FAISS_PATH || '/data/bns_sections.faiss'], ['LegalBERT', import.meta.env.VITE_LEGALBERT_PATH || '/models/legalbert-base'], ['API Base URL', import.meta.env.VITE_API_BASE_URL || 'http://localhost:8000'], ['Supabase URL', import.meta.env.VITE_SUPABASE_URL || 'Not configured'], ['JWT Expiry', '8 hours'], ['Hash Algorithm', 'SHA-256 (FIPS 140-2)'], ['OCR Engine', 'Tesseract 4.0 + LSTM']].map(([k, v]) => (
               <div key={k} style={{ display: 'flex', justifyContent: 'space-between', padding: '7px 0', borderBottom: '1px solid var(--border)' }}>
                 <span style={{ fontSize: '11px', color: 'var(--text3)' }}>{k}</span>
                 <span style={{ fontSize: '11px', fontFamily: 'var(--mono)', color: 'var(--text2)' }}>{v}</span>
@@ -715,7 +1133,7 @@ export function SettingsPage() {
           </Card>
           <Card>
             <CardTitle>Security Policies</CardTitle>
-            {[['Evidence Download','Disabled'],['Report Export','Disabled'],['Public Access','Disabled'],['All Actions Logged','Enabled'],['SHA-256 Hashing','Enabled'],['JWT Auth','Enabled'],['OTP Verification','Enabled']].map(([k,v]) => (
+            {[['Evidence Download', 'Disabled'], ['Report Export', 'Disabled'], ['Public Access', 'Disabled'], ['All Actions Logged', 'Enabled'], ['SHA-256 Hashing', 'Enabled'], ['JWT Auth', 'Enabled'], ['OTP Verification', 'Enabled']].map(([k, v]) => (
               <div key={k} style={{ display: 'flex', justifyContent: 'space-between', padding: '7px 0', borderBottom: '1px solid var(--border)' }}>
                 <span style={{ fontSize: '12px', color: 'var(--text2)' }}>{k}</span>
                 <span style={{ fontSize: '11px', fontWeight: 500, color: v === 'Enabled' ? 'var(--green)' : 'var(--red)' }}>{v}</span>
@@ -726,7 +1144,7 @@ export function SettingsPage() {
         <div style={{ display: 'flex', flexDirection: 'column', gap: '16px' }}>
           <Card>
             <CardTitle>System Health</CardTitle>
-            {[['Database','Online'],['FastAPI Backend','Online'],['YOLO Model','Loaded'],['BNS Index','Loaded'],['OCR Engine','Ready'],['Tamper Monitor','Active']].map(([k,v]) => (
+            {[['Database', 'Online'], ['FastAPI Backend', 'Online'], ['YOLO Model', 'Loaded'], ['BNS Index', 'Loaded'], ['OCR Engine', 'Ready'], ['Tamper Monitor', 'Active']].map(([k, v]) => (
               <div key={k} style={{ display: 'flex', justifyContent: 'space-between', padding: '6px 0', borderBottom: '1px solid var(--border)' }}>
                 <span style={{ fontSize: '12px', color: 'var(--text2)' }}>{k}</span>
                 <span style={{ fontSize: '11px', fontWeight: 500, color: 'var(--green)' }}>{v}</span>
@@ -735,7 +1153,7 @@ export function SettingsPage() {
           </Card>
           <Card>
             <CardTitle>Team</CardTitle>
-            {[['Alisha Anton Fernandis','4SO23CS017'],['Amisha Josna Dsouza','4SO23CS019'],['Ancilla Teresa Dsouza','4SO23CS026'],['Apeksha A Govekar','4SO23CS031']].map(([n,u]) => (
+            {[['Alisha Anton Fernandis', '4SO23CS017'], ['Amisha Josna Dsouza', '4SO23CS019'], ['Ancilla Teresa Dsouza', '4SO23CS026'], ['Apeksha A Govekar', '4SO23CS031']].map(([n, u]) => (
               <div key={u} style={{ display: 'flex', justifyContent: 'space-between', padding: '7px 0', borderBottom: '1px solid var(--border)' }}>
                 <span style={{ fontSize: '12px', color: 'var(--text2)' }}>{n}</span>
                 <span style={{ fontFamily: 'var(--mono)', fontSize: '11px', color: 'var(--text3)' }}>{u}</span>
@@ -767,7 +1185,7 @@ export function PersonalPage() {
   const [excalidrawAPI, setExcalidrawAPI] = useState<any>(null)
 
   useEffect(() => {
-    api.getNotes().then((res) => setNotes(res.data)).catch(() => {})
+    api.getNotes().then((res) => setNotes(res.data)).catch(() => { })
   }, [])
 
   const openNote = (note: import('../types').PersonalNote) => {
@@ -952,10 +1370,10 @@ export function GraphPage() {
 
   useEffect(() => {
     if (!selectedCaseId) {
-       setLoading(false)
-       setNodes([])
-       setEdges([])
-       return
+      setLoading(false)
+      setNodes([])
+      setEdges([])
+      return
     }
     setLoading(true)
     api.getCaseGraph(selectedCaseId).then((res: any) => {
@@ -968,16 +1386,16 @@ export function GraphPage() {
     <AppShell title="POLE Relationship Graph">
       {!routeId && (
         <div style={{ marginBottom: '16px', position: 'relative', zIndex: 10 }}>
-          <input 
-            value={caseSearch} 
-            onChange={(e) => { setCaseSearch(e.target.value); searchCases(e.target.value) }} 
-            placeholder="Search case by ID, title, or victim name to view graph..." 
-            style={{ width: '100%', background: 'var(--bg2)', border: '1px solid var(--border)', borderRadius: 'var(--r)', padding: '10px 14px', fontSize: '13px', color: 'var(--text)', fontFamily: 'var(--font)', outline: 'none' }} 
+          <input
+            value={caseSearch}
+            onChange={(e) => { setCaseSearch(e.target.value); searchCases(e.target.value) }}
+            placeholder="Search case by ID, title, or victim name to view graph..."
+            style={{ width: '100%', background: 'var(--bg2)', border: '1px solid var(--border)', borderRadius: 'var(--r)', padding: '10px 14px', fontSize: '13px', color: 'var(--text)', fontFamily: 'var(--font)', outline: 'none' }}
           />
           {caseResults.length > 0 && (
             <div style={{ position: 'absolute', top: '100%', left: 0, right: 0, background: 'var(--bg3)', border: '1px solid var(--border)', borderRadius: 'var(--r)', marginTop: '4px', overflow: 'hidden' }}>
               {caseResults.map((c) => (
-                <div key={c.id} onClick={() => { setSelectedCaseId(c.id); setCaseSearch(''); setCaseResults([]) }} style={{ padding: '8px 14px', cursor: 'pointer', fontSize: '12px', borderBottom: '1px solid var(--border)' }} onMouseEnter={(e) => { e.currentTarget.style.background='var(--bg4)' }} onMouseLeave={(e) => { e.currentTarget.style.background='transparent' }}>
+                <div key={c.id} onClick={() => { setSelectedCaseId(c.id); setCaseSearch(''); setCaseResults([]) }} style={{ padding: '8px 14px', cursor: 'pointer', fontSize: '12px', borderBottom: '1px solid var(--border)' }} onMouseEnter={(e) => { e.currentTarget.style.background = 'var(--bg4)' }} onMouseLeave={(e) => { e.currentTarget.style.background = 'transparent' }}>
                   <span style={{ fontFamily: 'var(--mono)', color: 'var(--blue)' }}>{c.case_number}</span> — {c.title}
                 </div>
               ))}
@@ -1014,7 +1432,7 @@ export function GraphPage() {
 
       {/* Legend */}
       <div style={{ display: 'flex', gap: '16px', marginTop: '12px', flexWrap: 'wrap' }}>
-        {[['Case','var(--blue)'],['Person','var(--red)'],['Object / Evidence','var(--amber)'],['Location','var(--purple)'],['Event / FIR','var(--teal)']].map(([l,c]) => (
+        {[['Case', 'var(--blue)'], ['Person', 'var(--red)'], ['Object / Evidence', 'var(--amber)'], ['Location', 'var(--purple)'], ['Event / FIR', 'var(--teal)']].map(([l, c]) => (
           <div key={l} style={{ display: 'flex', alignItems: 'center', gap: '6px', fontSize: '12px', color: 'var(--text2)' }}>
             <div style={{ width: '10px', height: '10px', borderRadius: '50%', background: c }} />
             {l}

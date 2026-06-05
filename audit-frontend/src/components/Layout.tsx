@@ -19,8 +19,7 @@ const NAV = [
   { id: '/audio', label: 'Audio Forensics', icon: 'audio' },
   { id: '/graph', label: 'POLE Graph', icon: 'graph' },
   { section: 'System' },
-  { id: '/audit', label: 'Audit Log', icon: 'log' },
-  { id: '/settings', label: 'Settings', icon: 'cog' }
+  { id: '/audit', label: 'Audit Log', icon: 'log' }
 ]
 
 const SVG_ICONS: Record<string, JSX.Element> = {
@@ -69,7 +68,28 @@ export function Sidebar() {
   const location = useLocation()
   const { user } = useAuth()
 
-  const initials = user?.name?.split(' ').map(w => w[0]).join('').slice(0, 2).toUpperCase() || 'SA'
+  const visibleNav = [...NAV]
+  if (user?.role === 'Admin') {
+    visibleNav.push({ id: '/users', label: 'User Management', icon: 'cog' })
+  }
+
+  const getDisplayRole = (roleKey: string) => {
+    const map: Record<string, string> = {
+      admin: 'Admin',
+      lead_investigator: 'Lead Investigator',
+      investigator: 'Investigator',
+      analyst: 'Forensic Analyst',
+      viewer: 'Viewer'
+    }
+    return map[roleKey?.toLowerCase()] || roleKey || 'Investigator'
+  }
+
+  const initials = ((user?.full_name || user?.name || 'SA') as string)
+    .split(' ')
+    .map(w => w[0])
+    .join('')
+    .slice(0, 2)
+    .toUpperCase()
 
   return (
     <div style={{ width: '224px', background: 'var(--bg2)', borderRight: '1px solid var(--border)', display: 'flex', flexDirection: 'column', flexShrink: 0, height: '100vh' }}>
@@ -85,7 +105,7 @@ export function Sidebar() {
 
       {/* Nav */}
       <nav style={{ flex: 1, padding: '8px', overflowY: 'auto' }}>
-        {NAV.map((item, i) => {
+        {visibleNav.map((item, i) => {
           if ('section' in item) {
             return (
               <div key={i} style={{ fontSize: '10px', color: 'var(--text3)', letterSpacing: '.8px', textTransform: 'uppercase', padding: '10px 8px 4px', marginTop: '4px' }}>
@@ -127,9 +147,11 @@ export function Sidebar() {
         </div>
         <div style={{ flex: 1, minWidth: 0 }}>
           <div style={{ fontSize: '12px', fontWeight: 500, color: 'var(--text)', whiteSpace: 'nowrap', overflow: 'hidden', textOverflow: 'ellipsis' }}>
-            {user?.name || 'Investigator'}
+            {user?.full_name || user?.name || 'Investigator'}
           </div>
-          <div style={{ fontSize: '10px', color: 'var(--text3)' }}>{user?.role === 'admin' ? 'Administrator' : 'Investigator'} · {user?.department || ''}</div>
+          <div style={{ fontSize: '10px', color: 'var(--text3)' }}>
+            {getDisplayRole(user?.role || '')} {user?.department ? `· ${user.department}` : ''}
+          </div>
         </div>
         <div style={{ width: '7px', height: '7px', borderRadius: '50%', background: 'var(--green)', flexShrink: 0 }} />
       </div>

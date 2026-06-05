@@ -1,4 +1,4 @@
-import React, { createContext, useContext, useEffect, useReducer } from 'react'
+import React, { createContext, useContext, useEffect, useReducer, useCallback } from 'react'
 import type { User, AuthState } from '../types'
 import { api } from '../services/api'
 
@@ -57,18 +57,36 @@ export function AuthProvider({ children }: { children: React.ReactNode }) {
       })
   }, [])
 
-  const login = (token: string, user: User) => {
+  const login = useCallback((token: string, user: User) => {
     localStorage.setItem('sa_token', token)
     dispatch({ type: 'LOGIN_SUCCESS', payload: { user, token } })
-  }
+  }, [])
 
-  const logout = async () => {
+  const logout = useCallback(async () => {
     try { await api.logout() } catch { /* ignore */ }
     localStorage.removeItem('sa_token')
+    localStorage.removeItem('sa_session_start')
     dispatch({ type: 'LOGOUT' })
-  }
+  }, [])
 
-  const updateUser = (user: User) => dispatch({ type: 'UPDATE_USER', payload: user })
+  const updateUser = useCallback((user: User) => {
+    dispatch({ type: 'UPDATE_USER', payload: user })
+  }, [])
+
+  useEffect(() => {
+    if (!state.isAuthenticated) return
+    const interval = setInterval(() => {
+      if (document.hidden) return
+      api.getMe().catch((err) => {
+        const status = err.response?.status
+        const detail = err.response?.data?.detail || ''
+        if (status === 403 && typeof detail === 'string' && detail.toLowerCase().includes('deactivated')) {
+          logout()
+        }
+      })
+    }, 10000) // Poll user status every 10 seconds
+    return () => clearInterval(interval)
+  }, [state.isAuthenticated, logout])
 
   return (
     <AuthContext.Provider value={{ ...state, login, logout, updateUser }}>

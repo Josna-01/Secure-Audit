@@ -74,6 +74,9 @@ export default function AuthPage() {
     try {
       const res = await api.verifyOTP(email, tokenInput, password)
       
+      // Save session start time
+      localStorage.setItem('sa_session_start', new Date().toISOString())
+
       // Login context update
       login(res.data.token, {
         ...res.data.user,

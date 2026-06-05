@@ -2,14 +2,22 @@
 export interface User {
   id: string
   name: string
+  full_name?: string
   email: string
   badge_id: string
+  badge_number?: string
   department: string
-  role: 'investigator' | 'admin'
-  status: 'active' | 'pending' | 'suspended'
+  role: string
+  is_active?: boolean
+  clearance_level?: string | number
+  status: 'active' | 'pending' | 'suspended' | string
   phone?: string
+  last_login?: string
+  last_sign_in_at?: string
   created_at: string
+  must_change_password?: boolean
 }
+
 
 export interface AuthState {
   user: User | null
@@ -129,11 +137,17 @@ export interface AuditLog {
   id: string
   user_id: string
   user_name: string
+  user_role?: string
   action: string
+  status?: string
   case_id?: string
+  case_number?: string
+  case_title?: string
   file_hash?: string
   metadata?: Record<string, unknown>
   created_at: string
+  date?: string
+  time?: string
 }
 
 // ── NOTIFICATIONS ─────────────────────────────────────────────────────────

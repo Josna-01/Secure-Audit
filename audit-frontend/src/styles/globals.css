@@ -5,13 +5,13 @@
 :root {
   --font: 'IBM Plex Sans', system-ui, sans-serif;
   --mono: 'IBM Plex Mono', monospace;
-  --bg: #0d1117;
-  --bg2: #161b27;
-  --bg3: #1c2333;
-  --bg4: #242d3d;
-  --bg5: #2c3650;
-  --border: #2a3349;
-  --border2: #3a4565;
+  --bg: #06090e;
+  --bg2: #0d111a;
+  --bg3: #131924;
+  --bg4: #1b2332;
+  --bg5: #232d40;
+  --border: #1a2233;
+  --border2: #26334d;
   --text: #e4e8f0;
   --text2: #8b95aa;
   --text3: #596070;
@@ -72,3 +72,7 @@ body {
 button { cursor: pointer; font-family: var(--font); }
 input, select, textarea { font-family: var(--font); }
 a { color: var(--blue); text-decoration: none; }
+
+@keyframes spin {
+  to { transform: rotate(360deg); }
+}

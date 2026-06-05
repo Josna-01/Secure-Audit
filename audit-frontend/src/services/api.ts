@@ -25,11 +25,13 @@ class ApiService {
       return config
     })
 
-    // Handle 401 globally
+    // Handle 401 and deactivated 403 globally
     this.client.interceptors.response.use(
       (res) => res,
       (err) => {
-        if (err.response?.status === 401) {
+        const status = err.response?.status
+        const detail = err.response?.data?.detail || ''
+        if (status === 401 || (status === 403 && typeof detail === 'string' && detail.toLowerCase().includes('deactivated'))) {
           localStorage.removeItem('sa_token')
           window.location.href = '/login'
         }
@@ -74,6 +76,11 @@ class ApiService {
 
   async logout() {
     const { data } = await this.client.post<ApiResponse<{ message: string }>>('/auth/logout')
+    return data
+  }
+
+  async changePassword(newPassword: string) {
+    const { data } = await this.client.post<ApiResponse<{ message: string }>>('/auth/change-password', { new_password: newPassword })
     return data
   }
 
@@ -182,8 +189,38 @@ class ApiService {
   }
 
   // ── AUDIT LOG ───────────────────────────────────────────────────────────
-  async getAuditLogs(params?: { action?: string; user_id?: string; case_id?: string; page?: number }) {
+  async getAuditLogs(params?: {
+    action?: string
+    user_id?: string
+    case_id?: string
+    page?: number
+    role?: string
+    start_date?: string
+    end_date?: string
+    search?: string
+  }) {
     const { data } = await this.client.get<PaginatedResponse<AuditLog>>('/audit', { params })
+    return data
+  }
+
+  // ── USER MANAGEMENT (Admin Only) ─────────────────────────────────────────
+  async getUsers() {
+    const { data } = await this.client.get<ApiResponse<any[]>>('/users')
+    return data
+  }
+
+  async updateUserAdmin(userId: string, payload: { role?: string; is_active?: boolean; full_name?: string; department?: string; badge_number?: string; clearance_level?: number }) {
+    const { data } = await this.client.patch<ApiResponse<any>>(`/users/${userId}`, payload)
+    return data
+  }
+
+  async resetAccess(userId: string) {
+    const { data } = await this.client.post<ApiResponse<{ message: string }>>(`/users/${userId}/reset-access`)
+    return data
+  }
+
+  async createUserAdmin(payload: { email: string; password: string; full_name: string; role: string; department: string; badge_number: string; clearance_level?: number }) {
+    const { data } = await this.client.post<ApiResponse<any>>('/users', payload)
     return data
   }
 

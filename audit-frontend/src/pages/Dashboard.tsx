@@ -5,16 +5,22 @@ import { Card, CardTitle, CardHeader, Btn, Badge, ProgressBar } from '../compone
 import { api } from '../services/api'
 import type { Case, AuditLog } from '../types'
 import { format } from 'date-fns'
+import { useAuth } from '../context/AuthContext'
 
 interface Stats {
   active: number
   total_evidence: number
-  tamper_alerts: number
-  bns_classified: number
+  tamper_alerts?: number
+  bns_classified?: number
+  ai_analyses?: number
+  my_audit_logs?: number
+  total_users?: number
 }
 
 export default function Dashboard() {
   const navigate = useNavigate()
+  const { user } = useAuth()
+  const role = user?.role || 'Investigator'
   const [stats, setStats] = useState<Stats | null>(null)
   const [cases, setCases] = useState<Case[]>([])
   const [logs, setLogs] = useState<AuditLog[]>([])
@@ -43,6 +49,8 @@ export default function Dashboard() {
   }).slice(0, 6)
 
   const actionColors: Record<string, string> = {
+    'Login Successful': 'var(--text3)',
+    'Logout Successful': 'var(--text3)',
     'BNS Classified': 'var(--purple)',
     'YOLO Scan': 'var(--amber)',
     'Tamper Detected': 'var(--red)',
@@ -50,14 +58,20 @@ export default function Dashboard() {
     'Evidence Upload': 'var(--blue)',
     'Case Created': 'var(--blue)',
     'Case Access': 'var(--text2)',
-    'Login': 'var(--text3)'
+    'Login': 'var(--text3)',
+    'Logout': 'var(--text3)'
   }
 
-  const statCards = [
+  const statCards = role === 'Admin' ? [
     { label: 'Active Cases',    value: stats?.active ?? '—',           sub: 'Click to view',       color: 'var(--green)',  page: '/cases',    red: false },
     { label: 'Evidence Files',  value: stats?.total_evidence ?? '—',    sub: 'All uploaded files',  color: 'var(--green)',  page: '/evidence', red: false },
     { label: 'Tamper Alerts',   value: stats?.tamper_alerts ?? '—',     sub: 'Requires review',     color: 'var(--red)',    page: '_notif',    red: true  },
     { label: 'BNS Classified',  value: stats?.bns_classified ?? '—',    sub: 'Total classified',    color: 'var(--text3)',  page: '/bns',      red: false },
+  ] : [
+    { label: 'My Cases',        value: stats?.active ?? '—',           sub: 'Cases created by me', color: 'var(--green)',  page: '/cases',    red: false },
+    { label: 'My Evidence',     value: stats?.total_evidence ?? '—',    sub: 'My evidence uploads', color: 'var(--green)',  page: '/evidence', red: false },
+    { label: 'My AI Analyses',  value: stats?.ai_analyses ?? '—',       sub: 'AI analyses run by me',color: 'var(--text3)',  page: '/detection',red: false },
+    { label: 'My Audit Activity', value: stats?.my_audit_logs ?? '—',     sub: 'My audit log count',  color: 'var(--text3)',  page: '/audit',    red: false },
   ]
 
   return (
@@ -82,7 +96,7 @@ export default function Dashboard() {
       </div>
 
       {/* Tamper Banner */}
-      {(stats?.tamper_alerts ?? 0) > 0 && (
+      {role === 'Admin' && (stats?.tamper_alerts ?? 0) > 0 && (
         <div
           onClick={() => navigate('/evidence')}
           style={{ display: 'flex', alignItems: 'center', gap: '12px', padding: '10px 14px', background: 'var(--red-bg)', border: '1px solid var(--red)', borderRadius: 'var(--r)', marginBottom: '16px', cursor: 'pointer' }}
@@ -202,35 +216,49 @@ export default function Dashboard() {
             )}
           </Card>
 
-          {/* Hash Integrity */}
-          <Card>
-            <CardHeader>
-              <CardTitle>Hash Integrity</CardTitle>
-              <span style={{ fontSize: '10px', color: 'var(--green)' }}>Verified</span>
-            </CardHeader>
-            <div style={{ display: 'flex', flexDirection: 'column', gap: '8px' }}>
-              <div style={{ display: 'flex', alignItems: 'center', justifyContent: 'space-between', padding: '8px 10px', background: 'var(--bg3)', borderRadius: 'var(--r)' }}>
-                <span style={{ fontSize: '12px', color: 'var(--text2)' }}>Total Files</span>
-                <span style={{ fontFamily: 'var(--mono)', fontWeight: 600, color: 'var(--text)' }}>{stats?.total_evidence ?? '—'}</span>
-              </div>
-              <div style={{ display: 'flex', alignItems: 'center', justifyContent: 'space-between', padding: '8px 10px', background: 'var(--green-bg)', borderRadius: 'var(--r)' }}>
-                <span style={{ fontSize: '12px', color: 'var(--green)' }}>Verified</span>
-                <span style={{ fontFamily: 'var(--mono)', fontWeight: 600, color: 'var(--green)' }}>{(stats?.total_evidence ?? 0) - (stats?.tamper_alerts ?? 0)}</span>
-              </div>
-              {(stats?.tamper_alerts ?? 0) > 0 && (
-                <div
-                  onClick={() => navigate('/evidence')}
-                  style={{ display: 'flex', alignItems: 'center', justifyContent: 'space-between', padding: '8px 10px', background: 'var(--red-bg)', borderRadius: 'var(--r)', cursor: 'pointer' }}
-                  onMouseEnter={(e) => { e.currentTarget.style.opacity = '.8' }}
-                  onMouseLeave={(e) => { e.currentTarget.style.opacity = '1' }}
-                >
-                  <span style={{ fontSize: '12px', color: 'var(--red)' }}>Tampered</span>
-                  <span style={{ fontFamily: 'var(--mono)', fontWeight: 600, color: 'var(--red)' }}>{stats?.tamper_alerts}</span>
+          {/* Hash Integrity (Admin Only) */}
+          {role === 'Admin' && (
+            <Card>
+              <CardHeader>
+                <CardTitle>Hash Integrity</CardTitle>
+                <span style={{ fontSize: '10px', color: 'var(--green)' }}>Verified</span>
+              </CardHeader>
+              <div style={{ display: 'flex', flexDirection: 'column', gap: '8px' }}>
+                <div style={{ display: 'flex', alignItems: 'center', justifyContent: 'space-between', padding: '8px 10px', background: 'var(--bg3)', borderRadius: 'var(--r)' }}>
+                  <span style={{ fontSize: '12px', color: 'var(--text2)' }}>Total Files</span>
+                  <span style={{ fontFamily: 'var(--mono)', fontWeight: 600, color: 'var(--text)' }}>{stats?.total_evidence ?? '—'}</span>
                 </div>
-              )}
-            </div>
-            <Btn size="sm" full style={{ marginTop: '10px' }} onClick={() => navigate('/evidence')}>View Details</Btn>
-          </Card>
+                <div style={{ display: 'flex', alignItems: 'center', justifyContent: 'space-between', padding: '8px 10px', background: 'var(--green-bg)', borderRadius: 'var(--r)' }}>
+                  <span style={{ fontSize: '12px', color: 'var(--green)' }}>Verified</span>
+                  <span style={{ fontFamily: 'var(--mono)', fontWeight: 600, color: 'var(--green)' }}>{(stats?.total_evidence ?? 0) - (stats?.tamper_alerts ?? 0)}</span>
+                </div>
+                {(stats?.tamper_alerts ?? 0) > 0 && (
+                  <div
+                    onClick={() => navigate('/evidence')}
+                    style={{ display: 'flex', alignItems: 'center', justifyContent: 'space-between', padding: '8px 10px', background: 'var(--red-bg)', borderRadius: 'var(--r)', cursor: 'pointer' }}
+                    onMouseEnter={(e) => { e.currentTarget.style.opacity = '.8' }}
+                    onMouseLeave={(e) => { e.currentTarget.style.opacity = '1' }}
+                  >
+                    <span style={{ fontSize: '12px', color: 'var(--red)' }}>Tampered</span>
+                    <span style={{ fontFamily: 'var(--mono)', fontWeight: 600, color: 'var(--red)' }}>{stats?.tamper_alerts}</span>
+                  </div>
+                )}
+              </div>
+              <Btn size="sm" full style={{ marginTop: '10px' }} onClick={() => navigate('/evidence')}>View Details</Btn>
+            </Card>
+          )}
+
+          {/* User Overview (Admin Only) */}
+          {role === 'Admin' && (
+            <Card>
+              <CardTitle>User Overview</CardTitle>
+              <div style={{ display: 'flex', alignItems: 'center', justifyContent: 'space-between', padding: '8px 10px', background: 'var(--bg3)', borderRadius: 'var(--r)', marginBottom: '8px' }}>
+                <span style={{ fontSize: '12px', color: 'var(--text2)' }}>Total Registered Officers</span>
+                <span style={{ fontFamily: 'var(--mono)', fontWeight: 600, color: 'var(--text)' }}>{stats?.total_users ?? '—'}</span>
+              </div>
+              <Btn size="sm" full onClick={() => navigate('/users')}>Manage Users</Btn>
+            </Card>
+          )}
 
           {/* System Status */}
           <Card>

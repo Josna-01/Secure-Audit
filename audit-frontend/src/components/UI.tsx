@@ -73,6 +73,7 @@ export function CardHeader({ children }: { children: React.ReactNode }) {
 // ── BADGE ─────────────────────────────────────────────────────────────────
 const badgeMap: Record<string, { bg: string; color: string }> = {
   Active:     { bg: 'var(--green-bg)',  color: 'var(--green)'  },
+  Inactive:   { bg: 'var(--red-bg)',    color: 'var(--red)'    },
   Open:       { bg: 'var(--blue-bg)',   color: 'var(--blue)'   },
   Pending:    { bg: 'var(--amber-bg)',  color: 'var(--amber)'  },
   Critical:   { bg: 'var(--red-bg)',    color: 'var(--red)'    },
