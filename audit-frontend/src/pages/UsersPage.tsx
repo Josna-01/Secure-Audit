@@ -411,6 +411,7 @@ export default function UsersPage() {
                 onChange={(e) => setEmail(e.target.value)}
                 placeholder="officer@secureaudits.gov"
                 required
+                autoComplete="new-password"
                 style={{ width: '100%', background: 'var(--bg3)', border: '1px solid var(--border)', borderRadius: 'var(--r)', padding: '7px 10px', fontSize: '12px', color: 'var(--text)', fontFamily: 'var(--font)', outline: 'none' }}
               />
             </div>
@@ -423,6 +424,7 @@ export default function UsersPage() {
                 onChange={(e) => setPassword(e.target.value)}
                 placeholder="••••••••"
                 required
+                autoComplete="new-password"
                 style={{ width: '100%', background: 'var(--bg3)', border: '1px solid var(--border)', borderRadius: 'var(--r)', padding: '7px 10px', fontSize: '12px', color: 'var(--text)', fontFamily: 'var(--font)', outline: 'none' }}
               />
             </div>
