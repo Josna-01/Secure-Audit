@@ -5,10 +5,14 @@ import { Card, CardTitle, CardHeader, Btn, Badge, Tabs, InfoRow, HashChip, Alert
 import { api } from '../services/api'
 import type { Case, Evidence, BNSResult, Storyboard } from '../types'
 import { format } from 'date-fns'
+import { useAuth } from '../context/AuthContext'
 
 export default function CaseDetail() {
   const { id } = useParams<{ id: string }>()
   const navigate = useNavigate()
+  const { user } = useAuth()
+  const isAdmin = user?.role === 'Admin'
+  const [showMetadata, setShowMetadata] = useState(false)
   const [activeTab, setActiveTab] = useState(0)
   const [cas, setCas] = useState<Case | null>(null)
   const [evidence, setEvidence] = useState<Evidence[]>([])
@@ -101,6 +105,19 @@ export default function CaseDetail() {
                 <div style={{ marginTop: '10px', fontSize: '10px', color: 'var(--text3)' }}>Original language: {cas.fir_language} · Translated to English for AI processing</div>
               )}
             </Card>
+            {isAdmin && (
+              <Card>
+                <div style={{ display: 'flex', justifyContent: 'space-between', alignItems: 'center', cursor: 'pointer' }} onClick={() => setShowMetadata(!showMetadata)}>
+                  <div style={{ fontSize: '11px', fontWeight: 600, color: 'var(--text3)', textTransform: 'uppercase', letterSpacing: '.6px' }}>Technical Metadata</div>
+                  <span style={{ fontSize: '11px', color: 'var(--text3)' }}>{showMetadata ? '▲ Hide' : '▼ Show'}</span>
+                </div>
+                {showMetadata && (
+                  <div style={{ marginTop: '12px', borderTop: '1px solid var(--border)', paddingTop: '12px' }}>
+                    <InfoRow label="Case UUID" value={cas.id} mono />
+                  </div>
+                )}
+              </Card>
+            )}
           </div>
           <div style={{ display: 'flex', flexDirection: 'column', gap: '16px' }}>
             <Card>

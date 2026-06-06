@@ -16,6 +16,7 @@ export interface User {
   last_sign_in_at?: string
   created_at: string
   must_change_password?: boolean
+  can_create_case?: boolean
 }
 
 
@@ -63,6 +64,8 @@ export interface Case {
   incident_location?: string
   investigator_id: string
   investigator_name?: string
+  created_by: string
+  created_by_name?: string
   created_at: string
   updated_at: string
 }

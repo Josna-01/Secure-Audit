@@ -227,6 +227,19 @@ def get_current_user_info(request: Request) -> dict:
 
 def has_permission(user_info: dict, permission_name: str) -> bool:
     role = user_info.get("role", "Investigator")
+    if role.lower() == "investigator" and permission_name == "create_case":
+        if "can_create_case" in user_info:
+            return bool(user_info["can_create_case"])
+        try:
+            user_id = user_info.get("id")
+            if user_id:
+                res = supabase_admin.table("users").select("can_create_case").eq("id", user_id).execute()
+                if res.data:
+                    return bool(res.data[0].get("can_create_case", True))
+        except Exception as e:
+            print(f"[PERMISSION CHECK WARNING] Failed to query user permission: {e}")
+        return True
+
     # Case-insensitive role mapping fallback
     matched_role = "Investigator"
     for r in ROLE_PERMISSIONS:
@@ -448,7 +461,8 @@ def verify_otp(req: VerifyOTPRequest):
                 "status": "active" if user.get("is_active", True) else "inactive",
                 "last_login": current_time,
                 "last_sign_in_at": last_sign_in or current_time,
-                "must_change_password": must_change_password
+                "must_change_password": must_change_password,
+                "can_create_case": has_permission(user, "create_case")
             }
         }
     }
@@ -508,7 +522,8 @@ def get_me(request: Request):
             "status": "active" if user.get("is_active", True) else "inactive",
             "last_login": user.get("last_login") or last_sign_in,
             "last_sign_in_at": last_sign_in,
-            "must_change_password": must_change_password
+            "must_change_password": must_change_password,
+            "can_create_case": has_permission(user, "create_case")
         }
     }
 
@@ -591,7 +606,30 @@ def create_case(case_data: CaseCreate, request: Request):
     if not has_permission(user_info, "create_case"):
         raise HTTPException(status_code=403, detail="Forbidden: You do not have permission to create cases.")
 
+    current_year = datetime.datetime.now().year
+    start_date = f"{current_year}-01-01T00:00:00Z"
+    end_date = f"{current_year}-12-31T23:59:59.999999Z"
+
+    try:
+        res_count = supabase_admin.table("cases").select("id").gte("created_at", start_date).lte("created_at", end_date).execute()
+        count = len(res_count.data) if res_count.data else 0
+    except Exception as e:
+        print(f"[CASE NUMBER GENERATION ERROR] count failed: {e}")
+        count = 0
+
+    sequence_num = count + 1
+    while True:
+        case_number = f"SA-{current_year}-{sequence_num:04d}"
+        try:
+            dup_check = supabase_admin.table("cases").select("id").eq("case_number", case_number).execute()
+            if not dup_check.data:
+                break
+        except Exception:
+            break
+        sequence_num += 1
+
     data = case_data.dict()
+    data["case_number"] = case_number
     data["created_by"] = user_info["id"]
     data["created_by_name"] = user_info["name"]
 
@@ -621,7 +659,7 @@ def get_cases(request: Request, search: str = None):
             query = query.ilike("title", f"%{search}%")
         res = query.execute()
         for row in res.data:
-            row["case_number"] = f'SA-{row["id"][:4].upper()}'
+            row["case_number"] = row.get("case_number") or f'SA-{row["id"][:4].upper()}'
             row["status"] = "Open"
         return {"data": res.data}
     except Exception as e:
@@ -749,7 +787,7 @@ def get_case(case_id: str, request: Request):
         res = supabase_admin.table("cases").select("*").eq("id", case_id).execute()
         if len(res.data) > 0:
             row = res.data[0]
-            row["case_number"] = f'SA-{row["id"][:4].upper()}'
+            row["case_number"] = row.get("case_number") or f'SA-{row["id"][:4].upper()}'
             row["status"] = "Open"
             return {"data": row}
     except Exception as e:
@@ -794,23 +832,21 @@ def upload_evidence(
     
     check_case_access(case_id, user_info)
 
-    file_id = str(uuid.uuid4())
-    ext = file.filename.split(".")[-1]
-    file_path = f"uploads/{file_id}.{ext}"
+    try:
+        # Read file bytes in memory
+        file_bytes = file.file.read()
+        file_size = len(file_bytes)
+    except Exception as e:
+        raise HTTPException(status_code=400, detail=f"Failed to read upload file: {str(e)}")
 
-    # ── 1. Hash the file in chunks while saving ──────────────────────────────
-    sha256_hash = hashlib.sha256()
-    with open(file_path, "wb") as buffer:
-        while chunk := file.file.read(8192):
-            sha256_hash.update(chunk)
-            buffer.write(chunk)
+    # ── 1. Hash the file ─────────────────────────────────────────────────────
+    sha256_hash = hashlib.sha256(file_bytes)
     hash_hex = sha256_hash.hexdigest()
 
-    # ── 2. Duplicate detection — block if same hash already in this case ─────
+    # ── 2. Duplicate detection ────────────────────────────────────────────────
     try:
         dup_res = supabase_admin.table("evidence").select("id, file_hash").eq("case_id", case_id).eq("file_hash", hash_hex).execute()
         if len(dup_res.data) > 0:
-            os.remove(file_path)  # clean up the saved file
             raise HTTPException(
                 status_code=409,
                 detail=f"Duplicate file detected. This file was already uploaded (evidence ID: {dup_res.data[0]['id']}). SHA-256: {hash_hex[:16]}..."
@@ -820,32 +856,64 @@ def upload_evidence(
     except Exception:
         pass  # if duplicate check fails, continue — don't block uploads
 
-    # ── 3. Store evidence record with hash ───────────────────────────────────
+    # ── 3. Upload to Supabase Storage ─────────────────────────────────────────
+    file_uuid = str(uuid.uuid4())
+    original_filename = file.filename
+    # Path format: cases/{case_id}/{file_uuid}_{original_filename}
+    storage_path = f"cases/{case_id}/{file_uuid}_{original_filename}"
+
+    try:
+        supabase_admin.storage.from_("evidence").upload(
+            path=storage_path,
+            file=file_bytes,
+            file_options={"content-type": file.content_type}
+        )
+    except Exception as e:
+        print(f"[STORAGE UPLOAD FAILED] {e}")
+        raise HTTPException(status_code=500, detail=f"Failed to upload file to Supabase Storage: {str(e)}")
+
+    # Retrieve public URL
+    try:
+        file_url = supabase_admin.storage.from_("evidence").get_public_url(storage_path)
+        if file_url.endswith("?"):
+            file_url = file_url[:-1]
+    except Exception:
+        file_url = f"{SUPABASE_URL}/storage/v1/object/public/evidence/{storage_path}"
+
+    # ── 4. Store evidence record with hash and metadata ──────────────────────
     data = {
         "case_id": case_id,
         "evidence_type": evidence_type,
         "description": description,
-        "file_url": file_path,
-        "file_hash": hash_hex
+        "file_url": file_url,
+        "file_hash": hash_hex,
+        "file_name": original_filename,
+        "file_size": file_size,
+        "mime_type": file.content_type,
+        "uploaded_by": user_info["id"],
+        "uploaded_by_name": user_info["name"],
+        "chain_of_custody_status": "Collected",
+        "status": "Verified"
     }
     res = supabase_admin.table("evidence").insert(data).execute()
 
     if len(res.data) > 0:
         evidence_row = res.data[0]
-        evidence_row["file_name"] = file.filename
+        # Ensure returned dictionary contains expected keys for the frontend
+        evidence_row["file_name"] = original_filename
         evidence_row["file_type"] = evidence_type
-        evidence_row["file_size"] = os.path.getsize(file_path)
+        evidence_row["file_size"] = file_size
         evidence_row["sha256_hash"] = hash_hex
 
-        # ── 4. Audit log ─────────────────────────────────────────────────────
+        # ── 5. Audit log ─────────────────────────────────────────────────────
         write_audit_log(
             user_id=user_info["id"],
             action="Evidence Upload",
             case_id=case_id,
             file_hash=hash_hex,
             metadata={
-                "file_name": file.filename,
-                "file_size": evidence_row["file_size"],
+                "file_name": original_filename,
+                "file_size": file_size,
                 "evidence_id": evidence_row["id"],
                 "evidence_type": evidence_type
             }
@@ -885,9 +953,9 @@ def get_evidence(request: Request, case_id: str = None):
             
         res = query.execute()
         for row in res.data:
-            row["file_name"] = "Evidence " + row["id"][:4]
+            row["file_name"] = row.get("file_name") or ("Evidence " + row["id"][:4])
             row["file_type"] = row.get("evidence_type", "Image")
-            row["file_size"] = 1048576
+            row["file_size"] = row.get("file_size") or 1048576
             row["status"] = row.get("status", "Verified")
             row["sha256_hash"] = row.get("file_hash") or ("hash_" + row["id"][:8])
             row["uploaded_at"] = row.get("created_at")
@@ -917,7 +985,7 @@ def get_evidence(request: Request, case_id: str = None):
 # ── 5. Hash verification endpoint ────────────────────────────────────────────
 @app.post("/evidence/{evidence_id}/verify")
 def verify_evidence_hash(evidence_id: str, request: Request):
-    """Recomputes SHA-256 from disk and compares against the stored hash."""
+    """Recomputes SHA-256 from disk or storage and compares against the stored hash."""
     user_info = get_current_user_info(request)
 
     ev_res = supabase_admin.table("evidence").select("*").eq("id", evidence_id).execute()
@@ -933,21 +1001,40 @@ def verify_evidence_hash(evidence_id: str, request: Request):
 
     if not stored_hash:
         raise HTTPException(status_code=400, detail="No stored hash for this evidence record")
-    if not file_path or not os.path.exists(file_path):
-        raise HTTPException(status_code=404, detail="Evidence file not found on disk")
+    if not file_path:
+        raise HTTPException(status_code=400, detail="No file URL for this evidence record")
 
-    # Recompute SHA-256 from the actual file on disk right now
-    sha256 = hashlib.sha256()
-    with open(file_path, "rb") as f:
-        while chunk := f.read(8192):
-            sha256.update(chunk)
-    current_hash = sha256.hexdigest()
+    is_remote = file_path.startswith("http://") or file_path.startswith("https://")
+    if is_remote:
+        # Download file in memory from Supabase Storage
+        try:
+            response = requests.get(file_path, timeout=30)
+            if response.status_code != 200:
+                raise HTTPException(status_code=404, detail="Evidence file not found in Supabase Storage")
+            file_bytes = response.content
+            current_hash = hashlib.sha256(file_bytes).hexdigest()
+        except Exception as e:
+            raise HTTPException(status_code=500, detail=f"Failed to download evidence from Supabase Storage: {str(e)}")
+    else:
+        # Legacy local file on disk
+        if not os.path.exists(file_path):
+            raise HTTPException(status_code=404, detail="Evidence file not found on disk")
+        
+        sha256 = hashlib.sha256()
+        with open(file_path, "rb") as f:
+            while chunk := f.read(8192):
+                sha256.update(chunk)
+        current_hash = sha256.hexdigest()
 
     is_verified = current_hash == stored_hash
 
-    # Update status if tampered
-    if not is_verified:
-        supabase_admin.table("evidence").update({"status": "Tampered"}).eq("id", evidence_id).execute()
+    # Update status and verification metadata
+    update_data = {
+        "verified_at": datetime.datetime.now(datetime.timezone.utc).isoformat(),
+        "verified_by": user_info["id"],
+        "status": "Verified" if is_verified else "Tampered"
+    }
+    supabase_admin.table("evidence").update(update_data).eq("id", evidence_id).execute()
 
     # Log verification attempt (both clean and tampered)
     write_audit_log(
@@ -1007,24 +1094,48 @@ def run_ai_detect(req: DetectionRequest, request: Request):
     print(f"[DEBUG] file_path: {file_path}")
     print(f"[DEBUG] stored_hash: {stored_hash}")
 
-    if not os.path.exists(file_path):
-        print(f"[DEBUG] File missing on disk at: {file_path}")
-        raise HTTPException(status_code=404, detail="File missing on disk")
+    if not file_path:
+        raise HTTPException(status_code=400, detail="No file URL for this evidence record")
 
     if not stored_hash:
         print("[DEBUG] stored_hash is missing/empty, blocking detection.")
         raise HTTPException(status_code=400, detail="Evidence lacks a stored SHA-256 hash. Integrity cannot be verified.")
 
-    # ── Integrity check BEFORE running AI ───────────────────────────────────
-    if stored_hash:
-        sha256 = hashlib.sha256()
-        with open(file_path, "rb") as f:
-            while chunk := f.read(8192):
-                sha256.update(chunk)
-        current_hash = sha256.hexdigest()
-        
+    # ── Resolve file path and compute hash ───────────────────────────────────
+    is_remote = file_path.startswith("http://") or file_path.startswith("https://")
+    local_temp_file = None
+
+    try:
+        if is_remote:
+            # Download file in memory from Supabase Storage
+            response = requests.get(file_path, timeout=30)
+            if response.status_code != 200:
+                raise HTTPException(status_code=404, detail="Evidence file missing in Supabase Storage")
+            file_bytes = response.content
+            current_hash = hashlib.sha256(file_bytes).hexdigest()
+
+            # Save to temporary local file for Roboflow prediction
+            file_id = str(uuid.uuid4())
+            ext = file_path.split(".")[-1].split("?")[0]
+            local_temp_file = f"uploads/temp_{file_id}.{ext}"
+            with open(local_temp_file, "wb") as f:
+                f.write(file_bytes)
+        else:
+            # Legacy local file on disk
+            if not os.path.exists(file_path):
+                print(f"[DEBUG] File missing on disk at: {file_path}")
+                raise HTTPException(status_code=404, detail="File missing on disk")
+            local_temp_file = file_path
+            
+            sha256 = hashlib.sha256()
+            with open(file_path, "rb") as f:
+                while chunk := f.read(8192):
+                    sha256.update(chunk)
+            current_hash = sha256.hexdigest()
+
         print(f"[DEBUG] computed_hash: {current_hash}")
 
+        # ── Integrity check BEFORE running AI ───────────────────────────────────
         if current_hash != stored_hash:
             print("[DEBUG] Hash mismatch detected! Raising 403 Forbidden.")
             # Mark as tampered and block detection
@@ -1046,13 +1157,21 @@ def run_ai_detect(req: DetectionRequest, request: Request):
                 detail=f"Evidence integrity check failed — file may have been tampered. Detection blocked. Stored: {stored_hash[:16]}... Current: {current_hash[:16]}..."
             )
 
-    # Run prediction
-    try:
-        prediction = model.predict(file_path).json()
+        # Run prediction
+        prediction = model.predict(local_temp_file).json()
         print(f"[DEBUG] Prediction response: {str(prediction)[:200]}...")
+    except HTTPException:
+        raise
     except Exception as e:
         print(f"[DEBUG] Roboflow prediction threw error: {e}")
         raise HTTPException(status_code=500, detail=f"Roboflow prediction failed: {e}")
+    finally:
+        # Always clean up temporary file if it was downloaded from storage
+        if is_remote and local_temp_file and os.path.exists(local_temp_file):
+            try:
+                os.remove(local_temp_file)
+            except Exception as e:
+                print(f"[DEBUG] Failed to delete temporary file {local_temp_file}: {e}")
 
     image_width = float(prediction.get("image", {}).get("width", 1))
     image_height = float(prediction.get("image", {}).get("height", 1))
@@ -1075,7 +1194,7 @@ def run_ai_detect(req: DetectionRequest, request: Request):
             "bbox": [f"{left_pct:.2f}%", f"{top_pct:.2f}%", f"{w_pct:.2f}%", f"{h_pct:.2f}%"]
         })
 
-    image_url_full = f"http://localhost:8000/{file_path}"
+    image_url_full = file_path if is_remote else f"http://localhost:8000/{file_path}"
     result_data = {"objects": objects, "image_url": image_url_full}
 
     det_record = {
@@ -1162,7 +1281,7 @@ def get_audit(
         users_res = supabase_admin.table("users").select("id, full_name, role").execute()
         users_map = {u["id"]: u for u in users_res.data}
         
-        cases_res = supabase_admin.table("cases").select("id, title").execute()
+        cases_res = supabase_admin.table("cases").select("id, title, case_number").execute()
         cases_map = {c["id"]: c for c in cases_res.data}
         
         # Hydrate log entries and apply memory filters (role, search)
@@ -1180,7 +1299,7 @@ def get_audit(
             cid = log.get("case_id")
             case_detail = cases_map.get(cid, {})
             case_title = case_detail.get("title", "N/A")
-            case_number = f"SA-{cid[:4].upper()}" if cid else "N/A"
+            case_number = case_detail.get("case_number") or (f"SA-{cid[:4].upper()}" if cid else "N/A")
             
             # Status mapping
             log_action = log.get("action", "")
@@ -1258,7 +1377,7 @@ def get_case_graph(case_id: str, request: Request):
     nodes.append({
         "id": f"case-{case_id}",
         "type": "case",
-        "data": { "label": case.get("case_number", f"SA-{case_id[:4].upper()}"), "subtitle": case.get("title", ""), "status": case.get("status", "Open") },
+        "data": { "label": case.get("case_number") or f"SA-{case_id[:4].upper()}", "subtitle": case.get("title", ""), "status": case.get("status", "Open") },
         "position": { "x": 400, "y": 300 }
     })
 
@@ -1441,6 +1560,7 @@ class UserUpdate(BaseModel):
     department: Optional[str] = None
     badge_number: Optional[str] = None
     clearance_level: Optional[int] = None
+    can_create_case: Optional[bool] = None
 
 @app.get("/users")
 def get_users(request: Request):
@@ -1514,6 +1634,8 @@ def update_user(user_id: str, payload: UserUpdate, request: Request):
             update_data["badge_number"] = payload.badge_number
         if payload.clearance_level is not None:
             update_data["clearance_level"] = payload.clearance_level
+        if payload.can_create_case is not None:
+            update_data["can_create_case"] = payload.can_create_case
             
         if not update_data:
             raise HTTPException(status_code=400, detail="No fields to update.")
@@ -1545,15 +1667,19 @@ def update_user(user_id: str, payload: UserUpdate, request: Request):
         # 5. Formulate descriptions and write audit log
         old_role = target_user.get("role")
         old_status = "Active" if target_user.get("is_active", True) else "Inactive"
+        old_can_create = target_user.get("can_create_case", True)
         
         new_role = payload.role if payload.role is not None else old_role
         new_status = ("Active" if payload.is_active else "Inactive") if payload.is_active is not None else old_status
+        new_can_create = payload.can_create_case if payload.can_create_case is not None else old_can_create
         
         changes = []
         if old_role != new_role:
             changes.append(f"Role changed from {old_role} → {new_role}")
         if old_status != new_status:
             changes.append(f"Status changed from {old_status} → {new_status}")
+        if old_can_create != new_can_create:
+            changes.append(f"Case creation permission changed from {old_can_create} → {new_can_create}")
             
         change_summary = ", ".join(changes) if changes else "Account details updated"
         
@@ -1595,10 +1721,11 @@ def reset_user_access(user_id: str, request: Request):
         auth_user = supabase_admin.auth.admin.get_user_by_id(user_id)
         existing_meta = auth_user.user.user_metadata or {}
         
-        # Update metadata to require password change
+        # Update password to 'Password123!' and metadata to require password change
         supabase_admin.auth.admin.update_user_by_id(
             user_id,
             attributes={
+                "password": "Password123!",
                 "user_metadata": {**existing_meta, "must_change_password": True}
             }
         )
@@ -1676,6 +1803,7 @@ def create_user_admin(payload: UserCreateRequest, request: Request):
         return {"data": res.data[0]}
     except Exception as e:
         raise HTTPException(status_code=500, detail=f"Failed to create user: {str(e)}")
+
 
 
 if __name__ == "__main__":

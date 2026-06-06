@@ -112,6 +112,8 @@ class ApiService {
     return data
   }
 
+
+
   // ── EVIDENCE ────────────────────────────────────────────────────────────
   async getEvidence(caseId?: string) {
     const { data } = await this.client.get<ApiResponse<Evidence[]>>('/evidence', {
@@ -209,7 +211,7 @@ class ApiService {
     return data
   }
 
-  async updateUserAdmin(userId: string, payload: { role?: string; is_active?: boolean; full_name?: string; department?: string; badge_number?: string; clearance_level?: number }) {
+  async updateUserAdmin(userId: string, payload: { role?: string; is_active?: boolean; full_name?: string; department?: string; badge_number?: string; clearance_level?: number; can_create_case?: boolean }) {
     const { data } = await this.client.patch<ApiResponse<any>>(`/users/${userId}`, payload)
     return data
   }

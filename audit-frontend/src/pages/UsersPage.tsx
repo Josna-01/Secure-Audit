@@ -141,6 +141,19 @@ export default function UsersPage() {
     }
   }
 
+  const handleToggleCaseCreation = async (user: any) => {
+    setError('')
+    setSuccess('')
+    try {
+      const nextValue = !(user.can_create_case !== false)
+      await api.updateUserAdmin(user.id, { can_create_case: nextValue })
+      setSuccess(`Case creation permission for ${user.full_name} has been ${nextValue ? 'enabled' : 'disabled'}.`)
+      fetchUsers()
+    } catch (err: any) {
+      setError(err.response?.data?.detail || 'Failed to update case creation permission')
+    }
+  }
+
   const handleToggleActiveClick = (user: any) => {
     if (user.is_active) {
       setConfirmType('deactivate')
@@ -293,7 +306,7 @@ export default function UsersPage() {
               <table style={{ width: '100%', borderCollapse: 'collapse', fontSize: '12px' }}>
                 <thead>
                   <tr style={{ borderBottom: '1px solid var(--border)' }}>
-                    {['Officer Name', 'Email', 'Role', 'Department', 'Badge ID', 'Status', 'Last Login', 'Actions'].map((h) => (
+                    {['Officer Name', 'Email', 'Role', 'Department', 'Badge ID', 'Status', 'Case Creation', 'Last Login', 'Actions'].map((h) => (
                       <th key={h} style={{ textAlign: 'left', padding: '10px 12px', color: 'var(--text3)', fontWeight: 500, fontSize: '11px' }}>{h}</th>
                     ))}
                   </tr>
@@ -301,7 +314,7 @@ export default function UsersPage() {
                 <tbody>
                   {sortedAndFilteredUsers.length === 0 ? (
                     <tr>
-                      <td colSpan={8} style={{ padding: '24px', textAlign: 'center', color: 'var(--text3)' }}>No users found</td>
+                      <td colSpan={9} style={{ padding: '24px', textAlign: 'center', color: 'var(--text3)' }}>No users found</td>
                     </tr>
                   ) : (
                     sortedAndFilteredUsers.map((u) => {
@@ -354,6 +367,20 @@ export default function UsersPage() {
                           <td style={{ padding: '10px 12px', fontFamily: 'var(--mono)', color: 'var(--text3)' }}>{u.badge_number || 'N/A'}</td>
                           <td style={{ padding: '10px 12px' }}>
                             <Badge label={u.is_active ? 'Active' : 'Inactive'} />
+                          </td>
+                          <td style={{ padding: '10px 12px' }}>
+                            {u.role === 'Admin' ? (
+                              <span style={{ color: 'var(--text3)', fontSize: '11px' }}>-</span>
+                            ) : (
+                              <Btn
+                                size="xs"
+                                variant={u.can_create_case !== false ? 'green' : 'danger'}
+                                onClick={() => handleToggleCaseCreation(u)}
+                                style={{ minWidth: '70px', justifyContent: 'center' }}
+                              >
+                                {u.can_create_case !== false ? 'Enabled' : 'Disabled'}
+                              </Btn>
+                            )}
                           </td>
                           <td style={{ padding: '10px 12px', fontFamily: 'var(--mono)', color: 'var(--text3)', fontSize: '11px' }}>
                             {formatLastLogin(u.last_login)}
