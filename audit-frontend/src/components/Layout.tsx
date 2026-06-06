@@ -69,7 +69,7 @@ export function Sidebar() {
   const { user } = useAuth()
 
   const visibleNav = [...NAV]
-  if (user?.role === 'Admin') {
+  if (user?.role === 'Admin' || user?.role?.toLowerCase() === 'admin') {
     visibleNav.push({ id: '/users', label: 'User Management', icon: 'cog' })
   }
 
