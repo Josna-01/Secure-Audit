@@ -17,7 +17,7 @@ export default function AuthPage() {
 
   // Form states
   const [email, setEmail] = useState('')
-  const [role, setRole] = useState('investigator')
+  const [role, setRole] = useState('Investigator')
   const [password, setPassword] = useState('')
   const [tokenInput, setTokenInput] = useState('')
   
@@ -213,34 +213,57 @@ export default function AuthPage() {
 
           {/* Email input field */}
           <div style={{ marginBottom: '16px' }}>
-            <label style={{
-              fontSize: '11px',
-              color: 'var(--text2)',
-              fontWeight: 600,
-              display: 'block',
-              marginBottom: '6px',
-              textTransform: 'uppercase',
-              letterSpacing: '0.4px'
-            }}>OFFICIAL EMAIL / OFFICER ID</label>
+            <div style={{ display: 'flex', justifyContent: 'space-between', alignItems: 'center', marginBottom: '6px' }}>
+              <label style={{
+                fontSize: '11px',
+                color: 'var(--text2)',
+                fontWeight: 600,
+                textTransform: 'uppercase',
+                letterSpacing: '0.4px'
+              }}>OFFICIAL EMAIL / OFFICER ID</label>
+              {tokenSent && (
+                <span
+                  onClick={() => {
+                    setTokenSent(false)
+                    setPassword('')
+                    setTokenInput('')
+                    setSuccessMsg('')
+                    setError('')
+                  }}
+                  style={{
+                    fontSize: '11px',
+                    color: 'var(--blue)',
+                    cursor: 'pointer',
+                    fontWeight: 600,
+                    userSelect: 'none'
+                  }}
+                >
+                  Change Email
+                </span>
+              )}
+            </div>
             <input
               type="email"
               required
+              disabled={tokenSent}
+              autoComplete="username"
               placeholder="inspector.sharma@ksp.gov.in"
               value={email}
               onChange={(e) => { setEmail(e.target.value); setError(''); setSuccessMsg('') }}
               style={{
                 width: '100%',
-                background: 'var(--bg3)',
+                background: tokenSent ? 'var(--bg4)' : 'var(--bg3)',
                 border: '1px solid var(--border)',
                 borderRadius: 'var(--r)',
                 padding: '10px 12px',
                 fontSize: '13px',
-                color: 'var(--text)',
+                color: tokenSent ? 'var(--text3)' : 'var(--text)',
                 outline: 'none',
-                transition: 'border-color 0.2s'
+                transition: 'border-color 0.2s',
+                cursor: tokenSent ? 'not-allowed' : 'text'
               }}
-              onFocus={(e) => e.target.style.borderColor = 'var(--blue)'}
-              onBlur={(e) => e.target.style.borderColor = 'var(--border)'}
+              onFocus={(e) => !tokenSent && (e.target.style.borderColor = 'var(--blue)')}
+              onBlur={(e) => !tokenSent && (e.target.style.borderColor = 'var(--border)')}
             />
           </div>
 
@@ -275,9 +298,9 @@ export default function AuthPage() {
                   backgroundPosition: 'right 8px center'
                 }}
               >
-                <option value="admin">Admin</option>
+                <option value="Admin">Admin</option>
                 <option value="lead_investigator">Lead Investigator</option>
-                <option value="investigator">Investigator</option>
+                <option value="Investigator">Investigator</option>
                 <option value="analyst">Forensic Analyst</option>
                 <option value="viewer">Viewer</option>
               </select>

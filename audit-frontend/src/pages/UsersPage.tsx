@@ -23,7 +23,7 @@ export default function UsersPage() {
   const [email, setEmail] = useState('')
   const [password, setPassword] = useState('')
   const [role, setRole] = useState('Investigator')
-  const [department, setDepartment] = useState('Forensics')
+  const [department, setDepartment] = useState('')
   const [badgeNumber, setBadgeNumber] = useState('')
   const [clearanceLevel, setClearanceLevel] = useState(1)
   const [creating, setCreating] = useState(false)
@@ -60,7 +60,7 @@ export default function UsersPage() {
         password,
         full_name: fullName,
         role,
-        department,
+        department: department.trim() || 'Forensics',
         badge_number: badgeNumber,
         clearance_level: Number(clearanceLevel)
       })
@@ -68,6 +68,7 @@ export default function UsersPage() {
       setFullName('')
       setEmail('')
       setPassword('')
+      setDepartment('')
       setBadgeNumber('')
       setClearanceLevel(1)
       fetchUsers()
@@ -411,6 +412,7 @@ export default function UsersPage() {
                 onChange={(e) => setEmail(e.target.value)}
                 placeholder="officer@secureaudits.gov"
                 required
+                autoComplete="new-password"
                 style={{ width: '100%', background: 'var(--bg3)', border: '1px solid var(--border)', borderRadius: 'var(--r)', padding: '7px 10px', fontSize: '12px', color: 'var(--text)', fontFamily: 'var(--font)', outline: 'none' }}
               />
             </div>
@@ -423,6 +425,7 @@ export default function UsersPage() {
                 onChange={(e) => setPassword(e.target.value)}
                 placeholder="••••••••"
                 required
+                autoComplete="new-password"
                 style={{ width: '100%', background: 'var(--bg3)', border: '1px solid var(--border)', borderRadius: 'var(--r)', padding: '7px 10px', fontSize: '12px', color: 'var(--text)', fontFamily: 'var(--font)', outline: 'none' }}
               />
             </div>
