@@ -17,7 +17,7 @@ export default function AuthPage() {
 
   // Form states
   const [email, setEmail] = useState('')
-  const [role, setRole] = useState('investigator')
+  const [role, setRole] = useState('Investigator')
   const [password, setPassword] = useState('')
   const [tokenInput, setTokenInput] = useState('')
   
@@ -77,13 +77,10 @@ export default function AuthPage() {
       // Save session start time
       localStorage.setItem('sa_session_start', new Date().toISOString())
 
-      // Map frontend selected role to standard database / check casing
-      const mappedRole = role === 'admin' ? 'Admin' : role === 'investigator' ? 'Investigator' : role
-
       // Login context update
       login(res.data.token, {
         ...res.data.user,
-        role: mappedRole
+        role: role
       } as User)
       navigate('/dashboard')
     } catch (err: any) {
@@ -301,9 +298,9 @@ export default function AuthPage() {
                   backgroundPosition: 'right 8px center'
                 }}
               >
-                <option value="admin">Admin</option>
+                <option value="Admin">Admin</option>
                 <option value="lead_investigator">Lead Investigator</option>
-                <option value="investigator">Investigator</option>
+                <option value="Investigator">Investigator</option>
                 <option value="analyst">Forensic Analyst</option>
                 <option value="viewer">Viewer</option>
               </select>
