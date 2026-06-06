@@ -77,16 +77,22 @@ export function AuthProvider({ children }: { children: React.ReactNode }) {
     if (!state.isAuthenticated) return
     const interval = setInterval(() => {
       if (document.hidden) return
-      api.getMe().catch((err) => {
-        const status = err.response?.status
-        const detail = err.response?.data?.detail || ''
-        if (status === 403 && typeof detail === 'string' && detail.toLowerCase().includes('deactivated')) {
-          logout()
-        }
-      })
+      api.getMe()
+        .then((res) => {
+          if (res.data) {
+            updateUser(res.data as User)
+          }
+        })
+        .catch((err) => {
+          const status = err.response?.status
+          const detail = err.response?.data?.detail || ''
+          if (status === 403 && typeof detail === 'string' && detail.toLowerCase().includes('deactivated')) {
+            logout()
+          }
+        })
     }, 10000) // Poll user status every 10 seconds
     return () => clearInterval(interval)
-  }, [state.isAuthenticated, logout])
+  }, [state.isAuthenticated, logout, updateUser])
 
   return (
     <AuthContext.Provider value={{ ...state, login, logout, updateUser }}>

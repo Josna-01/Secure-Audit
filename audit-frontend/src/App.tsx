@@ -10,7 +10,7 @@ import CreateCase from './pages/CreateCase'
 import CaseDetail from './pages/CaseDetail'
 import {
   EvidencePage, DetectionPage, BNSPage, OCRPage,
-  AuditPage, SettingsPage, PersonalPage,
+  AuditPage, PersonalPage,
   PlaceholderPage, GraphPage
 } from './pages/OtherPages'
 import { ProfilePage } from './pages/ProfilePage'
@@ -65,7 +65,6 @@ function AppRoutes() {
       <Route path="/audit" element={<ProtectedRoute><AuditPage /></ProtectedRoute>} />
       <Route path="/profile" element={<ProtectedRoute><ProfilePage /></ProtectedRoute>} />
       <Route path="/users" element={<ProtectedRoute><UsersPage /></ProtectedRoute>} />
-      <Route path="/settings" element={<ProtectedRoute><SettingsPage /></ProtectedRoute>} />
       <Route path="/forced-password-change" element={<ForcedPasswordRoute><ForcedPasswordPage /></ForcedPasswordRoute>} />
 
       <Route path="*" element={<Navigate to="/dashboard" replace />} />

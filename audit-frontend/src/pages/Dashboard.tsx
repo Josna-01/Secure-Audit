@@ -116,7 +116,7 @@ export default function Dashboard() {
       <Card style={{ marginBottom: '16px', padding: '12px 16px' }}>
         <div style={{ fontSize: '11px', fontWeight: 600, color: 'var(--text3)', textTransform: 'uppercase', letterSpacing: '.6px', marginBottom: '10px' }}>Quick Actions</div>
         <div style={{ display: 'flex', gap: '8px', flexWrap: 'wrap' }}>
-          <Btn variant="primary" size="sm" onClick={() => navigate('/cases/new')}>New Case</Btn>
+          {user?.can_create_case && <Btn variant="primary" size="sm" onClick={() => navigate('/cases/new')}>New Case</Btn>}
           <Btn size="sm" onClick={() => navigate('/evidence')}>Upload Evidence</Btn>
           <Btn size="sm" onClick={() => navigate('/detection')}>Run Detection</Btn>
           <Btn size="sm" onClick={() => navigate('/audit')}>View Audit Log</Btn>
@@ -208,7 +208,7 @@ export default function Dashboard() {
                     <div>
                       <span style={{ color: 'var(--blue)', fontWeight: 500 }}>{log.user_name}</span>
                       {' '}<span style={{ color: 'var(--text2)' }}>{log.action}</span>
-                      {log.case_id && <span style={{ fontFamily: 'var(--mono)', fontSize: '10px', color: 'var(--text3)' }}> · {log.case_id}</span>}
+                      {log.case_number && log.case_number !== 'N/A' && <span style={{ fontFamily: 'var(--mono)', fontSize: '10px', color: 'var(--text3)' }}> · {log.case_number}</span>}
                     </div>
                   </div>
                 ))}

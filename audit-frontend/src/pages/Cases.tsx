@@ -6,12 +6,15 @@ import { api } from '../services/api'
 import type { Case } from '../types'
 import { format } from 'date-fns'
 
+import { useAuth } from '../context/AuthContext'
+
 const PRIORITY_COLORS: Record<string, string> = {
   Critical: 'var(--red)', High: 'var(--amber)', Medium: 'var(--blue)', Low: 'var(--text3)'
 }
 
 export default function Cases() {
   const navigate = useNavigate()
+  const { user } = useAuth()
   const [cases, setCases] = useState<Case[]>([])
   const [total, setTotal] = useState(0)
   const [loading, setLoading] = useState(true)
@@ -58,7 +61,7 @@ export default function Cases() {
           >
             {['All Status', 'Active', 'Open', 'Pending', 'Critical', 'Closed'].map((s) => <option key={s}>{s}</option>)}
           </select>
-          <Btn variant="primary" size="sm" onClick={() => navigate('/cases/new')}>New Case</Btn>
+          {user?.can_create_case && <Btn variant="primary" size="sm" onClick={() => navigate('/cases/new')}>New Case</Btn>}
         </div>
       </Card>
 

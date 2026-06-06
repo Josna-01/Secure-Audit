@@ -1116,56 +1116,6 @@ export function AuditPage() {
 
 
 
-// ── SETTINGS ──────────────────────────────────────────────────────────────
-export function SettingsPage() {
-  return (
-    <AppShell title="Settings">
-      <div style={{ display: 'grid', gridTemplateColumns: '1fr 1fr', gap: '16px' }}>
-        <div style={{ display: 'flex', flexDirection: 'column', gap: '16px' }}>
-          <Card>
-            <CardTitle>System Configuration</CardTitle>
-            {[['YOLO Model', import.meta.env.VITE_YOLO_MODEL_PATH || '/models/yolov8_forensic.pt'], ['FAISS Index', import.meta.env.VITE_FAISS_PATH || '/data/bns_sections.faiss'], ['LegalBERT', import.meta.env.VITE_LEGALBERT_PATH || '/models/legalbert-base'], ['API Base URL', import.meta.env.VITE_API_BASE_URL || 'http://localhost:8000'], ['Supabase URL', import.meta.env.VITE_SUPABASE_URL || 'Not configured'], ['JWT Expiry', '8 hours'], ['Hash Algorithm', 'SHA-256 (FIPS 140-2)'], ['OCR Engine', 'Tesseract 4.0 + LSTM']].map(([k, v]) => (
-              <div key={k} style={{ display: 'flex', justifyContent: 'space-between', padding: '7px 0', borderBottom: '1px solid var(--border)' }}>
-                <span style={{ fontSize: '11px', color: 'var(--text3)' }}>{k}</span>
-                <span style={{ fontSize: '11px', fontFamily: 'var(--mono)', color: 'var(--text2)' }}>{v}</span>
-              </div>
-            ))}
-          </Card>
-          <Card>
-            <CardTitle>Security Policies</CardTitle>
-            {[['Evidence Download', 'Disabled'], ['Report Export', 'Disabled'], ['Public Access', 'Disabled'], ['All Actions Logged', 'Enabled'], ['SHA-256 Hashing', 'Enabled'], ['JWT Auth', 'Enabled'], ['OTP Verification', 'Enabled']].map(([k, v]) => (
-              <div key={k} style={{ display: 'flex', justifyContent: 'space-between', padding: '7px 0', borderBottom: '1px solid var(--border)' }}>
-                <span style={{ fontSize: '12px', color: 'var(--text2)' }}>{k}</span>
-                <span style={{ fontSize: '11px', fontWeight: 500, color: v === 'Enabled' ? 'var(--green)' : 'var(--red)' }}>{v}</span>
-              </div>
-            ))}
-          </Card>
-        </div>
-        <div style={{ display: 'flex', flexDirection: 'column', gap: '16px' }}>
-          <Card>
-            <CardTitle>System Health</CardTitle>
-            {[['Database', 'Online'], ['FastAPI Backend', 'Online'], ['YOLO Model', 'Loaded'], ['BNS Index', 'Loaded'], ['OCR Engine', 'Ready'], ['Tamper Monitor', 'Active']].map(([k, v]) => (
-              <div key={k} style={{ display: 'flex', justifyContent: 'space-between', padding: '6px 0', borderBottom: '1px solid var(--border)' }}>
-                <span style={{ fontSize: '12px', color: 'var(--text2)' }}>{k}</span>
-                <span style={{ fontSize: '11px', fontWeight: 500, color: 'var(--green)' }}>{v}</span>
-              </div>
-            ))}
-          </Card>
-          <Card>
-            <CardTitle>Team</CardTitle>
-            {[['Alisha Anton Fernandis', '4SO23CS017'], ['Amisha Josna Dsouza', '4SO23CS019'], ['Ancilla Teresa Dsouza', '4SO23CS026'], ['Apeksha A Govekar', '4SO23CS031']].map(([n, u]) => (
-              <div key={u} style={{ display: 'flex', justifyContent: 'space-between', padding: '7px 0', borderBottom: '1px solid var(--border)' }}>
-                <span style={{ fontSize: '12px', color: 'var(--text2)' }}>{n}</span>
-                <span style={{ fontFamily: 'var(--mono)', fontSize: '11px', color: 'var(--text3)' }}>{u}</span>
-              </div>
-            ))}
-            <div style={{ marginTop: '10px', fontSize: '11px', color: 'var(--text3)' }}>Guide: Ms. Shivangi M · Dept. CSE · SJEC · VTU 2026-27</div>
-          </Card>
-        </div>
-      </div>
-    </AppShell>
-  )
-}
 
 // ── PERSONAL SPACE ────────────────────────────────────────────────────────
 import { useTheme } from '../context/ThemeContext'
