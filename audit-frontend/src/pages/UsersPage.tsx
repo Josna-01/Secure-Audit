@@ -23,7 +23,7 @@ export default function UsersPage() {
   const [email, setEmail] = useState('')
   const [password, setPassword] = useState('')
   const [role, setRole] = useState('Investigator')
-  const [department, setDepartment] = useState('Forensics')
+  const [department, setDepartment] = useState('')
   const [badgeNumber, setBadgeNumber] = useState('')
   const [clearanceLevel, setClearanceLevel] = useState(1)
   const [creating, setCreating] = useState(false)
@@ -60,7 +60,7 @@ export default function UsersPage() {
         password,
         full_name: fullName,
         role,
-        department,
+        department: department.trim() || 'Forensics',
         badge_number: badgeNumber,
         clearance_level: Number(clearanceLevel)
       })
@@ -68,6 +68,7 @@ export default function UsersPage() {
       setFullName('')
       setEmail('')
       setPassword('')
+      setDepartment('')
       setBadgeNumber('')
       setClearanceLevel(1)
       fetchUsers()
