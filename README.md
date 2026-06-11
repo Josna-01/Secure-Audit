@@ -119,6 +119,8 @@ secure-audit-workspace/
 ├── audit-frontend/      # React client application and dashboard
 ├── backend/             # FastAPI API gateway and main backend service
 ├── bns-backend/         # Machine learning model server for BNS classification
+├── audio-backend/       # Dedicated backend folder for Audio Intelligence
+├── object-backend/      # Dedicated backend folder for Object Detection
 └── README.md            # Repository documentation
 ```
 
@@ -283,6 +285,32 @@ Maintains references to reconstructed 3D environments.
    uvicorn app.main:app --reload --port 8001
    ```
 
+### Audio Backend Setup
+1. Navigate to the audio-backend folder:
+   ```bash
+   cd audio-backend
+   ```
+2. Activate environment, install dependencies, and run:
+   ```bash
+   python -m venv venv
+   .\venv\Scripts\activate  # Windows
+   pip install -r requirements.txt
+   python app.py
+   ```
+
+### Object Backend Setup
+1. Navigate to the object-backend folder:
+   ```bash
+   cd object-backend
+   ```
+2. Activate environment, install dependencies, and run:
+   ```bash
+   python -m venv venv
+   .\venv\Scripts\activate  # Windows
+   pip install -r requirements.txt
+   python app.py
+   ```
+
 ### Frontend Setup
 1. Navigate to the frontend folder:
    ```bash
@@ -328,6 +356,7 @@ VITE_API_BASE_URL=http://localhost:8000
 
 ## 12. Team Members
 
-* **Member Name** — Role
-* **Member Name** — Role
-* **Member Name** — Role
+Ancilla - 4SO23CS026
+Amisha - 4SO23CS019
+Apeksha - 4SO23CS031
+Alisha - 4SO23CS017

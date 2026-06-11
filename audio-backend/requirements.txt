@@ -1,0 +1,6 @@
+fastapi
+uvicorn
+python-multipart
+python-dotenv
+requests
+# Team members will add PyTorch / OpenAI-Whisper / pydub as needed
