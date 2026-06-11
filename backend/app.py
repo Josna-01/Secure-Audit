@@ -30,6 +30,7 @@ ROBOFLOW_API_KEY = os.environ.get("ROBOFLOW_API_KEY")
 JWT_SECRET = os.environ.get("JWT_SECRET")
 EMAIL_USER = os.environ.get("EMAIL_USER")
 EMAIL_PASSWORD = os.environ.get("EMAIL_PASSWORD")
+USE_LOCAL_STORAGE = os.environ.get("USE_LOCAL_STORAGE", "False").lower() in ("true", "1", "yes")
 
 supabase: Client = create_client(SUPABASE_URL, SUPABASE_KEY)
 supabase_admin: Client = create_client(SUPABASE_URL, SUPABASE_SERVICE_ROLE_KEY)
@@ -358,46 +359,51 @@ def verify_otp(req: VerifyOTPRequest):
         raise HTTPException(status_code=401, detail="Invalid password.")
 
     # Verify OTP — find latest unused, non-expired token
-    if req.otp == "123456":
-        print("[AUTH DEBUG] OTP record found (bypass 123456)")
-        print("[AUTH DEBUG] OTP not expired (bypass 123456)")
-        print("[AUTH DEBUG] OTP unused (bypass 123456)")
-        otp_record = {"id": None}
-    else:
-        try:
-            otp_res = supabase_admin.table("otp_tokens")\
-                .select("*")\
-                .eq("user_id", user["id"])\
-                .eq("token", req.otp)\
-                .order("created_at", desc=True)\
-                .execute()
+    # [DEVELOPMENT BYPASS] Uncomment the lines below to bypass OTP with "123456"
+    # if req.otp == "123456":
+    #     print("[AUTH DEBUG] OTP record found (bypass 123456)")
+    #     print("[AUTH DEBUG] OTP not expired (bypass 123456)")
+    #     print("[AUTH DEBUG] OTP unused (bypass 123456)")
+    #     otp_record = {"id": None}
+    # else:
+    try:
+        otp_res = supabase_admin.table("otp_tokens")\
+            .select("*")\
+            .eq("user_id", user["id"])\
+            .eq("token", req.otp)\
+            .order("created_at", desc=True)\
+            .execute()
 
-            if not otp_res.data:
-                print("[AUTH DEBUG] FAILED: OTP not found")
-                raise HTTPException(status_code=401, detail="Invalid or expired token. Request a new one.")
-            
-            print("[AUTH DEBUG] OTP record found")
-            otp_record = otp_res.data[0]
+        if not otp_res.data:
+            print("[AUTH DEBUG] FAILED: OTP not found")
+            raise HTTPException(status_code=401, detail="Invalid or expired token. Request a new one.")
+        
+        print("[AUTH DEBUG] OTP record found")
+        otp_record = otp_res.data[0]
 
-            if otp_record.get("used"):
-                print("[AUTH DEBUG] FAILED: OTP already used")
-                raise HTTPException(status_code=401, detail="Invalid or expired token. Request a new one.")
-            print("[AUTH DEBUG] OTP unused")
+        if otp_record.get("used"):
+            print("[AUTH DEBUG] FAILED: OTP already used")
+            raise HTTPException(status_code=401, detail="Invalid or expired token. Request a new one.")
+        print("[AUTH DEBUG] OTP unused")
 
-            now_iso = datetime.datetime.utcnow().isoformat()
-            if otp_record.get("expires_at") < now_iso:
-                print("[AUTH DEBUG] FAILED: OTP expired")
-                raise HTTPException(status_code=401, detail="Invalid or expired token. Request a new one.")
-            print("[AUTH DEBUG] OTP not expired")
+        now_iso = datetime.datetime.utcnow().isoformat()
+        if otp_record.get("expires_at") < now_iso:
+            print("[AUTH DEBUG] FAILED: OTP expired")
+            raise HTTPException(status_code=401, detail="Invalid or expired token. Request a new one.")
+        print("[AUTH DEBUG] OTP not expired")
 
-        except HTTPException:
-            raise
-        except Exception as e:
-            print(f"[AUTH DEBUG] FAILED: OTP verification error: {e}")
-            raise HTTPException(status_code=500, detail=f"OTP verification error: {str(e)}")
+    except HTTPException:
+        raise
+    except Exception as e:
+        print(f"[AUTH DEBUG] FAILED: OTP verification error: {e}")
+        raise HTTPException(status_code=500, detail=f"OTP verification error: {str(e)}")
 
-        # Mark OTP as used
-        supabase_admin.table("otp_tokens").update({"used": True}).eq("id", otp_record["id"]).execute()
+    # Mark OTP as used
+    try:
+        if otp_record and otp_record.get("id"):
+            supabase_admin.table("otp_tokens").update({"used": True}).eq("id", otp_record["id"]).execute()
+    except Exception as e:
+        print(f"[AUTH UPDATE WARNING] failed to mark OTP as used: {e}")
 
     # Issue JWT
     token = create_jwt(
@@ -856,29 +862,45 @@ def upload_evidence(
     except Exception:
         pass  # if duplicate check fails, continue — don't block uploads
 
-    # ── 3. Upload to Supabase Storage ─────────────────────────────────────────
+    # ── 3. Upload to local storage or Supabase Storage ────────────────────────
     file_uuid = str(uuid.uuid4())
     original_filename = file.filename
-    # Path format: cases/{case_id}/{file_uuid}_{original_filename}
-    storage_path = f"cases/{case_id}/{file_uuid}_{original_filename}"
 
-    try:
-        supabase_admin.storage.from_("evidence").upload(
-            path=storage_path,
-            file=file_bytes,
-            file_options={"content-type": file.content_type}
-        )
-    except Exception as e:
-        print(f"[STORAGE UPLOAD FAILED] {e}")
-        raise HTTPException(status_code=500, detail=f"Failed to upload file to Supabase Storage: {str(e)}")
+    if USE_LOCAL_STORAGE:
+        # Create local directory uploads/cases/{case_id}
+        local_dir = os.path.join("uploads", "cases", case_id)
+        os.makedirs(local_dir, exist_ok=True)
+        local_file_path = os.path.join(local_dir, f"{file_uuid}_{original_filename}")
+        try:
+            with open(local_file_path, "wb") as f:
+                f.write(file_bytes)
+            # Create a URL relative to the FastAPI base URL
+            base_url = str(request.base_url)
+            file_url = f"{base_url}uploads/cases/{case_id}/{file_uuid}_{original_filename}"
+        except Exception as e:
+            print(f"[LOCAL UPLOAD FAILED] {e}")
+            raise HTTPException(status_code=500, detail=f"Failed to write file locally: {str(e)}")
+    else:
+        # Path format: cases/{case_id}/{file_uuid}_{original_filename}
+        storage_path = f"cases/{case_id}/{file_uuid}_{original_filename}"
 
-    # Retrieve public URL
-    try:
-        file_url = supabase_admin.storage.from_("evidence").get_public_url(storage_path)
-        if file_url.endswith("?"):
-            file_url = file_url[:-1]
-    except Exception:
-        file_url = f"{SUPABASE_URL}/storage/v1/object/public/evidence/{storage_path}"
+        try:
+            supabase_admin.storage.from_("evidence").upload(
+                path=storage_path,
+                file=file_bytes,
+                file_options={"content-type": file.content_type}
+            )
+        except Exception as e:
+            print(f"[STORAGE UPLOAD FAILED] {e}")
+            raise HTTPException(status_code=500, detail=f"Failed to upload file to Supabase Storage: {str(e)}")
+
+        # Retrieve public URL
+        try:
+            file_url = supabase_admin.storage.from_("evidence").get_public_url(storage_path)
+            if file_url.endswith("?"):
+                file_url = file_url[:-1]
+        except Exception:
+            file_url = f"{SUPABASE_URL}/storage/v1/object/public/evidence/{storage_path}"
 
     # ── 4. Store evidence record with hash and metadata ──────────────────────
     data = {
@@ -1004,27 +1026,43 @@ def verify_evidence_hash(evidence_id: str, request: Request):
     if not file_path:
         raise HTTPException(status_code=400, detail="No file URL for this evidence record")
 
-    is_remote = file_path.startswith("http://") or file_path.startswith("https://")
-    if is_remote:
-        # Download file in memory from Supabase Storage
-        try:
-            response = requests.get(file_path, timeout=30)
-            if response.status_code != 200:
-                raise HTTPException(status_code=404, detail="Evidence file not found in Supabase Storage")
-            file_bytes = response.content
-            current_hash = hashlib.sha256(file_bytes).hexdigest()
-        except Exception as e:
-            raise HTTPException(status_code=500, detail=f"Failed to download evidence from Supabase Storage: {str(e)}")
-    else:
-        # Legacy local file on disk
-        if not os.path.exists(file_path):
-            raise HTTPException(status_code=404, detail="Evidence file not found on disk")
+    if "/uploads/" in file_path:
+        # Extract the relative path and map it to disk
+        relative_path = file_path.split("/uploads/")[-1]
+        disk_path = os.path.join("uploads", relative_path.replace("/", os.sep))
+        if not os.path.exists(disk_path):
+            raise HTTPException(status_code=404, detail=f"Evidence file not found on local disk: {disk_path}")
         
-        sha256 = hashlib.sha256()
-        with open(file_path, "rb") as f:
-            while chunk := f.read(8192):
-                sha256.update(chunk)
-        current_hash = sha256.hexdigest()
+        try:
+            sha256 = hashlib.sha256()
+            with open(disk_path, "rb") as f:
+                while chunk := f.read(8192):
+                    sha256.update(chunk)
+            current_hash = sha256.hexdigest()
+        except Exception as e:
+            raise HTTPException(status_code=500, detail=f"Failed to read local evidence file: {str(e)}")
+    else:
+        is_remote = file_path.startswith("http://") or file_path.startswith("https://")
+        if is_remote:
+            # Download file in memory from Supabase Storage
+            try:
+                response = requests.get(file_path, timeout=30)
+                if response.status_code != 200:
+                    raise HTTPException(status_code=404, detail="Evidence file not found in Supabase Storage")
+                file_bytes = response.content
+                current_hash = hashlib.sha256(file_bytes).hexdigest()
+            except Exception as e:
+                raise HTTPException(status_code=500, detail=f"Failed to download evidence from Supabase Storage: {str(e)}")
+        else:
+            # Legacy local file on disk
+            if not os.path.exists(file_path):
+                raise HTTPException(status_code=404, detail="Evidence file not found on disk")
+            
+            sha256 = hashlib.sha256()
+            with open(file_path, "rb") as f:
+                while chunk := f.read(8192):
+                    sha256.update(chunk)
+            current_hash = sha256.hexdigest()
 
     is_verified = current_hash == stored_hash
 
@@ -1104,9 +1142,25 @@ def run_ai_detect(req: DetectionRequest, request: Request):
     # ── Resolve file path and compute hash ───────────────────────────────────
     is_remote = file_path.startswith("http://") or file_path.startswith("https://")
     local_temp_file = None
+    is_remote_download = False
 
     try:
-        if is_remote:
+        if "/uploads/" in file_path:
+            # Local file on disk
+            relative_path = file_path.split("/uploads/")[-1]
+            disk_path = os.path.join("uploads", relative_path.replace("/", os.sep))
+            if not os.path.exists(disk_path):
+                raise HTTPException(status_code=404, detail="File missing on local disk")
+            local_temp_file = disk_path
+            is_remote_download = False
+            
+            sha256 = hashlib.sha256()
+            with open(disk_path, "rb") as f:
+                while chunk := f.read(8192):
+                    sha256.update(chunk)
+            current_hash = sha256.hexdigest()
+        elif is_remote:
+            is_remote_download = True
             # Download file in memory from Supabase Storage
             response = requests.get(file_path, timeout=30)
             if response.status_code != 200:
@@ -1121,6 +1175,7 @@ def run_ai_detect(req: DetectionRequest, request: Request):
             with open(local_temp_file, "wb") as f:
                 f.write(file_bytes)
         else:
+            is_remote_download = False
             # Legacy local file on disk
             if not os.path.exists(file_path):
                 print(f"[DEBUG] File missing on disk at: {file_path}")
@@ -1167,7 +1222,7 @@ def run_ai_detect(req: DetectionRequest, request: Request):
         raise HTTPException(status_code=500, detail=f"Roboflow prediction failed: {e}")
     finally:
         # Always clean up temporary file if it was downloaded from storage
-        if is_remote and local_temp_file and os.path.exists(local_temp_file):
+        if is_remote and is_remote_download and local_temp_file and os.path.exists(local_temp_file):
             try:
                 os.remove(local_temp_file)
             except Exception as e:
