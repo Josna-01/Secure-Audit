@@ -1,0 +1,10 @@
+# NOTE: COLMAP is required as a system binary and must be installed separately and added to the system PATH.
+fastapi
+uvicorn
+python-dotenv
+supabase
+opencv-python
+open3d
+numpy
+requests
+python-multipart
