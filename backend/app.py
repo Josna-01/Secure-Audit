@@ -1860,6 +1860,35 @@ def create_user_admin(payload: UserCreateRequest, request: Request):
         raise HTTPException(status_code=500, detail=f"Failed to create user: {str(e)}")
 
 
+# ====== PHOTOGRAMMETRY PROXY ENDPOINTS ======
+class PhotogrammetryRequest(BaseModel):
+    evidence_id: str
+    file_url: str
+
+@app.post("/photogrammetry/trigger/{case_id}")
+def photogrammetry_trigger(case_id: str, payload: PhotogrammetryRequest):
+    try:
+        # Proxy request to photogrammetry-backend server on port 8004
+        res = requests.post(
+            f"http://localhost:8004/trigger/{case_id}",
+            json={"evidence_id": payload.evidence_id, "file_url": payload.file_url},
+            timeout=10
+        )
+        res.raise_for_status()
+        return res.json()
+    except requests.RequestException as e:
+        raise HTTPException(status_code=502, detail=f"Failed to communicate with photogrammetry server: {str(e)}")
+
+@app.get("/photogrammetry/status/{case_id}")
+def photogrammetry_status(case_id: str):
+    try:
+        # Proxy request to photogrammetry-backend server on port 8004
+        res = requests.get(f"http://localhost:8004/status/{case_id}", timeout=10)
+        res.raise_for_status()
+        return res.json()
+    except requests.RequestException as e:
+        raise HTTPException(status_code=502, detail=f"Failed to communicate with photogrammetry server: {str(e)}")
+
 
 if __name__ == "__main__":
     import uvicorn
