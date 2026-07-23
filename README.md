@@ -1,4 +1,4 @@
-# Secure Audits — Digital Evidence & Investigation Support System
+# Secure Audits - Digital Evidence & Investigation Support System
 
 Welcome to **Secure Audits**, digital forensics and case management workspace built for law enforcement and investigation audits. The platform provides secure case tracking, OTP-based secure authentication, file integrity verification (SHA-256 hashing on Supabase), object detection on evidence, OCR, and AI-driven Bharatiya Nyaya Sanhita (BNS) section prediction.
 
