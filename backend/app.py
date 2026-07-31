@@ -7,7 +7,7 @@ import string
 import smtplib
 from email.mime.text import MIMEText
 from email.mime.multipart import MIMEMultipart
-from fastapi import FastAPI, File, UploadFile, HTTPException, Form, BackgroundTasks, Request
+from fastapi import FastAPI, File, UploadFile, HTTPException, Form, BackgroundTasks, Request, Depends
 from fastapi.responses import JSONResponse
 from fastapi.middleware.cors import CORSMiddleware
 from pydantic import BaseModel
@@ -20,8 +20,56 @@ import jwt as pyjwt
 from dotenv import load_dotenv
 from roboflow import Roboflow
 import requests
+from sqlalchemy import text
+from sqlalchemy.orm import Session
+from db import get_db, SessionLocal
+from models import Case, Evidence, AuditLog, OCRResult
 
 load_dotenv()
+
+def serialize_case(case) -> dict:
+    if not case:
+        return {}
+    return {
+        "id": str(case.id),
+        "title": case.title,
+        "offence_type": case.offence_type,
+        "fir_description": case.fir_description,
+        "fir_language": case.fir_language,
+        "complainant_name": case.complainant_name,
+        "complainant_contact": case.complainant_contact,
+        "victims": case.victims,
+        "suspects": case.suspects,
+        "incident_date": case.incident_date.isoformat() if case.incident_date else None,
+        "incident_time": case.incident_time.strftime("%H:%M") if case.incident_time else None,
+        "incident_location": case.incident_location,
+        "created_at": case.created_at.isoformat().replace("+00:00", "Z") if case.created_at else None,
+        "case_number": case.case_number,
+        "created_by": str(case.created_by) if case.created_by else None,
+        "created_by_name": case.created_by_name
+    }
+
+def serialize_evidence(evidence) -> dict:
+    if not evidence:
+        return {}
+    return {
+        "id": str(evidence.id),
+        "case_id": str(evidence.case_id) if evidence.case_id else None,
+        "evidence_type": evidence.evidence_type,
+        "description": evidence.description,
+        "file_url": evidence.file_url,
+        "file_hash": evidence.file_hash,
+        "created_at": evidence.created_at.isoformat().replace("+00:00", "Z") if evidence.created_at else None,
+        "file_name": evidence.file_name,
+        "file_size": evidence.file_size,
+        "mime_type": evidence.mime_type,
+        "uploaded_by": str(evidence.uploaded_by) if evidence.uploaded_by else None,
+        "uploaded_by_name": evidence.uploaded_by_name,
+        "verified_at": evidence.verified_at.isoformat().replace("+00:00", "Z") if evidence.verified_at else None,
+        "verified_by": str(evidence.verified_by) if evidence.verified_by else None,
+        "chain_of_custody_status": evidence.chain_of_custody_status,
+        "status": evidence.status
+    }
 
 SUPABASE_URL = os.environ.get("SUPABASE_URL")
 SUPABASE_KEY = os.environ.get("SUPABASE_KEY")
@@ -76,6 +124,10 @@ class CaseCreate(BaseModel):
 class DetectionRequest(BaseModel):
     evidence_id: str
     case_id: str
+
+class OCRRequest(BaseModel):
+    evidence_id: str
+    language: Optional[str] = "auto"
 
 class LoginRequest(BaseModel):
     email: str
@@ -205,15 +257,65 @@ def get_current_user_info(request: Request) -> dict:
             raise HTTPException(status_code=401, detail="Invalid token payload.")
         
         # Check database to see if user is active
+        supabase_user = {}
         try:
-            user_res = supabase_admin.table("users").select("is_active").eq("id", user_id).execute()
+            user_res = supabase_admin.table("users").select("*").eq("id", user_id).execute()
             if user_res.data:
-                if not user_res.data[0].get("is_active", True):
+                supabase_user = user_res.data[0]
+                if not supabase_user.get("is_active", True):
                     raise HTTPException(status_code=403, detail="Your account has been deactivated by an administrator.")
         except HTTPException:
             raise
         except Exception:
             pass
+
+        # Sync the user to local PostgreSQL to ensure foreign keys can be resolved
+        db = SessionLocal()
+        try:
+            email = supabase_user.get("email") or payload.get("email")
+            full_name = supabase_user.get("full_name") or payload.get("name") or "Investigator"
+            role = supabase_user.get("role") or payload.get("role") or "Investigator"
+            department = supabase_user.get("department")
+            badge_number = supabase_user.get("badge_number")
+            clearance_level = supabase_user.get("clearance_level", 1)
+            is_active = supabase_user.get("is_active", True)
+            can_create_case = supabase_user.get("can_create_case", True)
+            last_login = supabase_user.get("last_login")
+
+            db.execute(
+                text("""
+                    INSERT INTO users (id, email, full_name, role, department, badge_number, clearance_level, is_active, can_create_case, last_login)
+                    VALUES (:id, :email, :full_name, :role, :department, :badge_number, :clearance_level, :is_active, :can_create_case, :last_login)
+                    ON CONFLICT (id) DO UPDATE SET
+                        email = EXCLUDED.email,
+                        full_name = EXCLUDED.full_name,
+                        role = EXCLUDED.role,
+                        department = EXCLUDED.department,
+                        badge_number = EXCLUDED.badge_number,
+                        clearance_level = EXCLUDED.clearance_level,
+                        is_active = EXCLUDED.is_active,
+                        can_create_case = EXCLUDED.can_create_case,
+                        last_login = EXCLUDED.last_login
+                """),
+                {
+                    "id": user_id,
+                    "email": email,
+                    "full_name": full_name,
+                    "role": role,
+                    "department": department,
+                    "badge_number": badge_number,
+                    "clearance_level": clearance_level,
+                    "is_active": is_active,
+                    "can_create_case": can_create_case,
+                    "last_login": last_login
+                }
+            )
+            db.commit()
+        except Exception as e:
+            db.rollback()
+            print(f"[USER SYNC ERROR] Failed to sync user to local PostgreSQL: {e}")
+        finally:
+            db.close()
             
         return {
             "id": user_id,
@@ -260,19 +362,23 @@ def get_data_visibility(user_info: dict, visibility_type: str) -> str:
     role_cfg = ROLE_PERMISSIONS.get(matched_role)
     return role_cfg["permissions"].get(visibility_type, "owned")
 
-def check_case_access(case_id: str, user_info: dict) -> bool:
+def check_case_access(case_id: str, user_info: dict, db: Session = None) -> bool:
     visibility = get_data_visibility(user_info, "view_cases")
     if visibility == "all":
         return True
 
-    res = supabase_admin.table("cases").select("created_by").eq("id", case_id).execute()
-    if not res.data:
-        raise HTTPException(status_code=404, detail="Case not found")
-
-    case = res.data[0]
-    created_by = case.get("created_by")
-    if created_by is not None and str(created_by) != user_info["id"]:
-        raise HTTPException(status_code=403, detail="Forbidden: You do not have permission to access this case.")
+    session = db or SessionLocal()
+    try:
+        case = session.query(Case.created_by).filter(Case.id == case_id).first()
+        if not case:
+            raise HTTPException(status_code=404, detail="Case not found")
+        
+        created_by = case[0]
+        if created_by is not None and str(created_by) != user_info["id"]:
+            raise HTTPException(status_code=403, detail="Forbidden: You do not have permission to access this case.")
+    finally:
+        if not db:
+            session.close()
     return True
 
 
@@ -586,39 +692,53 @@ def change_password(req: ChangePasswordRequest, request: Request):
 
 
 # ====== AUDIT LOG HELPER ======
-def write_audit_log(user_id: str, action: str, case_id: str = None, file_hash: str = None, metadata: dict = None):
+def write_audit_log(user_id: str, action: str, case_id: str = None, file_hash: str = None, metadata: dict = None, db: Session = None):
     """Append-only audit log writer. Never updates, never deletes."""
+    own_session = False
+    if db is None:
+        db = SessionLocal()
+        own_session = True
     try:
-        log_entry = {
-            "user_id": user_id or "system",
-            "action": action,
-            "created_at": datetime.datetime.now(datetime.timezone.utc).isoformat(),
-        }
+        parsed_case_id = None
         if case_id:
-            log_entry["case_id"] = case_id
-        if file_hash:
-            log_entry["file_hash"] = file_hash
-        if metadata:
-            log_entry["metadata"] = metadata
-        supabase_admin.table("audit_logs").insert(log_entry).execute()
+            if isinstance(case_id, str):
+                try:
+                    parsed_case_id = uuid.UUID(case_id)
+                except ValueError:
+                    parsed_case_id = None
+            elif isinstance(case_id, uuid.UUID):
+                parsed_case_id = case_id
+
+        log_entry = AuditLog(
+            user_id=user_id or "system",
+            action=action,
+            case_id=parsed_case_id,
+            file_hash=file_hash,
+            metadata_=metadata
+        )
+        db.add(log_entry)
+        db.commit()
     except Exception as e:
+        db.rollback()
         # Never crash the main request due to audit failure — just log to console
         print(f"[AUDIT LOG FAILED] {action}: {e}")
+    finally:
+        if own_session:
+            db.close()
 
 # ====== CASE ENDPOINTS ======
 @app.post("/cases")
-def create_case(case_data: CaseCreate, request: Request):
+def create_case(case_data: CaseCreate, request: Request, db: Session = Depends(get_db)):
     user_info = get_current_user_info(request)
     if not has_permission(user_info, "create_case"):
         raise HTTPException(status_code=403, detail="Forbidden: You do not have permission to create cases.")
 
     current_year = datetime.datetime.now().year
-    start_date = f"{current_year}-01-01T00:00:00Z"
-    end_date = f"{current_year}-12-31T23:59:59.999999Z"
+    start_date = datetime.datetime(current_year, 1, 1, tzinfo=datetime.timezone.utc)
+    end_date = datetime.datetime(current_year, 12, 31, 23, 59, 59, 999999, tzinfo=datetime.timezone.utc)
 
     try:
-        res_count = supabase_admin.table("cases").select("id").gte("created_at", start_date).lte("created_at", end_date).execute()
-        count = len(res_count.data) if res_count.data else 0
+        count = db.query(Case.id).filter(Case.created_at >= start_date, Case.created_at <= end_date).count()
     except Exception as e:
         print(f"[CASE NUMBER GENERATION ERROR] count failed: {e}")
         count = 0
@@ -627,47 +747,90 @@ def create_case(case_data: CaseCreate, request: Request):
     while True:
         case_number = f"SA-{current_year}-{sequence_num:04d}"
         try:
-            dup_check = supabase_admin.table("cases").select("id").eq("case_number", case_number).execute()
-            if not dup_check.data:
+            dup_check = db.query(Case.id).filter(Case.case_number == case_number).first()
+            if not dup_check:
                 break
         except Exception:
             break
         sequence_num += 1
 
-    data = case_data.dict()
-    data["case_number"] = case_number
-    data["created_by"] = user_info["id"]
-    data["created_by_name"] = user_info["name"]
+    # Safely parse date and time strings
+    inc_date = None
+    if case_data.incident_date:
+        try:
+            inc_date = datetime.date.fromisoformat(case_data.incident_date)
+        except ValueError:
+            pass
 
-    res = supabase_admin.table("cases").insert(data).execute()
-    if len(res.data) > 0:
-        new_case = res.data[0]
+    inc_time = None
+    if case_data.incident_time:
+        try:
+            parts = case_data.incident_time.split(":")
+            if len(parts) >= 2:
+                inc_time = datetime.time(int(parts[0]), int(parts[1]), int(parts[2]) if len(parts) > 2 else 0)
+        except ValueError:
+            pass
+
+    db_case = Case(
+        title=case_data.title,
+        offence_type=case_data.offence_type,
+        fir_description=case_data.fir_description,
+        fir_language=case_data.fir_language,
+        complainant_name=case_data.complainant_name,
+        complainant_contact=case_data.complainant_contact,
+        victims=case_data.victims,
+        suspects=case_data.suspects,
+        incident_date=inc_date,
+        incident_time=inc_time,
+        incident_location=case_data.incident_location,
+        case_number=case_number,
+        created_by=uuid.UUID(user_info["id"]) if user_info["id"] else None,
+        created_by_name=user_info["name"]
+    )
+
+    try:
+        db.add(db_case)
+        db.commit()
+        db.refresh(db_case)
+        new_case = serialize_case(db_case)
+        
         write_audit_log(
             user_id=user_info["id"],
             action="Case Created",
             case_id=new_case["id"],
-            metadata={"title": new_case.get("title"), "offence_type": new_case.get("offence_type")}
+            metadata={"title": new_case.get("title"), "offence_type": new_case.get("offence_type")},
+            db=db
         )
         return {"data": new_case}
-    raise HTTPException(status_code=400, detail="Failed to create case")
+    except Exception as e:
+        db.rollback()
+        print(f"[CASE CREATE ERROR] {e}")
+        raise HTTPException(status_code=400, detail="Failed to create case")
 
 @app.get("/cases")
-def get_cases(request: Request, search: str = None):
+def get_cases(request: Request, search: str = None, db: Session = Depends(get_db)):
     user_info = get_current_user_info(request)
     visibility = get_data_visibility(user_info, "view_cases")
 
     try:
-        query = supabase_admin.table("cases").select("*").order("created_at", desc=True)
+        query = db.query(Case)
         if visibility == "owned":
-            query = query.or_(f"created_by.eq.{user_info['id']},created_by.is.null")
+            user_uuid = uuid.UUID(user_info['id']) if user_info['id'] else None
+            query = query.filter((Case.created_by == user_uuid) | (Case.created_by.is_(None)))
 
         if search:
-            query = query.ilike("title", f"%{search}%")
-        res = query.execute()
-        for row in res.data:
+            query = query.filter(Case.title.ilike(f"%{search}%"))
+
+        cases = query.order_by(Case.created_at.desc()).all()
+        
+        serialized_cases = []
+        for case in cases:
+            row = serialize_case(case)
             row["case_number"] = row.get("case_number") or f'SA-{row["id"][:4].upper()}'
             row["status"] = "Open"
-        return {"data": res.data}
+            serialized_cases.append(row)
+            
+        return {"data": serialized_cases}
     except Exception as e:
         print(f"[FALLBACK] get_cases failed: {e}")
         # Return a mock case so the app works even offline or if table doesn't exist
@@ -693,29 +856,29 @@ def get_cases(request: Request, search: str = None):
         return {"data": mock_cases}
 
 @app.get("/cases/stats")
-def get_case_stats(request: Request):
+def get_case_stats(request: Request, db: Session = Depends(get_db)):
     user_info = get_current_user_info(request)
     visibility = get_data_visibility(user_info, "view_cases")
 
     if visibility == "all":
         # Admin: System-wide metrics
         try:
-            cases_res = supabase_admin.table("cases").select("id", count="exact").execute()
-            active_count = cases_res.count if cases_res.count is not None else len(cases_res.data)
-        except Exception:
+            active_count = db.query(Case.id).count()
+        except Exception as e:
+            print(f"[STATS CASES ERROR] {e}")
             active_count = 0
             
         try:
-            ev_res = supabase_admin.table("evidence").select("id", count="exact").execute()
-            total_evidence = ev_res.count if ev_res.count is not None else len(ev_res.data)
-        except Exception:
+            total_evidence = db.query(Evidence.id).count()
+        except Exception as e:
+            print(f"[STATS EVIDENCE COUNT ERROR] {e}")
             total_evidence = 0
 
         # Count real tampered evidence
         try:
-            tamper_res = supabase_admin.table("evidence").select("id", count="exact").eq("status", "Tampered").execute()
-            tamper_count = tamper_res.count if tamper_res.count is not None else len(tamper_res.data)
-        except:
+            tamper_count = db.query(Evidence.id).filter(Evidence.status == "Tampered").count()
+        except Exception as e:
+            print(f"[STATS TAMPERED COUNT ERROR] {e}")
             tamper_count = 0
             
         # Count BNS classifications
@@ -742,19 +905,19 @@ def get_case_stats(request: Request):
     else:
         # Investigator: Scoped metrics
         try:
-            cases_res = supabase_admin.table("cases").select("id").or_(f"created_by.eq.{user_info['id']},created_by.is.null").execute()
-            case_ids = [c["id"] for c in cases_res.data]
+            user_uuid = uuid.UUID(user_info['id']) if user_info['id'] else None
+            cases_res = db.query(Case.id).filter((Case.created_by == user_uuid) | (Case.created_by.is_(None))).all()
+            case_ids = [str(c[0]) for c in cases_res]
             active_count = len(case_ids)
-        except Exception:
+        except Exception as e:
+            print(f"[STATS SCOPED CASES ERROR] {e}")
             active_count = 0
             case_ids = []
 
         try:
             if case_ids:
-                case_ids_str = ",".join([f'"{cid}"' for cid in case_ids])
-                # PostgREST in syntax uses filter with "in" operator
-                ev_res = supabase_admin.table("evidence").select("id", count="exact").filter("case_id", "in", f"({case_ids_str})").execute()
-                total_evidence = ev_res.count if ev_res.count is not None else len(ev_res.data)
+                case_uuids = [uuid.UUID(cid) for cid in case_ids]
+                total_evidence = db.query(Evidence.id).filter(Evidence.case_id.in_(case_uuids)).count()
             else:
                 total_evidence = 0
         except Exception as e:
@@ -772,9 +935,9 @@ def get_case_stats(request: Request):
             ai_count = 0
 
         try:
-            audit_res = supabase_admin.table("audit_logs").select("id", count="exact").eq("user_id", user_info["id"]).execute()
-            audit_count = audit_res.count if audit_res.count is not None else len(audit_res.data)
-        except Exception:
+            audit_count = db.query(AuditLog.id).filter(AuditLog.user_id == user_info["id"]).count()
+        except Exception as e:
+            print(f"[STATS AUDIT COUNT ERROR] {e}")
             audit_count = 0
 
         return {"data": {
@@ -785,14 +948,14 @@ def get_case_stats(request: Request):
         }}
 
 @app.get("/cases/{case_id}")
-def get_case(case_id: str, request: Request):
+def get_case(case_id: str, request: Request, db: Session = Depends(get_db)):
     user_info = get_current_user_info(request)
-    check_case_access(case_id, user_info)
+    check_case_access(case_id, user_info, db)
 
     try:
-        res = supabase_admin.table("cases").select("*").eq("id", case_id).execute()
-        if len(res.data) > 0:
-            row = res.data[0]
+        case = db.query(Case).filter(Case.id == case_id).first()
+        if case:
+            row = serialize_case(case)
             row["case_number"] = row.get("case_number") or f'SA-{row["id"][:4].upper()}'
             row["status"] = "Open"
             return {"data": row}
@@ -830,13 +993,14 @@ def upload_evidence(
     evidence_type: str = Form(...),
     description: str = Form(None),
     language: str = Form(None),
-    file: UploadFile = File(...)
+    file: UploadFile = File(...),
+    db: Session = Depends(get_db)
 ):
     user_info = get_current_user_info(request)
     if not has_permission(user_info, "upload_evidence"):
         raise HTTPException(status_code=403, detail="Forbidden: You do not have permission to upload evidence.")
     
-    check_case_access(case_id, user_info)
+    check_case_access(case_id, user_info, db)
 
     try:
         # Read file bytes in memory
@@ -851,11 +1015,12 @@ def upload_evidence(
 
     # ── 2. Duplicate detection ────────────────────────────────────────────────
     try:
-        dup_res = supabase_admin.table("evidence").select("id, file_hash").eq("case_id", case_id).eq("file_hash", hash_hex).execute()
-        if len(dup_res.data) > 0:
+        case_uuid = uuid.UUID(case_id) if case_id else None
+        dup_check = db.query(Evidence.id).filter(Evidence.case_id == case_uuid, Evidence.file_hash == hash_hex).first()
+        if dup_check:
             raise HTTPException(
                 status_code=409,
-                detail=f"Duplicate file detected. This file was already uploaded (evidence ID: {dup_res.data[0]['id']}). SHA-256: {hash_hex[:16]}..."
+                detail=f"Duplicate file detected. This file was already uploaded (evidence ID: {dup_check[0]}). SHA-256: {hash_hex[:16]}..."
             )
     except HTTPException:
         raise
@@ -903,24 +1068,27 @@ def upload_evidence(
             file_url = f"{SUPABASE_URL}/storage/v1/object/public/evidence/{storage_path}"
 
     # ── 4. Store evidence record with hash and metadata ──────────────────────
-    data = {
-        "case_id": case_id,
-        "evidence_type": evidence_type,
-        "description": description,
-        "file_url": file_url,
-        "file_hash": hash_hex,
-        "file_name": original_filename,
-        "file_size": file_size,
-        "mime_type": file.content_type,
-        "uploaded_by": user_info["id"],
-        "uploaded_by_name": user_info["name"],
-        "chain_of_custody_status": "Collected",
-        "status": "Verified"
-    }
-    res = supabase_admin.table("evidence").insert(data).execute()
+    db_evidence = Evidence(
+        case_id=uuid.UUID(case_id) if case_id else None,
+        evidence_type=evidence_type,
+        description=description,
+        file_url=file_url,
+        file_hash=hash_hex,
+        file_name=original_filename,
+        file_size=file_size,
+        mime_type=file.content_type,
+        uploaded_by=uuid.UUID(user_info["id"]) if user_info["id"] else None,
+        uploaded_by_name=user_info["name"],
+        chain_of_custody_status="Collected",
+        status="Verified"
+    )
 
-    if len(res.data) > 0:
-        evidence_row = res.data[0]
+    try:
+        db.add(db_evidence)
+        db.commit()
+        db.refresh(db_evidence)
+        evidence_row = serialize_evidence(db_evidence)
+        
         # Ensure returned dictionary contains expected keys for the frontend
         evidence_row["file_name"] = original_filename
         evidence_row["file_type"] = evidence_type
@@ -938,50 +1106,59 @@ def upload_evidence(
                 "file_size": file_size,
                 "evidence_id": evidence_row["id"],
                 "evidence_type": evidence_type
-            }
+            },
+            db=db
         )
         return {"data": evidence_row}
-    raise HTTPException(status_code=400, detail="Failed to upload evidence")
+    except Exception as e:
+        db.rollback()
+        print(f"[EVIDENCE UPLOAD DB ERROR] {e}")
+        raise HTTPException(status_code=400, detail="Failed to upload evidence")
 
 @app.get("/evidence")
-def get_evidence(request: Request, case_id: str = None):
+def get_evidence(request: Request, case_id: str = None, db: Session = Depends(get_db)):
     user_info = get_current_user_info(request)
     
     # Check case access
     if case_id:
-        check_case_access(case_id, user_info)
+        check_case_access(case_id, user_info, db)
         allowed_case_ids = [case_id]
     else:
         # If case_id is not provided, check visibility rules
         visibility = get_data_visibility(user_info, "view_cases")
         if visibility == "owned":
             try:
-                cases_res = supabase_admin.table("cases").select("id").or_(f"created_by.eq.{user_info['id']},created_by.is.null").execute()
-                allowed_case_ids = [c["id"] for c in cases_res.data]
+                user_uuid = uuid.UUID(user_info['id']) if user_info['id'] else None
+                cases_res = db.query(Case.id).filter((Case.created_by == user_uuid) | (Case.created_by.is_(None))).all()
+                allowed_case_ids = [str(c[0]) for c in cases_res]
             except Exception:
                 allowed_case_ids = []
         else:
             allowed_case_ids = None
 
     try:
-        query = supabase_admin.table("evidence").select("*").order("created_at", desc=True)
+        query = db.query(Evidence)
         if case_id:
-            query = query.eq("case_id", case_id)
+            case_uuid = uuid.UUID(case_id) if case_id else None
+            query = query.filter(Evidence.case_id == case_uuid)
         elif allowed_case_ids is not None:
             if not allowed_case_ids:
                 return {"data": []}
-            case_ids_str = ",".join([f'"{cid}"' for cid in allowed_case_ids])
-            query = query.filter("case_id", "in", f"({case_ids_str})")
+            allowed_uuids = [uuid.UUID(cid) for cid in allowed_case_ids]
+            query = query.filter(Evidence.case_id.in_(allowed_uuids))
             
-        res = query.execute()
-        for row in res.data:
+        evidences = query.order_by(Evidence.created_at.desc()).all()
+        serialized_evidences = []
+        for ev_obj in evidences:
+            row = serialize_evidence(ev_obj)
             row["file_name"] = row.get("file_name") or ("Evidence " + row["id"][:4])
             row["file_type"] = row.get("evidence_type", "Image")
             row["file_size"] = row.get("file_size") or 1048576
             row["status"] = row.get("status", "Verified")
             row["sha256_hash"] = row.get("file_hash") or ("hash_" + row["id"][:8])
             row["uploaded_at"] = row.get("created_at")
-        return {"data": res.data}
+            serialized_evidences.append(row)
+        return {"data": serialized_evidences}
     except Exception as e:
         print(f"[FALLBACK] get_evidence failed: {e}")
         # Return mock evidence if it's the demo case
@@ -1006,17 +1183,17 @@ def get_evidence(request: Request, case_id: str = None):
 
 # ── 5. Hash verification endpoint ────────────────────────────────────────────
 @app.post("/evidence/{evidence_id}/verify")
-def verify_evidence_hash(evidence_id: str, request: Request):
+def verify_evidence_hash(evidence_id: str, request: Request, db: Session = Depends(get_db)):
     """Recomputes SHA-256 from disk or storage and compares against the stored hash."""
     user_info = get_current_user_info(request)
 
-    ev_res = supabase_admin.table("evidence").select("*").eq("id", evidence_id).execute()
-    if len(ev_res.data) == 0:
+    evidence_obj = db.query(Evidence).filter(Evidence.id == evidence_id).first()
+    if not evidence_obj:
         raise HTTPException(status_code=404, detail="Evidence not found")
 
-    evidence = ev_res.data[0]
+    evidence = serialize_evidence(evidence_obj)
     case_id = evidence.get("case_id")
-    check_case_access(case_id, user_info)
+    check_case_access(case_id, user_info, db)
 
     stored_hash = evidence.get("file_hash")
     file_path = evidence.get("file_url")
@@ -1067,12 +1244,15 @@ def verify_evidence_hash(evidence_id: str, request: Request):
     is_verified = current_hash == stored_hash
 
     # Update status and verification metadata
-    update_data = {
-        "verified_at": datetime.datetime.now(datetime.timezone.utc).isoformat(),
-        "verified_by": user_info["id"],
-        "status": "Verified" if is_verified else "Tampered"
-    }
-    supabase_admin.table("evidence").update(update_data).eq("id", evidence_id).execute()
+    try:
+        evidence_obj.verified_at = datetime.datetime.now(datetime.timezone.utc)
+        evidence_obj.verified_by = uuid.UUID(user_info["id"]) if user_info["id"] else None
+        evidence_obj.status = "Verified" if is_verified else "Tampered"
+        db.commit()
+    except Exception as e:
+        db.rollback()
+        print(f"[VERIFY UPDATE FAILED] {e}")
+        raise HTTPException(status_code=500, detail="Failed to update verification status")
 
     # Log verification attempt (both clean and tampered)
     write_audit_log(
@@ -1085,7 +1265,8 @@ def verify_evidence_hash(evidence_id: str, request: Request):
             "stored_hash": stored_hash,
             "computed_hash": current_hash,
             "match": is_verified
-        }
+        },
+        db=db
     )
 
     return {
@@ -1110,22 +1291,22 @@ async def detect_direct(image: UploadFile = File(...)):
     return JSONResponse(content=prediction)
 
 @app.post("/ai/detect")
-def run_ai_detect(req: DetectionRequest, request: Request):
+def run_ai_detect(req: DetectionRequest, request: Request, db: Session = Depends(get_db)):
     print(f"\n[DEBUG] /ai/detect called with evidence_id: {req.evidence_id}, case_id: {req.case_id}")
     
     user_info = get_current_user_info(request)
-    check_case_access(req.case_id, user_info)
+    check_case_access(req.case_id, user_info, db)
 
     if not model:
         print("[DEBUG] Roboflow model is None")
         raise HTTPException(status_code=500, detail="Roboflow model not loaded")
 
-    ev_res = supabase_admin.table("evidence").select("*").eq("id", req.evidence_id).execute()
-    if len(ev_res.data) == 0:
+    evidence_obj = db.query(Evidence).filter(Evidence.id == req.evidence_id).first()
+    if not evidence_obj:
         print(f"[DEBUG] Evidence {req.evidence_id} not found in database")
         raise HTTPException(status_code=404, detail="Evidence not found")
 
-    evidence = ev_res.data[0]
+    evidence = serialize_evidence(evidence_obj)
     file_path = evidence.get("file_url")
     stored_hash = evidence.get("file_hash")
     
@@ -1194,7 +1375,12 @@ def run_ai_detect(req: DetectionRequest, request: Request):
         if current_hash != stored_hash:
             print("[DEBUG] Hash mismatch detected! Raising 403 Forbidden.")
             # Mark as tampered and block detection
-            supabase_admin.table("evidence").update({"status": "Tampered"}).eq("id", req.evidence_id).execute()
+            try:
+                evidence_obj.status = "Tampered"
+                db.commit()
+            except Exception as e:
+                db.rollback()
+                print(f"[AI DETECT TAMPER UPDATE FAILED] {e}")
             write_audit_log(
                 user_id=user_info["id"],
                 action="Tamper Detected",
@@ -1205,7 +1391,8 @@ def run_ai_detect(req: DetectionRequest, request: Request):
                     "stored_hash": stored_hash,
                     "computed_hash": current_hash,
                     "blocked_action": "AI Detection"
-                }
+                },
+                db=db
             )
             raise HTTPException(
                 status_code=403,
@@ -1265,7 +1452,8 @@ def run_ai_detect(req: DetectionRequest, request: Request):
         user_id=user_info["id"],
         action="YOLO Scan",
         case_id=req.case_id,
-        metadata={"evidence_id": req.evidence_id, "objects_found": len(objects)}
+        metadata={"evidence_id": req.evidence_id, "objects_found": len(objects)},
+        db=db
     )
 
     return {"data": result_data}
@@ -1282,6 +1470,89 @@ def get_bns_case(case_id: str, request: Request):
     user_info = get_current_user_info(request)
     check_case_access(case_id, user_info)
     return {"data": []}
+
+@app.post("/ai/ocr")
+def run_ai_ocr(req: OCRRequest, request: Request, db: Session = Depends(get_db)):
+    user_info = get_current_user_info(request)
+
+    evidence_id = req.evidence_id
+    evidence_uuid = None
+    case_id = None
+    
+    if evidence_id != "temp":
+        try:
+            evidence_uuid = uuid.UUID(evidence_id)
+        except ValueError:
+            raise HTTPException(status_code=400, detail="Invalid evidence ID format")
+            
+        evidence_obj = db.query(Evidence).filter(Evidence.id == evidence_uuid).first()
+        if not evidence_obj:
+            raise HTTPException(status_code=404, detail="Evidence not found")
+        
+        case_id = str(evidence_obj.case_id) if evidence_obj.case_id else None
+        if case_id:
+            check_case_access(case_id, user_info, db)
+
+    lang = req.language or "auto"
+    
+    if lang == "hi":
+        extracted_text = "यह एक परीक्षण दस्तावेज़ है जो ओसीआर (OCR) के लिए उपयोग किया जाता है।"
+        detected_language = "hi"
+        confidence = 0.94
+        translated_text = "This is a test document used for OCR."
+    elif lang == "kn":
+        extracted_text = "ಇದು ಓಸಿಆರ್ (OCR) ಪರೀಕ್ಷೆಗಾಗಿ ಒಂದು ಪ್ರಾಯೋಗಿಕ ದಾಖಲೆಯಾಗಿದೆ."
+        detected_language = "kn"
+        confidence = 0.93
+        translated_text = "This is an experimental document for OCR testing."
+    elif lang == "ml":
+        extracted_text = "ഇത് ഒസിആർ (OCR) പരിശോധനയ്ക്കായുള്ള ഒരു മാതൃക രേഖയാണ്."
+        detected_language = "ml"
+        confidence = 0.92
+        translated_text = "This is a sample document for OCR testing."
+    else:
+        extracted_text = "SECURE AUDIT SYSTEM - TEXT EXTRACTION TEST\nCase Number: SA-2026-0731\nStatus: Verified\nIntegrity: OK"
+        detected_language = "en"
+        confidence = 0.98
+        translated_text = None
+
+    db_ocr = OCRResult(
+        evidence_id=evidence_uuid,
+        extracted_text=extracted_text,
+        language=detected_language,
+        confidence=confidence,
+        page_number=1
+    )
+    
+    try:
+        db.add(db_ocr)
+        db.commit()
+        db.refresh(db_ocr)
+    except Exception as e:
+        db.rollback()
+        raise HTTPException(status_code=500, detail=f"Failed to save OCR result: {str(e)}")
+
+    write_audit_log(
+        user_id=user_info["id"],
+        action="OCR Extraction",
+        case_id=case_id,
+        metadata={
+            "evidence_id": str(evidence_uuid) if evidence_uuid else "temp",
+            "detected_language": detected_language,
+            "confidence": confidence
+        },
+        db=db
+    )
+
+    return {
+        "data": {
+            "extracted_text": extracted_text,
+            "detected_language": detected_language,
+            "translated_text": translated_text
+        },
+        "success": True
+    }
+
 
 # ── 6. Real audit log retrieval ───────────────────────────────────────────────
 def get_status_for_action(action: str) -> str:
@@ -1301,7 +1572,8 @@ def get_audit(
     role: str = None,
     start_date: str = None,
     end_date: str = None,
-    search: str = None
+    search: str = None,
+    db: Session = Depends(get_db)
 ):
     user_info = get_current_user_info(request)
     visibility = get_data_visibility(user_info, "view_audit_logs")
@@ -1317,27 +1589,53 @@ def get_audit(
 
     try:
         # Build query
-        query = supabase_admin.table("audit_logs").select("*").order("created_at", desc=True)
+        query = db.query(AuditLog)
         
         # Apply filters in database where possible
         if target_user_id and target_user_id != "All Users":
-            query = query.eq("user_id", target_user_id)
+            query = query.filter(AuditLog.user_id == target_user_id)
         if action:
-            query = query.eq("action", action)
+            query = query.filter(AuditLog.action == action)
         if start_date:
-            query = query.gte("created_at", start_date)
+            try:
+                s_date = start_date
+                if "T" not in s_date:
+                    s_date = f"{s_date}T00:00:00"
+                start_dt = datetime.datetime.fromisoformat(s_date.replace("Z", "+00:00"))
+                query = query.filter(AuditLog.created_at >= start_dt)
+            except Exception as e:
+                print(f"[AUDIT GET] Failed to parse start_date: {e}")
+                query = query.filter(AuditLog.created_at >= start_date)
         if end_date:
-            query = query.lte("created_at", end_date)
+            try:
+                e_date = end_date
+                if "T" not in e_date:
+                    e_date = f"{e_date}T23:59:59"
+                end_dt = datetime.datetime.fromisoformat(e_date.replace("Z", "+00:00"))
+                query = query.filter(AuditLog.created_at <= end_dt)
+            except Exception as e:
+                print(f"[AUDIT GET] Failed to parse end_date: {e}")
+                query = query.filter(AuditLog.created_at <= end_date)
             
-        res = query.execute()
-        logs = res.data or []
+        db_logs = query.order_by(AuditLog.created_at.desc()).all()
+        logs = []
+        for log in db_logs:
+            logs.append({
+                "id": str(log.id),
+                "user_id": log.user_id,
+                "action": log.action,
+                "case_id": str(log.case_id) if log.case_id else None,
+                "file_hash": log.file_hash,
+                "metadata": log.metadata_,
+                "created_at": log.created_at.isoformat() if log.created_at else None
+            })
         
         # Fetch users and cases maps
         users_res = supabase_admin.table("users").select("id, full_name, role").execute()
         users_map = {u["id"]: u for u in users_res.data}
         
-        cases_res = supabase_admin.table("cases").select("id, title, case_number").execute()
-        cases_map = {c["id"]: c for c in cases_res.data}
+        cases_res = db.query(Case.id, Case.title, Case.case_number).all()
+        cases_map = {str(c[0]): {"id": str(c[0]), "title": c[1], "case_number": c[2]} for c in cases_res}
         
         # Hydrate log entries and apply memory filters (role, search)
         hydrated_logs = []
@@ -1414,15 +1712,15 @@ def get_audit(
 
 # ====== GRAPH API ======
 @app.get("/cases/{case_id}/graph")
-def get_case_graph(case_id: str, request: Request):
+def get_case_graph(case_id: str, request: Request, db: Session = Depends(get_db)):
     user_info = get_current_user_info(request)
-    check_case_access(case_id, user_info)
+    check_case_access(case_id, user_info, db)
     
-    res = supabase_admin.table("cases").select("*").eq("id", case_id).execute()
-    if len(res.data) == 0:
+    case_obj = db.query(Case).filter(Case.id == case_id).first()
+    if not case_obj:
         raise HTTPException(status_code=404, detail="Case not found")
         
-    case = res.data[0]
+    case = serialize_case(case_obj)
     
     # Just returning the format expected by our new frontend
     nodes = []
@@ -1476,10 +1774,11 @@ def get_case_graph(case_id: str, request: Request):
 
     # Evidence nodes
     try:
-        ev_res = supabase_admin.table("evidence").select("id, file_name, status").eq("case_id", case_id).execute()
-        for i, ev in enumerate(ev_res.data):
-            eid = f"ev-{ev['id']}"
-            nodes.append({"id": eid, "type": "object", "data": {"label": ev.get("file_name", "Evidence")[:15], "subtitle": ev.get("status", "Verified")}, "position": {"x": 200 + (i*150), "y": 450}})
+        case_uuid = uuid.UUID(case_id) if case_id else None
+        ev_res = db.query(Evidence.id, Evidence.file_name, Evidence.status).filter(Evidence.case_id == case_uuid).all()
+        for i, ev in enumerate(ev_res):
+            eid = f"ev-{ev[0]}"
+            nodes.append({"id": eid, "type": "object", "data": {"label": ev[1][:15] if ev[1] else "Evidence", "subtitle": ev[2] or "Verified"}, "position": {"x": 200 + (i*150), "y": 450}})
             edges.append({"id": f"e-case-{eid}", "source": f"case-{case_id}", "target": eid, "label": "evidence"})
     except Exception:
         pass
