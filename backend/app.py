@@ -23,7 +23,7 @@ import requests
 from sqlalchemy import text
 from sqlalchemy.orm import Session
 from db import get_db, SessionLocal
-from models import Case, Evidence, AuditLog, OCRResult
+from models import Case, Evidence, AuditLog, OCRResult, BNSPrediction
 
 load_dotenv()
 
@@ -883,9 +883,9 @@ def get_case_stats(request: Request, db: Session = Depends(get_db)):
             
         # Count BNS classifications
         try:
-            bns_res = supabase_admin.table("bns_predictions").select("id", count="exact").execute()
-            bns_count = bns_res.count if bns_res.count is not None else len(bns_res.data)
-        except:
+            bns_count = db.query(BNSPrediction.id).count()
+        except Exception as e:
+            print(f"[STATS BNS COUNT ERROR] {e}")
             bns_count = 0
 
         # Count total active users for admin dashboard
@@ -1862,23 +1862,27 @@ def bns_predict(payload: BNSRequest):
         raise HTTPException(status_code=502, detail=f"Failed to communicate with BNS server: {str(e)}")
 
 @app.post("/bns/store")
-def bns_store(payload: BNSStore, request: Request):
+def bns_store(payload: BNSStore, request: Request, db: Session = Depends(get_db)):
     user_info = get_current_user_info(request)
     check_case_access(payload.case_id, user_info)
     
-    data = {
-        "id": str(uuid.uuid4()),
-        "case_id": payload.case_id,
-        "crime_type": payload.crime_type,
-        "sections": payload.sections,
-        "fir_text": payload.fir_text,
-        "created_at": datetime.datetime.now().isoformat()
-    }
-    
     try:
-        supabase_admin.table("bns_predictions").delete().eq("case_id", payload.case_id).execute()
-        supabase_admin.table("bns_predictions").insert(data).execute()
+        # Delete existing prediction for this case_id
+        db.query(BNSPrediction).filter(BNSPrediction.case_id == uuid.UUID(payload.case_id)).delete()
+        
+        # Insert the new prediction
+        db_pred = BNSPrediction(
+            id=uuid.uuid4(),
+            case_id=uuid.UUID(payload.case_id),
+            crime_type=payload.crime_type,
+            sections=payload.sections,
+            fir_text=payload.fir_text
+        )
+        db.add(db_pred)
+        db.commit()
+        db.refresh(db_pred)
     except Exception as e:
+        db.rollback()
         raise HTTPException(status_code=500, detail=f"Failed to store BNS prediction: {str(e)}")
 
     write_audit_log(
@@ -1888,14 +1892,37 @@ def bns_store(payload: BNSStore, request: Request):
         metadata={"crime_type": payload.crime_type, "sections_count": len(payload.sections)}
     )
     
+    data = {
+        "id": str(db_pred.id),
+        "case_id": str(db_pred.case_id),
+        "crime_type": db_pred.crime_type,
+        "sections": db_pred.sections,
+        "fir_text": db_pred.fir_text,
+        "created_at": db_pred.created_at.isoformat().replace("+00:00", "Z") if db_pred.created_at else None
+    }
+    
     return {"data": data, "success": True}
 
 @app.get("/bns/case/{case_id}")
-def bns_get_case(case_id: str, request: Request):
+def bns_get_case(case_id: str, request: Request, db: Session = Depends(get_db)):
     user_info = get_current_user_info(request)
     check_case_access(case_id, user_info)
-    res = supabase_admin.table("bns_predictions").select("*").eq("case_id", case_id).order("created_at", desc=True).execute()
-    return {"data": res.data}
+    
+    try:
+        preds = db.query(BNSPrediction).filter(BNSPrediction.case_id == uuid.UUID(case_id)).order_by(BNSPrediction.created_at.desc()).all()
+        serialized = []
+        for p in preds:
+            serialized.append({
+                "id": str(p.id),
+                "case_id": str(p.case_id),
+                "crime_type": p.crime_type,
+                "sections": p.sections,
+                "fir_text": p.fir_text,
+                "created_at": p.created_at.isoformat().replace("+00:00", "Z") if p.created_at else None
+            })
+        return {"data": serialized}
+    except Exception as e:
+        raise HTTPException(status_code=500, detail=f"Failed to fetch BNS predictions: {str(e)}")
 
 # ====== USER MANAGEMENT ENDPOINTS (Admin Only) ======
 class UserCreateRequest(BaseModel):

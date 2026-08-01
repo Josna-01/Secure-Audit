@@ -76,3 +76,15 @@ class OCRResult(Base):
     created_at = Column(DateTime(timezone=True), nullable=False, server_default=func.now())
 
 
+class BNSPrediction(Base):
+    __tablename__ = "bns_predictions"
+
+    id = Column(UUID(as_uuid=True), primary_key=True, default=uuid.uuid4)
+    case_id = Column(UUID(as_uuid=True), ForeignKey("cases.id", ondelete="CASCADE"), nullable=False)
+    crime_type = Column(String, nullable=False)
+    sections = Column(JSONB, nullable=False)
+    fir_text = Column(String, nullable=True)
+    created_at = Column(DateTime(timezone=True), nullable=False, server_default=func.now())
+
+
+
