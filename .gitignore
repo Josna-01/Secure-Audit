@@ -1,9 +1,11 @@
 .env
 backend/.env
+photogrammetry-backend/.env
 node_modules
 audit-frontend/node_modules
 bns-backend/venv310
 backend/venv
+photogrammetry-backend/venv
 __pycache__
 venv
 *.pyc
@@ -13,3 +15,9 @@ uploads
 *.pt
 *.dll
 *.lib
+*.mp4
+*.glb
+*.ply
+photogrammetry-backend/output/
+photogrammetry-backend/test_data/
+point_cloud_preview.png

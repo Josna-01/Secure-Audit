@@ -23,7 +23,7 @@ import requests
 from sqlalchemy import text
 from sqlalchemy.orm import Session
 from db import get_db, SessionLocal
-from models import Case, Evidence, AuditLog, OCRResult, BNSPrediction
+from models import Case, Evidence, AuditLog, OCRResult, BNSPrediction, OTPToken
 
 load_dotenv()
 
@@ -386,7 +386,7 @@ def check_case_access(case_id: str, user_info: dict, db: Session = None) -> bool
 # ====== AUTH ENDPOINTS ======
 
 @app.post("/auth/send-otp")
-def send_otp(req: LoginRequest):
+def send_otp(req: LoginRequest, db: Session = Depends(get_db)):
     """Step 1 — officer enters email, gets OTP sent to their registered email."""
     # Look up officer in users table
     try:
@@ -404,17 +404,21 @@ def send_otp(req: LoginRequest):
     # Generate 6-digit OTP
     otp = "".join(random.choices(string.digits, k=6))
     print(f"[DEBUG OTP] Generated OTP for {user['email']}: {otp}")
-    expires_at = (datetime.datetime.utcnow() + datetime.timedelta(minutes=5)).isoformat()
+    expires_at = datetime.datetime.now(datetime.timezone.utc) + datetime.timedelta(minutes=5)
 
-    # Store OTP in otp_tokens table
+    # Store OTP in PostgreSQL otp_tokens table
     try:
-        supabase_admin.table("otp_tokens").insert({
-            "user_id": user["id"],
-            "token": otp,
-            "expires_at": expires_at,
-            "used": False
-        }).execute()
+        otp_db = OTPToken(
+            id=uuid.uuid4(),
+            user_id=uuid.UUID(user["id"]),
+            token=otp,
+            expires_at=expires_at,
+            used=False
+        )
+        db.add(otp_db)
+        db.commit()
     except Exception as e:
+        db.rollback()
         raise HTTPException(status_code=500, detail=f"Failed to store OTP: {str(e)}")
 
     # Send OTP via Gmail
@@ -427,7 +431,7 @@ def send_otp(req: LoginRequest):
 
 
 @app.post("/auth/verify-otp")
-def verify_otp(req: VerifyOTPRequest):
+def verify_otp(req: VerifyOTPRequest, db: Session = Depends(get_db)):
     """Step 2 — officer enters password + OTP, gets JWT back."""
     # Look up officer
     try:
@@ -464,36 +468,29 @@ def verify_otp(req: VerifyOTPRequest):
         print(f"[AUTH DEBUG] FAILED: Password verification - exception: {e}")
         raise HTTPException(status_code=401, detail="Invalid password.")
 
-    # Verify OTP — find latest unused, non-expired token
-    # [DEVELOPMENT BYPASS] Uncomment the lines below to bypass OTP with "123456"
-    # if req.otp == "123456":
-    #     print("[AUTH DEBUG] OTP record found (bypass 123456)")
-    #     print("[AUTH DEBUG] OTP not expired (bypass 123456)")
-    #     print("[AUTH DEBUG] OTP unused (bypass 123456)")
-    #     otp_record = {"id": None}
-    # else:
+    # Verify OTP — find latest unused, non-expired token in PostgreSQL
     try:
-        otp_res = supabase_admin.table("otp_tokens")\
-            .select("*")\
-            .eq("user_id", user["id"])\
-            .eq("token", req.otp)\
-            .order("created_at", desc=True)\
-            .execute()
+        otp_record = db.query(OTPToken)\
+            .filter(OTPToken.user_id == uuid.UUID(user["id"]), OTPToken.token == req.otp)\
+            .order_by(OTPToken.created_at.desc())\
+            .first()
 
-        if not otp_res.data:
+        if not otp_record:
             print("[AUTH DEBUG] FAILED: OTP not found")
             raise HTTPException(status_code=401, detail="Invalid or expired token. Request a new one.")
         
         print("[AUTH DEBUG] OTP record found")
-        otp_record = otp_res.data[0]
 
-        if otp_record.get("used"):
+        if otp_record.used:
             print("[AUTH DEBUG] FAILED: OTP already used")
             raise HTTPException(status_code=401, detail="Invalid or expired token. Request a new one.")
         print("[AUTH DEBUG] OTP unused")
 
-        now_iso = datetime.datetime.utcnow().isoformat()
-        if otp_record.get("expires_at") < now_iso:
+        now_utc = datetime.datetime.now(datetime.timezone.utc)
+        exp_at = otp_record.expires_at
+        if exp_at.tzinfo is None:
+            exp_at = exp_at.replace(tzinfo=datetime.timezone.utc)
+        if exp_at < now_utc:
             print("[AUTH DEBUG] FAILED: OTP expired")
             raise HTTPException(status_code=401, detail="Invalid or expired token. Request a new one.")
         print("[AUTH DEBUG] OTP not expired")
@@ -506,9 +503,11 @@ def verify_otp(req: VerifyOTPRequest):
 
     # Mark OTP as used
     try:
-        if otp_record and otp_record.get("id"):
-            supabase_admin.table("otp_tokens").update({"used": True}).eq("id", otp_record["id"]).execute()
+        if otp_record:
+            otp_record.used = True
+            db.commit()
     except Exception as e:
+        db.rollback()
         print(f"[AUTH UPDATE WARNING] failed to mark OTP as used: {e}")
 
     # Issue JWT

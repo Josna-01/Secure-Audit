@@ -4,13 +4,27 @@ import logging
 
 logger = logging.getLogger(__name__)
 
+# Configurable Mode Thresholds: PRODUCTION vs TEST
+FRAME_SELECTOR_CONFIGS = {
+    "PRODUCTION": {
+        "blur_threshold": 100.0,
+        "lighting_threshold": 50.0,
+        "similarity_threshold": 10.0,
+    },
+    "TEST": {
+        "blur_threshold": 15.0,
+        "lighting_threshold": 50.0,
+        "similarity_threshold": 5.0,
+    }
+}
+
 class FrameSelector:
     """
     Service class responsible for filtering and selecting high-quality,
     distinct frame images for 3D reconstruction.
     """
 
-    def select(self, frame_paths: list[str], max_frames: int = 25) -> list[str]:
+    def select(self, frame_paths: list[str], max_frames: int = 25, mode: str = None) -> list[str]:
         """
         Filters out low-quality (blurry, dark) and duplicate/similar frames,
         returning up to max_frames paths sorted by overall composite quality.
@@ -18,6 +32,8 @@ class FrameSelector:
         Args:
             frame_paths (list[str]): List of file paths to the input frame images.
             max_frames (int): Maximum number of frames to return in the selection. Defaults to 25.
+            mode (str, optional): Configurable mode ('PRODUCTION' or 'TEST').
+                                  Defaults to environment variable PHOTOGRAMMETRY_MODE or 'TEST'.
 
         Returns:
             list[str]: List of selected frame image paths, sorted by composite quality score descending.
@@ -27,7 +43,19 @@ class FrameSelector:
             logger.info("No frame paths provided for selection.")
             return []
 
-        logger.info(f"Starting frame selection from {total_input} frames (target limit: {max_frames})")
+        # Determine mode (env fallback or default to TEST)
+        if mode is None:
+            mode = os.environ.get("PHOTOGRAMMETRY_MODE", "TEST").upper()
+
+        config = FRAME_SELECTOR_CONFIGS.get(mode, FRAME_SELECTOR_CONFIGS["TEST"])
+        blur_threshold = config["blur_threshold"]
+        lighting_threshold = config["lighting_threshold"]
+        similarity_threshold = config["similarity_threshold"]
+
+        logger.info(
+            f"Starting frame selection [{mode} MODE] from {total_input} frames (target limit: {max_frames}). "
+            f"Thresholds: blur={blur_threshold}, lighting={lighting_threshold}, similarity={similarity_threshold}"
+        )
 
         invalid_files = 0
         blur_rejected = 0
@@ -54,14 +82,14 @@ class FrameSelector:
 
             # 1. Sharpness/Blur Filter (Variance of Laplacian)
             blur_score = cv2.Laplacian(gray, cv2.CV_64F).var()
-            if blur_score < 100.0:
+            if blur_score < blur_threshold:
                 blur_rejected += 1
                 continue
 
             # 2. Lighting/Exposure Filter (Mean of V channel in HSV)
             hsv = cv2.cvtColor(img, cv2.COLOR_BGR2HSV)
             lighting_score = float(hsv[:, :, 2].mean())
-            if lighting_score < 50.0:
+            if lighting_score < lighting_threshold:
                 lighting_rejected += 1
                 continue
 
@@ -69,7 +97,7 @@ class FrameSelector:
             if last_accepted_gray is not None:
                 diff = cv2.absdiff(gray, last_accepted_gray)
                 mean_diff = float(diff.mean())
-                if mean_diff < 10.0:
+                if mean_diff < similarity_threshold:
                     similarity_rejected += 1
                     continue
 
@@ -80,7 +108,7 @@ class FrameSelector:
 
         # Log filter statistics
         logger.info(
-            f"Frame selection filtering statistics: "
+            f"Frame selection filtering statistics [{mode} MODE]: "
             f"Total Input = {total_input}, "
             f"Invalid = {invalid_files}, "
             f"Rejected (Blurry) = {blur_rejected}, "

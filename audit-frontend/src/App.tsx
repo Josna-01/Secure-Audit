@@ -10,7 +10,7 @@ import CreateCase from './pages/CreateCase'
 import CaseDetail from './pages/CaseDetail'
 import {
   EvidencePage, DetectionPage, BNSPage, OCRPage,
-  AuditPage, PersonalPage,
+  AuditPage, PersonalPage, Photo3DPage,
   PlaceholderPage, GraphPage
 } from './pages/OtherPages'
 import { ProfilePage } from './pages/ProfilePage'
@@ -58,7 +58,7 @@ function AppRoutes() {
       <Route path="/detection" element={<ProtectedRoute><DetectionPage /></ProtectedRoute>} />
       <Route path="/bns" element={<ProtectedRoute><BNSPage /></ProtectedRoute>} />
       <Route path="/ocr" element={<ProtectedRoute><OCRPage /></ProtectedRoute>} />
-      <Route path="/photo3d" element={<ProtectedRoute><PlaceholderPage title="3D Scene Reconstruction" description="COLMAP Structure from Motion pipeline — upload 20+ overlapping crime scene photos to generate a 3D point cloud visualized in Three.js" /></ProtectedRoute>} />
+      <Route path="/photo3d" element={<ProtectedRoute><Photo3DPage /></ProtectedRoute>} />
       <Route path="/audio" element={<ProtectedRoute><PlaceholderPage title="Audio Forensics" description="pyAudioAnalysis — ENF authentication, speaker identification, tampering detection. Minimum 10 minutes of audio required for ENF analysis." /></ProtectedRoute>} />
       <Route path="/graph" element={<ProtectedRoute><GraphPage /></ProtectedRoute>} />
       <Route path="/cases/:id/graph" element={<ProtectedRoute><GraphPage /></ProtectedRoute>} />

@@ -267,6 +267,27 @@ class ApiService {
     const { data } = await this.client.post<ApiResponse<{ message: string }>>(`/notes/${noteId}/link-to-case`, { case_id: caseId, ...options })
     return data
   }
+
+  // ── PHOTOGRAMMETRY ────────────────────────────────────────────────────────
+  async triggerPhotogrammetry(caseId: string, evidenceId: string, fileUrl: string) {
+    const { data } = await this.client.post<ApiResponse<{ job_id: string; status: string }>>(
+      `/photogrammetry/trigger/${caseId}`,
+      { evidence_id: evidenceId, file_url: fileUrl }
+    )
+    return data
+  }
+
+  async getPhotogrammetryStatus(caseId: string) {
+    const { data } = await this.client.get<{
+      status: string
+      model_url?: string
+      point_cloud_url?: string
+      frame_count?: number
+      created_at?: string
+      completed_at?: string
+    }>(`/photogrammetry/status/${caseId}`)
+    return data
+  }
 }
 
 export const api = new ApiService()
