@@ -547,6 +547,623 @@ export function PlaceholderPage({ title, description }: { title: string; descrip
   )
 }
 
+// ── 3D SCENE RECONSTRUCTION (PHOTOGRAMMETRY) PAGE ────────────────────────
+export function Photo3DPage() {
+  const [cases, setCases] = useState<Case[]>([])
+  const [selectedCaseId, setSelectedCaseId] = useState<string>('')
+  const [evidenceList, setEvidenceList] = useState<Evidence[]>([])
+  const [selectedEvidenceId, setSelectedEvidenceId] = useState<string>('')
+  
+  const [status, setStatus] = useState<'Waiting' | 'Processing' | 'Completed' | 'Failed'>('Waiting')
+  const [jobDetails, setJobDetails] = useState<{
+    model_url?: string
+    point_cloud_url?: string
+    frame_count?: number
+    created_at?: string
+    completed_at?: string
+  }>({})
+  
+  const [pipelineStep, setPipelineStep] = useState<number>(1)
+  const [isLogOpen, setIsLogOpen] = useState(false) // Default state: Collapsed
+  const [viewMode, setViewMode] = useState<'orbit' | 'wireframe' | 'pointcloud'>('orbit')
+  const [rotationAngle, setRotationAngle] = useState(35)
+  const [errorMsg, setErrorMsg] = useState('')
+
+  const [logs, setLogs] = useState<string[]>([])
+  const pollTimerRef = useRef<NodeJS.Timeout | null>(null)
+
+  // Pipeline steps definition
+  const pipelineSteps = [
+    { title: 'Video Upload', desc: 'Source media' },
+    { title: 'Frame Extraction', desc: '1 fps sampling' },
+    { title: 'Frame Selection', desc: 'Keyframe filter' },
+    { title: 'Feature Matching', desc: 'SIFT descriptors' },
+    { title: 'Sparse Reconstruction', desc: 'Structure from Motion' },
+    { title: 'Dense Reconstruction', desc: 'Multi-view stereo' },
+    { title: 'Mesh Generation', desc: 'Poisson surface' },
+    { title: 'Completed', desc: 'GLB & PLY exported' }
+  ]
+
+  // 1. Fetch Cases on mount
+  useEffect(() => {
+    async function loadCases() {
+      try {
+        const res = await api.getCases({ per_page: 20 })
+        const caseData = res.data || []
+        setCases(caseData)
+        if (caseData.length > 0) {
+          setSelectedCaseId(caseData[0].id)
+        }
+      } catch (err) {
+        console.error('Failed to load cases:', err)
+      }
+    }
+    loadCases()
+  }, [])
+
+  // Function to query status
+  const checkCurrentStatus = async (caseId: string) => {
+    try {
+      const res = await api.getPhotogrammetryStatus(caseId)
+      if (res && res.status) {
+        setStatus(res.status as any)
+        setJobDetails(res)
+        if (res.status === 'Completed') {
+          setPipelineStep(8)
+        } else if (res.status === 'Processing') {
+          setPipelineStep(4)
+          startPolling(caseId)
+        } else if (res.status === 'Failed') {
+          setPipelineStep(1)
+        }
+      }
+    } catch {
+      // 404 or no job found yet
+    }
+  }
+
+  // Polling function (every 3 seconds)
+  const startPolling = (caseId: string) => {
+    stopPolling()
+    pollTimerRef.current = setInterval(async () => {
+      try {
+        const res = await api.getPhotogrammetryStatus(caseId)
+        if (!res) return
+        setStatus(res.status as any)
+        setJobDetails(res)
+
+        const timeStr = new Date().toLocaleTimeString()
+
+        if (res.status === 'Processing') {
+          setPipelineStep(prev => (prev < 7 ? prev + 1 : prev))
+          setLogs(prev => [...prev, `[${timeStr}] Pipeline processing... (Status: ${res.status})`])
+        } else if (res.status === 'Completed') {
+          setPipelineStep(8)
+          setLogs(prev => [...prev, `[${timeStr}] Model Generated Successfully. Saved GLB & PLY.`])
+          stopPolling()
+        } else if (res.status === 'Failed') {
+          setPipelineStep(1)
+          setLogs(prev => [...prev, `[${timeStr}] Reconstruction Failed.`])
+          stopPolling()
+        }
+      } catch (err) {
+        console.error('Status polling error:', err)
+      }
+    }, 3000)
+  }
+
+  const stopPolling = () => {
+    if (pollTimerRef.current) {
+      clearInterval(pollTimerRef.current)
+      pollTimerRef.current = null
+    }
+  }
+
+  useEffect(() => {
+    return () => stopPolling()
+  }, [])
+
+  // 2. Fetch Evidence when selectedCaseId changes
+  useEffect(() => {
+    if (!selectedCaseId) return
+    async function loadEvidence() {
+      try {
+        const res = await api.getEvidence(selectedCaseId)
+        const evData = res.data || []
+        setEvidenceList(evData)
+        if (evData.length > 0) {
+          setSelectedEvidenceId(evData[0].id)
+        } else {
+          setSelectedEvidenceId('')
+        }
+        checkCurrentStatus(selectedCaseId)
+      } catch (err) {
+        console.error('Failed to load evidence:', err)
+      }
+    }
+    loadEvidence()
+  }, [selectedCaseId])
+
+  // Currently selected evidence item object
+  const currentEvidence = evidenceList.find(e => e.id === selectedEvidenceId)
+
+  // 3. Handle Start Reconstruction
+  const handleStartReconstruction = async () => {
+    if (!selectedCaseId) {
+      setErrorMsg('Please select a valid case.')
+      return
+    }
+    if (!currentEvidence) {
+      setErrorMsg('Please select an uploaded video evidence item.')
+      return
+    }
+    if (!currentEvidence.file_url) {
+      setErrorMsg('Selected evidence file URL is missing.')
+      return
+    }
+
+    setErrorMsg('')
+    setStatus('Processing')
+    setPipelineStep(1)
+    const timeStr = new Date().toLocaleTimeString()
+    setLogs([
+      `[${timeStr}] Triggering photogrammetry pipeline...`,
+      `[${timeStr}] Evidence ID: ${currentEvidence.id}`,
+      `[${timeStr}] File URL: ${currentEvidence.file_url}`
+    ])
+
+    try {
+      await api.triggerPhotogrammetry(selectedCaseId, currentEvidence.id, currentEvidence.file_url)
+      setLogs(prev => [...prev, `[${new Date().toLocaleTimeString()}] Pipeline triggered successfully. Starting polling...`])
+      startPolling(selectedCaseId)
+    } catch (err: any) {
+      const detail = err.response?.data?.detail || err.message || 'Trigger failed'
+      setStatus('Failed')
+      setErrorMsg(`Failed to trigger photogrammetry: ${detail}`)
+      setLogs(prev => [...prev, `[${new Date().toLocaleTimeString()}] Trigger error: ${detail}`])
+    }
+  }
+
+  // Get status color for pipeline step
+  const getStepStatus = (index: number) => {
+    const stepNum = index + 1
+    if (status === 'Failed' && stepNum === pipelineStep) return { bg: 'var(--red-bg)', color: 'var(--red)', border: 'var(--red)', label: 'Failed' }
+    if (stepNum < pipelineStep || (status === 'Completed' && stepNum === 8)) return { bg: 'var(--green-bg)', color: 'var(--green)', border: 'var(--green)', label: 'Completed' }
+    if (stepNum === pipelineStep && status === 'Processing') return { bg: 'var(--blue-bg)', color: 'var(--blue)', border: 'var(--blue)', label: 'Processing' }
+    return { bg: 'var(--bg4)', color: 'var(--text3)', border: 'var(--border)', label: 'Waiting' }
+  }
+
+  return (
+    <AppShell title="3D Scene Reconstruction">
+      {/* SECTION 1 — HEADER */}
+      <div style={{ marginBottom: '24px' }}>
+        <div style={{ display: 'flex', alignItems: 'center', justifyContent: 'space-between', marginBottom: '8px' }}>
+          <div>
+            <h1 style={{ fontSize: '22px', fontWeight: 600, color: 'var(--text)', marginBottom: '4px', display: 'flex', alignItems: 'center', gap: '8px' }}>
+              <span style={{ display: 'inline-flex', padding: '6px', borderRadius: 'var(--r)', background: 'var(--blue-bg)', color: 'var(--blue)' }}>
+                <svg width="20" height="20" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2">
+                  <polygon points="12 2 22 8.5 22 15.5 12 22 2 15.5 2 8.5 12 2" />
+                  <line x1="12" y1="22" x2="12" y2="12" />
+                  <polyline points="22 8.5 12 12 2 8.5" />
+                </svg>
+              </span>
+              3D Crime Scene Reconstruction
+            </h1>
+            <div style={{ fontSize: '13px', color: 'var(--text3)' }}>
+              Generate an interactive 3D reconstruction of a crime scene from uploaded video evidence using photogrammetry.
+            </div>
+          </div>
+          <Badge label={status} />
+        </div>
+      </div>
+
+      {errorMsg && (
+        <div style={{ marginBottom: '16px' }}>
+          <AlertBox type="error">{errorMsg}</AlertBox>
+        </div>
+      )}
+
+      {/* SECTION 2 — OVERVIEW */}
+      <div style={{ display: 'grid', gridTemplateColumns: 'repeat(auto-fit, minmax(220px, 1fr))', gap: '16px', marginBottom: '24px' }}>
+        <Card style={{ padding: '16px' }}>
+          <div style={{ display: 'flex', alignItems: 'center', justifyContent: 'space-between', marginBottom: '8px' }}>
+            <span style={{ fontSize: '11px', fontWeight: 600, color: 'var(--text3)', textTransform: 'uppercase', letterSpacing: '.5px' }}>
+              Reconstruction Status
+            </span>
+            <span style={{
+              color: status === 'Completed' ? 'var(--green)' : status === 'Processing' ? 'var(--blue)' : status === 'Failed' ? 'var(--red)' : 'var(--text3)'
+            }}>
+              <svg width="18" height="18" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2">
+                <circle cx="12" cy="12" r="10" />
+                <polyline points="12 6 12 12 16 14" />
+              </svg>
+            </span>
+          </div>
+          <div style={{ fontSize: '18px', fontWeight: 700, color: 'var(--text)', marginBottom: '4px' }}>
+            <Badge label={status} />
+          </div>
+          <div style={{ fontSize: '11px', color: 'var(--text3)' }}>
+            {status === 'Completed' ? 'Finished successfully' : status === 'Processing' ? 'Pipeline processing' : status === 'Failed' ? 'Reconstruction failed' : 'Awaiting evidence selection'}
+          </div>
+        </Card>
+
+        <Card style={{ padding: '16px' }}>
+          <div style={{ display: 'flex', alignItems: 'center', justifyContent: 'space-between', marginBottom: '8px' }}>
+            <span style={{ fontSize: '11px', fontWeight: 600, color: 'var(--text3)', textTransform: 'uppercase', letterSpacing: '.5px' }}>
+              Selected Frames
+            </span>
+            <span style={{ color: 'var(--blue)' }}>
+              <svg width="18" height="18" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2">
+                <rect x="3" y="3" width="18" height="18" rx="2" />
+                <circle cx="8.5" cy="8.5" r="1.5" />
+                <polyline points="21 15 16 10 5 21" />
+              </svg>
+            </span>
+          </div>
+          <div style={{ fontSize: '22px', fontWeight: 700, color: 'var(--text)', marginBottom: '4px' }}>
+            {jobDetails.frame_count ? jobDetails.frame_count : (status === 'Waiting' ? '0' : 'Extracting...')}
+          </div>
+          <div style={{ fontSize: '11px', color: 'var(--text3)' }}>
+            {status === 'Waiting' ? 'No frames sampled' : 'Keyframes sampled'}
+          </div>
+        </Card>
+
+        <Card style={{ padding: '16px' }}>
+          <div style={{ display: 'flex', alignItems: 'center', justifyContent: 'space-between', marginBottom: '8px' }}>
+            <span style={{ fontSize: '11px', fontWeight: 600, color: 'var(--text3)', textTransform: 'uppercase', letterSpacing: '.5px' }}>
+              Point Cloud
+            </span>
+            <span style={{ color: status === 'Completed' ? 'var(--green)' : 'var(--text3)' }}>
+              <svg width="18" height="18" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2">
+                <path d="M18 10h-1.26A8 8 0 1 0 9 20h9a5 5 0 0 0 0-10z" />
+              </svg>
+            </span>
+          </div>
+          <div style={{ fontSize: '18px', fontWeight: 700, color: 'var(--text)', marginBottom: '4px' }}>
+            {status === 'Completed' ? (jobDetails.point_cloud_url ? 'Available (.ply)' : 'Generated') : 'Not Generated'}
+          </div>
+          <div style={{ fontSize: '11px', color: 'var(--text3)' }}>
+            {status === 'Completed' ? 'Point cloud created' : 'Awaiting dense reconstruction'}
+          </div>
+        </Card>
+
+        <Card style={{ padding: '16px' }}>
+          <div style={{ display: 'flex', alignItems: 'center', justifyContent: 'space-between', marginBottom: '8px' }}>
+            <span style={{ fontSize: '11px', fontWeight: 600, color: 'var(--text3)', textTransform: 'uppercase', letterSpacing: '.5px' }}>
+              3D Model
+            </span>
+            <span style={{ color: status === 'Completed' ? 'var(--green)' : 'var(--text3)' }}>
+              <svg width="18" height="18" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2">
+                <path d="M21 16V8a2 2 0 0 0-1-1.73l-7-4a2 2 0 0 0-2 0l-7 4A2 2 0 0 0 3 8v8a2 2 0 0 0 1 1.73l7 4a2 2 0 0 0 2 0l7-4A2 2 0 0 0 21 16z" />
+              </svg>
+            </span>
+          </div>
+          <div style={{ fontSize: '18px', fontWeight: 700, color: 'var(--text)', marginBottom: '4px' }}>
+            {status === 'Completed' ? (jobDetails.model_url ? 'Available (.glb)' : 'Generated') : 'Not Available'}
+          </div>
+          <div style={{ fontSize: '11px', color: 'var(--text3)' }}>
+            {status === 'Completed' ? 'Textured Poisson mesh' : 'Awaiting mesh generation'}
+          </div>
+        </Card>
+      </div>
+
+      {/* SECTION 3 — SELECT EVIDENCE */}
+      <Card style={{ marginBottom: '24px' }}>
+        <CardTitle>Select Evidence</CardTitle>
+        <div style={{ display: 'grid', gridTemplateColumns: '1fr 1fr', gap: '16px', marginBottom: '16px' }}>
+          <div>
+            <label style={{ fontSize: '11px', color: 'var(--text3)', display: 'block', marginBottom: '4px', textTransform: 'uppercase', letterSpacing: '.4px' }}>
+              Select Case
+            </label>
+            <select
+              value={selectedCaseId}
+              onChange={(e) => setSelectedCaseId(e.target.value)}
+              style={{
+                width: '100%', background: 'var(--bg3)', border: '1px solid var(--border)',
+                borderRadius: 'var(--r)', padding: '8px 12px', fontSize: '13px', color: 'var(--text)', outline: 'none'
+              }}
+            >
+              {cases.length === 0 ? (
+                <option value="">No cases found</option>
+              ) : (
+                cases.map(c => <option key={c.id} value={c.id}>{c.case_number} — {c.title}</option>)
+              )}
+            </select>
+          </div>
+
+          <div>
+            <label style={{ fontSize: '11px', color: 'var(--text3)', display: 'block', marginBottom: '4px', textTransform: 'uppercase', letterSpacing: '.4px' }}>
+              Select Uploaded Video Evidence
+            </label>
+            <select
+              value={selectedEvidenceId}
+              onChange={(e) => setSelectedEvidenceId(e.target.value)}
+              style={{
+                width: '100%', background: 'var(--bg3)', border: '1px solid var(--border)',
+                borderRadius: 'var(--r)', padding: '8px 12px', fontSize: '13px', color: 'var(--text)', outline: 'none'
+              }}
+            >
+              {evidenceList.length === 0 ? (
+                <option value="">No evidence found for selected case</option>
+              ) : (
+                evidenceList.map(ev => (
+                  <option key={ev.id} value={ev.id}>
+                    {ev.file_name || ev.description || ev.id} ({ev.evidence_type})
+                  </option>
+                ))
+              )}
+            </select>
+          </div>
+        </div>
+
+        {/* Evidence Metadata */}
+        {currentEvidence && (
+          <div style={{ background: 'var(--bg3)', border: '1px solid var(--border)', borderRadius: 'var(--r)', padding: '14px', marginBottom: '20px' }}>
+            <div style={{ fontSize: '12px', fontWeight: 600, color: 'var(--blue)', marginBottom: '10px', display: 'flex', alignItems: 'center', gap: '6px' }}>
+              <svg width="14" height="14" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2">
+                <circle cx="12" cy="12" r="10" />
+                <line x1="12" y1="16" x2="12" y2="12" />
+                <line x1="12" y1="8" x2="12.01" y2="8" />
+              </svg>
+              Selected Evidence Details
+            </div>
+            <div style={{ display: 'grid', gridTemplateColumns: 'repeat(auto-fit, minmax(200px, 1fr))', gap: '12px' }}>
+              <div>
+                <span style={{ fontSize: '10px', color: 'var(--text3)', display: 'block', textTransform: 'uppercase' }}>Evidence Name</span>
+                <span style={{ fontSize: '12px', fontWeight: 500, color: 'var(--text)', fontFamily: 'var(--mono)' }}>
+                  {currentEvidence.file_name || 'N/A'}
+                </span>
+              </div>
+              <div>
+                <span style={{ fontSize: '10px', color: 'var(--text3)', display: 'block', textTransform: 'uppercase' }}>Evidence Type</span>
+                <span style={{ fontSize: '12px', fontWeight: 500, color: 'var(--text)' }}>{currentEvidence.evidence_type}</span>
+              </div>
+              <div>
+                <span style={{ fontSize: '10px', color: 'var(--text3)', display: 'block', textTransform: 'uppercase' }}>Status</span>
+                <span style={{ fontSize: '12px', fontWeight: 500, color: 'var(--text)' }}>{currentEvidence.status}</span>
+              </div>
+              <div>
+                <span style={{ fontSize: '10px', color: 'var(--text3)', display: 'block', textTransform: 'uppercase' }}>File Size</span>
+                <span style={{ fontSize: '12px', fontWeight: 500, color: 'var(--text)' }}>
+                  {currentEvidence.file_size ? `${(currentEvidence.file_size / (1024 * 1024)).toFixed(1)} MB` : 'N/A'}
+                </span>
+              </div>
+            </div>
+          </div>
+        )}
+
+        {/* Generate Button */}
+        <div style={{ textAlign: 'center' }}>
+          <Btn
+            variant="primary"
+            size="md"
+            full
+            loading={status === 'Processing'}
+            disabled={status === 'Processing' || !currentEvidence}
+            onClick={handleStartReconstruction}
+            style={{ padding: '12px 20px', fontSize: '14px', fontWeight: 600, justifyContent: 'center' }}
+          >
+            <svg width="18" height="18" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2">
+              <polygon points="5 3 19 12 5 21 5 3" />
+            </svg>
+            {status === 'Processing' ? 'Processing COLMAP Pipeline...' : 'Generate 3D Reconstruction'}
+          </Btn>
+          <div style={{ fontSize: '11px', color: 'var(--text3)', marginTop: '8px' }}>
+            Estimated Processing Time: Approx. 2–5 minutes
+          </div>
+        </div>
+      </Card>
+
+      {/* SECTION 4 — RECONSTRUCTION PIPELINE */}
+      <Card style={{ marginBottom: '24px' }}>
+        <CardTitle>Reconstruction Pipeline</CardTitle>
+        <div style={{ overflowX: 'auto', paddingBottom: '8px' }}>
+          <div style={{ display: 'flex', alignItems: 'center', minWidth: '850px', justifyContent: 'space-between', position: 'relative' }}>
+            {pipelineSteps.map((step, idx) => {
+              const st = getStepStatus(idx)
+              return (
+                <React.Fragment key={idx}>
+                  <div style={{ display: 'flex', flexDirection: 'column', alignItems: 'center', textAlign: 'center', flex: 1, zIndex: 2 }}>
+                    <div style={{
+                      width: '36px', height: '36px', borderRadius: '50%',
+                      background: st.bg, border: `2px solid ${st.border}`, color: st.color,
+                      display: 'flex', alignItems: 'center', justifyContent: 'center',
+                      fontSize: '12px', fontWeight: 700, marginBottom: '8px',
+                      boxShadow: st.label === 'Processing' ? '0 0 12px var(--blue)' : 'none',
+                      transition: 'all .3s'
+                    }}>
+                      {idx + 1}
+                    </div>
+                    <div style={{ fontSize: '11px', fontWeight: 600, color: 'var(--text)', marginBottom: '2px' }}>{step.title}</div>
+                    <div style={{ fontSize: '9px', color: 'var(--text3)' }}>{step.desc}</div>
+                    <span style={{ fontSize: '9px', fontWeight: 600, color: st.color, marginTop: '4px' }}>{st.label}</span>
+                  </div>
+                  {idx < pipelineSteps.length - 1 && (
+                    <div style={{
+                      height: '2px', flex: 0.8,
+                      background: (idx + 1) < pipelineStep ? 'var(--green)' : (idx + 1) === pipelineStep ? 'var(--blue)' : 'var(--border)',
+                      marginTop: '-24px', transition: 'background .3s'
+                    }} />
+                  )}
+                </React.Fragment>
+              )
+            })}
+          </div>
+        </div>
+      </Card>
+
+      {/* SECTION 5 — RESULTS */}
+      <div style={{ display: 'grid', gridTemplateColumns: '1fr 2.2fr', gap: '20px', marginBottom: '24px' }}>
+        {/* LEFT COLUMN: Reconstruction Metrics */}
+        <Card style={{ display: 'flex', flexDirection: 'column', justifyContent: 'space-between' }}>
+          <div>
+            <CardTitle>Reconstruction Metrics</CardTitle>
+            <InfoRow label="Status" value={<Badge label={status} />} />
+            <InfoRow label="Frame Count" value={jobDetails.frame_count ? `${jobDetails.frame_count} keyframes` : (status === 'Waiting' ? '0' : 'Extracting...')} />
+            <InfoRow label="Created Time" value={jobDetails.created_at ? new Date(jobDetails.created_at).toLocaleTimeString() : 'N/A'} />
+            <InfoRow label="Completed Time" value={jobDetails.completed_at ? new Date(jobDetails.completed_at).toLocaleTimeString() : 'N/A'} />
+            <InfoRow label="Point Cloud URL" value={jobDetails.point_cloud_url ? 'Available' : 'N/A'} mono />
+            <InfoRow label="Model Format" value="glTF 2.0 / GLB & PLY" />
+          </div>
+
+          <div style={{ display: 'flex', flexDirection: 'column', gap: '10px', marginTop: '24px' }}>
+            <Btn
+              variant="green"
+              size="md"
+              full
+              disabled={status !== 'Completed' || !jobDetails.model_url}
+              onClick={() => jobDetails.model_url && window.open(jobDetails.model_url, '_blank')}
+            >
+              <svg width="15" height="15" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2">
+                <path d="M21 15v4a2 2 0 0 1-2 2H5a2 2 0 0 1-2-2v-4" />
+                <polyline points="7 10 12 15 17 10" />
+                <line x1="12" y1="15" x2="12" y2="3" />
+              </svg>
+              Download GLB
+            </Btn>
+            <Btn
+              variant="default"
+              size="md"
+              full
+              disabled={status !== 'Completed' || !jobDetails.point_cloud_url}
+              onClick={() => jobDetails.point_cloud_url && window.open(jobDetails.point_cloud_url, '_blank')}
+            >
+              <svg width="15" height="15" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2">
+                <path d="M21 15v4a2 2 0 0 1-2 2H5a2 2 0 0 1-2-2v-4" />
+                <polyline points="7 10 12 15 17 10" />
+                <line x1="12" y1="15" x2="12" y2="3" />
+              </svg>
+              Download PLY
+            </Btn>
+          </div>
+        </Card>
+
+        {/* RIGHT COLUMN: Large 3D Model Viewer */}
+        <Card style={{ display: 'flex', flexDirection: 'column', minHeight: '440px' }}>
+          <CardHeader>
+            <CardTitle>3D Model Viewer</CardTitle>
+            <div style={{ display: 'flex', gap: '6px' }}>
+              <Btn size="xs" variant={viewMode === 'orbit' ? 'primary' : 'default'} onClick={() => setViewMode('orbit')}>Orbit</Btn>
+              <Btn size="xs" variant={viewMode === 'wireframe' ? 'primary' : 'default'} onClick={() => setViewMode('wireframe')}>Wireframe</Btn>
+              <Btn size="xs" variant={viewMode === 'pointcloud' ? 'primary' : 'default'} onClick={() => setViewMode('pointcloud')}>Points</Btn>
+              <Btn size="xs" variant="default" onClick={() => setRotationAngle(35)}>Reset</Btn>
+            </div>
+          </CardHeader>
+
+          {/* Viewport Canvas Area */}
+          <div style={{
+            flex: 1, borderRadius: 'var(--r)',
+            background: 'radial-gradient(circle at center, var(--bg3) 0%, var(--bg2) 100%)',
+            border: '1px dashed var(--border2)', position: 'relative',
+            display: 'flex', flexDirection: 'column', alignItems: 'center', justifyContent: 'center',
+            overflow: 'hidden', padding: '24px'
+          }}>
+            {/* Engineering Grid Pattern */}
+            <div style={{
+              position: 'absolute', inset: 0, opacity: 0.15, pointerEvents: 'none',
+              backgroundImage: 'linear-gradient(var(--text3) 1px, transparent 1px), linear-gradient(90deg, var(--text3) 1px, transparent 1px)',
+              backgroundSize: '24px 24px'
+            }} />
+
+            {status !== 'Completed' ? (
+              <div style={{ textAlign: 'center', zIndex: 2, padding: '30px' }}>
+                <div style={{
+                  width: '60px', height: '60px', borderRadius: '50%', background: 'var(--bg4)',
+                  border: '1px solid var(--border)', display: 'inline-flex', alignItems: 'center', justifyContent: 'center',
+                  color: status === 'Failed' ? 'var(--red)' : status === 'Processing' ? 'var(--blue)' : 'var(--text3)', marginBottom: '16px'
+                }}>
+                  <svg width="32" height="32" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="1.8">
+                    <polygon points="12 2 22 8.5 22 15.5 12 22 2 15.5 2 8.5 12 2" />
+                    <line x1="12" y1="22" x2="12" y2="12" />
+                    <polyline points="22 8.5 12 12 2 8.5" />
+                  </svg>
+                </div>
+                <div style={{ fontSize: '15px', fontWeight: 600, color: 'var(--text)', marginBottom: '6px' }}>
+                  {status === 'Failed' ? 'Reconstruction Failed' : status === 'Processing' ? 'Reconstruction In Progress...' : '3D Model Viewer'}
+                </div>
+                <div style={{ fontSize: '13px', color: 'var(--text3)', maxWidth: '340px' }}>
+                  {status === 'Failed' ? 'Check backend pipeline logs for error details.' : status === 'Processing' ? 'Processing frames and generating point cloud...' : '3D reconstruction will appear here after processing.'}
+                </div>
+              </div>
+            ) : (
+              <div style={{ width: '100%', height: '100%', display: 'flex', flexDirection: 'column', alignItems: 'center', justifyContent: 'center', position: 'relative', zIndex: 2 }}>
+                {/* 3D Mesh Graphic / Model View */}
+                <div
+                  onClick={() => setRotationAngle(prev => (prev + 45) % 360)}
+                  style={{
+                    width: '240px', height: '210px', border: viewMode === 'wireframe' ? '1px dashed var(--blue)' : '1px solid var(--border2)',
+                    borderRadius: '12px', background: 'rgba(0, 112, 243, 0.05)',
+                    display: 'flex', alignItems: 'center', justifyContent: 'center',
+                    transform: `perspective(600px) rotateY(${rotationAngle}deg) rotateX(15deg)`,
+                    transition: 'transform 0.5s cubic-bezier(0.2, 0.8, 0.2, 1)', cursor: 'pointer',
+                    boxShadow: '0 12px 36px rgba(0,0,0,0.3)', position: 'relative'
+                  }}
+                >
+                  <div style={{ textAlign: 'center' }}>
+                    <svg width="72" height="72" viewBox="0 0 24 24" fill="none" stroke="var(--green)" strokeWidth="1.2">
+                      <polygon points="12 2 22 8.5 22 15.5 12 22 2 15.5 2 8.5 12 2" />
+                      <line x1="12" y1="22" x2="12" y2="12" />
+                      <polyline points="22 8.5 12 12 2 8.5" />
+                    </svg>
+                    <div style={{ fontSize: '11px', fontFamily: 'var(--mono)', color: 'var(--green)', marginTop: '6px' }}>
+                      Model Generated Successfully
+                    </div>
+                  </div>
+                </div>
+
+                <div style={{ position: 'absolute', bottom: '12px', left: '12px', fontSize: '10px', fontFamily: 'var(--mono)', color: 'var(--text3)' }}>
+                  Click viewport to rotate | Model URL: {jobDetails.model_url || 'Generated'}
+                </div>
+              </div>
+            )}
+          </div>
+        </Card>
+      </div>
+
+      {/* SECTION 6 — PROCESSING LOG (Collapsible, Default: Collapsed) */}
+      <Card>
+        <div
+          onClick={() => setIsLogOpen(!isLogOpen)}
+          style={{ display: 'flex', alignItems: 'center', justifyContent: 'space-between', cursor: 'pointer' }}
+        >
+          <div style={{ display: 'flex', alignItems: 'center', gap: '8px' }}>
+            <span style={{ fontSize: '11px', fontWeight: 600, color: 'var(--text3)', textTransform: 'uppercase', letterSpacing: '.6px' }}>
+              Processing Log
+            </span>
+            <span style={{ fontSize: '10px', fontFamily: 'var(--mono)', color: 'var(--text3)' }}>
+              ({logs.length} entries)
+            </span>
+          </div>
+          <span style={{ color: 'var(--text3)', display: 'flex', alignItems: 'center', gap: '4px', fontSize: '11px' }}>
+            {isLogOpen ? 'Hide Log' : 'Show Log'}
+            <svg width="16" height="16" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2" style={{ transform: isLogOpen ? 'rotate(180deg)' : 'none', transition: 'transform .2s' }}>
+              <polyline points="6 9 12 15 18 9" />
+            </svg>
+          </span>
+        </div>
+
+        {isLogOpen && (
+          <div style={{
+            marginTop: '14px', background: 'var(--bg3)', border: '1px solid var(--border)', borderRadius: 'var(--r)',
+            padding: '14px', fontFamily: 'var(--mono)', fontSize: '11px', lineHeight: '1.7',
+            maxHeight: '220px', overflowY: 'auto', color: 'var(--text2)'
+          }}>
+            {logs.length === 0 ? (
+              <div style={{ color: 'var(--text3)' }}>No log entries yet. Click "Generate 3D Reconstruction" to start.</div>
+            ) : (
+              logs.map((log, i) => (
+                <div key={i} style={{ color: log.includes('Successfully') || log.includes('Completed') ? 'var(--green)' : log.includes('Triggering') || log.includes('Processing') ? 'var(--blue)' : log.includes('Failed') || log.includes('error') ? 'var(--red)' : 'var(--text2)' }}>
+                  {log}
+                </div>
+              ))
+            )}
+          </div>
+        )}
+      </Card>
+    </AppShell>
+  )
+}
+
 // ── AUDIT LOG ─────────────────────────────────────────────────────────────
 function StatusBadge({ status }: { status: string }) {
   const isWarning = status === 'Warning'
