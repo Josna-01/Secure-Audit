@@ -6,11 +6,14 @@ import threading
 import datetime
 import requests
 from dotenv import load_dotenv
-from fastapi import FastAPI, HTTPException
+from fastapi import FastAPI, HTTPException, Depends
 from fastapi.middleware.cors import CORSMiddleware
 from pydantic import BaseModel
 from supabase import create_client, Client
 import uvicorn
+from sqlalchemy.orm import Session
+from db import SessionLocal, get_db
+from models import PhotogrammetryModel
 
 # Import local service classes
 from services.frame_extractor import FrameExtractor
@@ -159,24 +162,38 @@ def run_pipeline_background(job_id: str, case_id: str, file_url: str):
             glb_url = glb_url[:-1]
 
         # 7. Update Job Status to Completed in Database
-        completed_at = datetime.datetime.now(datetime.timezone.utc).isoformat()
-        update_data = {
-            "status": "Completed",
-            "model_url": glb_url,
-            "point_cloud_url": ply_url,
-            "frame_count": len(selected_paths),
-            "completed_at": completed_at
-        }
-        supabase.table("photogrammetry_models").update(update_data).eq("id", job_id).execute()
-        logger.info(f"[JOB {job_id}] Pipeline execution completed successfully. Database record updated.")
+        completed_at = datetime.datetime.now(datetime.timezone.utc)
+        db = SessionLocal()
+        try:
+            job = db.query(PhotogrammetryModel).filter(PhotogrammetryModel.id == uuid.UUID(job_id)).first()
+            if job:
+                job.status = "Completed"
+                job.model_url = glb_url
+                job.point_cloud_url = ply_url
+                job.frame_count = len(selected_paths)
+                job.completed_at = completed_at
+                db.commit()
+            logger.info(f"[JOB {job_id}] Pipeline execution completed successfully. Database record updated.")
+        except Exception as db_err:
+            db.rollback()
+            logger.error(f"[JOB {job_id}] Failed to update job database record status: {db_err}")
+        finally:
+            db.close()
 
     except Exception as e:
         logger.exception(f"[JOB {job_id}] Pipeline execution failed.")
+        db = SessionLocal()
         try:
-            supabase.table("photogrammetry_models").update({"status": "Failed"}).eq("id", job_id).execute()
+            job = db.query(PhotogrammetryModel).filter(PhotogrammetryModel.id == uuid.UUID(job_id)).first()
+            if job:
+                job.status = "Failed"
+                db.commit()
             logger.info(f"[JOB {job_id}] Job database record marked as Failed.")
         except Exception as db_err:
+            db.rollback()
             logger.error(f"[JOB {job_id}] Failed to update job database record status: {db_err}")
+        finally:
+            db.close()
 
     finally:
         # Cleanup temporary workspace
@@ -198,37 +215,32 @@ def read_root():
 
 
 @app.post("/trigger/{case_id}")
-def trigger_reconstruction(case_id: str, payload: TriggerRequest):
+def trigger_reconstruction(case_id: str, payload: TriggerRequest, db: Session = Depends(get_db)):
     """
     Triggers the photogrammetry pipeline for a video evidence item.
     Creates a database job log and spawns a background processing thread.
     """
     try:
         # Insert job into DB with default status 'Processing'
-        insert_data = {
-            "case_id": case_id,
-            "evidence_id": payload.evidence_id,
-            "status": "Processing"
-        }
-        res = supabase.table("photogrammetry_models").insert(insert_data).execute()
-        if not res.data:
-            raise HTTPException(
-                status_code=500,
-                detail="Failed to initialize photogrammetry model record in Supabase."
-            )
-
-        job_record = res.data[0]
-        job_id = job_record["id"]
+        db_job = PhotogrammetryModel(
+            id=uuid.uuid4(),
+            case_id=uuid.UUID(case_id),
+            evidence_id=uuid.UUID(payload.evidence_id),
+            status="Processing"
+        )
+        db.add(db_job)
+        db.commit()
+        db.refresh(db_job)
 
         # Spawn pipeline processing thread
         thread = threading.Thread(
             target=run_pipeline_background,
-            args=(job_id, case_id, payload.file_url)
+            args=(str(db_job.id), case_id, payload.file_url)
         )
         thread.start()
 
         return {
-            "job_id": job_id,
+            "job_id": str(db_job.id),
             "status": "Processing"
         }
 
@@ -238,32 +250,29 @@ def trigger_reconstruction(case_id: str, payload: TriggerRequest):
 
 
 @app.get("/status/{case_id}")
-def get_reconstruction_status(case_id: str):
+def get_reconstruction_status(case_id: str, db: Session = Depends(get_db)):
     """
     Queries and returns the latest photogrammetry job status for the given case_id.
     """
     try:
-        res = supabase.table("photogrammetry_models") \
-            .select("*") \
-            .eq("case_id", case_id) \
-            .order("created_at", desc=True) \
-            .limit(1) \
-            .execute()
+        row = db.query(PhotogrammetryModel) \
+            .filter(PhotogrammetryModel.case_id == uuid.UUID(case_id)) \
+            .order_by(PhotogrammetryModel.created_at.desc()) \
+            .first()
 
-        if not res.data:
+        if not row:
             raise HTTPException(
                 status_code=404,
                 detail="No photogrammetry reconstruction jobs found for this case."
             )
 
-        row = res.data[0]
         return {
-            "status": row.get("status"),
-            "model_url": row.get("model_url"),
-            "point_cloud_url": row.get("point_cloud_url"),
-            "frame_count": row.get("frame_count"),
-            "created_at": row.get("created_at"),
-            "completed_at": row.get("completed_at")
+            "status": row.status,
+            "model_url": row.model_url,
+            "point_cloud_url": row.point_cloud_url,
+            "frame_count": row.frame_count,
+            "created_at": row.created_at.isoformat().replace("+00:00", "Z") if row.created_at else None,
+            "completed_at": row.completed_at.isoformat().replace("+00:00", "Z") if row.completed_at else None
         }
 
     except HTTPException:

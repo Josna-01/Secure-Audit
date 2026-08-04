@@ -54,14 +54,16 @@ class ColmapRunner:
                     "colmap", "feature_extractor",
                     "--database_path", db_path,
                     "--image_path", image_dir,
-                    "--ImageReader.single_camera", "1"
+                    "--ImageReader.single_camera", "1",
+                    "--FeatureExtraction.use_gpu", "0"
                 ]
             },
             {
                 "name": "exhaustive_matcher",
                 "args": [
                     "colmap", "exhaustive_matcher",
-                    "--database_path", db_path
+                    "--database_path", db_path,
+                    "--FeatureMatching.use_gpu", "0"
                 ]
             },
             {
@@ -118,6 +120,18 @@ class ColmapRunner:
                 if result.stdout:
                     logger.debug(f"Step '{name}' stdout:\n{result.stdout[-1000:]}") # show trailing stdout
             except subprocess.CalledProcessError as e:
+                if name in ("patch_match_stereo", "stereo_fusion"):
+                    logger.warning(f"Dense stereo step '{name}' requires CUDA GPU. Falling back to sparse point cloud model conversion...")
+                    conv_args = [
+                        "colmap", "model_converter",
+                        "--input_path", sparse_model_dir,
+                        "--output_path", fused_ply_path,
+                        "--output_type", "PLY"
+                    ]
+                    conv_res = subprocess.run(conv_args, capture_output=True, text=True)
+                    if conv_res.returncode == 0 and os.path.exists(fused_ply_path):
+                        logger.info("Successfully exported 3D point cloud model fallback via model_converter.")
+                        break
                 logger.error(f"Error in COLMAP step '{name}' (exit code {e.returncode})")
                 if e.stderr:
                     logger.error(f"Step '{name}' stderr:\n{e.stderr}")

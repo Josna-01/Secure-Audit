@@ -94,12 +94,15 @@ export interface Evidence {
   case_title?: string
   file_name: string
   file_type: EvidenceType
+  evidence_type?: string
   file_size: number
-  file_path: string
+  file_path?: string
+  file_url?: string
   sha256_hash: string
   status: EvidenceStatus
   uploaded_by: string
   uploaded_at: string
+  created_at?: string
   description?: string
   language?: string
 }
