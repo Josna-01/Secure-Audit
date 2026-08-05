@@ -8,6 +8,19 @@ import type { Evidence, Case } from '../types'
 import { format } from 'date-fns'
 import { useAuth } from '../context/AuthContext'
 import axios from 'axios'
+import { Canvas } from '@react-three/fiber'
+import { useGLTF, OrbitControls, Stage, Html } from '@react-three/drei'
+
+function ModelViewer({ url }: { url: string }) {
+  const { scene } = useGLTF(url)
+  return <primitive object={scene} />
+}
+
+class ErrorBoundary extends React.Component<{ fallback: React.ReactNode, children: React.ReactNode }, { hasError: boolean }> {
+  constructor(props: any) { super(props); this.state = { hasError: false }; }
+  static getDerivedStateFromError() { return { hasError: true }; }
+  render() { return this.state.hasError ? this.props.fallback : this.props.children; }
+}
 
 // ── EVIDENCE ──────────────────────────────────────────────────────────────
 export function EvidencePage() {
@@ -1086,33 +1099,27 @@ export function Photo3DPage() {
                 </div>
               </div>
             ) : (
-              <div style={{ width: '100%', height: '100%', display: 'flex', flexDirection: 'column', alignItems: 'center', justifyContent: 'center', position: 'relative', zIndex: 2 }}>
-                {/* 3D Mesh Graphic / Model View */}
-                <div
-                  onClick={() => setRotationAngle(prev => (prev + 45) % 360)}
-                  style={{
-                    width: '240px', height: '210px', border: viewMode === 'wireframe' ? '1px dashed var(--blue)' : '1px solid var(--border2)',
-                    borderRadius: '12px', background: 'rgba(0, 112, 243, 0.05)',
-                    display: 'flex', alignItems: 'center', justifyContent: 'center',
-                    transform: `perspective(600px) rotateY(${rotationAngle}deg) rotateX(15deg)`,
-                    transition: 'transform 0.5s cubic-bezier(0.2, 0.8, 0.2, 1)', cursor: 'pointer',
-                    boxShadow: '0 12px 36px rgba(0,0,0,0.3)', position: 'relative'
-                  }}
-                >
-                  <div style={{ textAlign: 'center' }}>
-                    <svg width="72" height="72" viewBox="0 0 24 24" fill="none" stroke="var(--green)" strokeWidth="1.2">
-                      <polygon points="12 2 22 8.5 22 15.5 12 22 2 15.5 2 8.5 12 2" />
-                      <line x1="12" y1="22" x2="12" y2="12" />
-                      <polyline points="22 8.5 12 12 2 8.5" />
-                    </svg>
-                    <div style={{ fontSize: '11px', fontFamily: 'var(--mono)', color: 'var(--green)', marginTop: '6px' }}>
-                      Model Generated Successfully
+              <div style={{ width: '100%', height: '100%', display: 'flex', flexDirection: 'column', position: 'relative', zIndex: 2 }}>
+                {/* Actual 3D Model View */}
+                <div style={{ width: '100%', height: '100%', minHeight: '400px', cursor: 'grab', background: 'var(--bg3)', borderRadius: '12px', border: '1px solid var(--border)' }}>
+                  <ErrorBoundary fallback={
+                    <div style={{ width: '100%', height: '100%', display: 'flex', alignItems: 'center', justifyContent: 'center', color: 'var(--red)' }}>
+                      Failed to load 3D model.
                     </div>
-                  </div>
+                  }>
+                    <Canvas>
+                      <React.Suspense fallback={<Html center><div style={{ color: 'var(--text)', fontFamily: 'var(--mono)', fontSize: '12px', whiteSpace: 'nowrap' }}>Loading 3D Model...</div></Html>}>
+                        <Stage environment="city" intensity={0.6}>
+                          {jobDetails.model_url && <ModelViewer url={jobDetails.model_url} />}
+                        </Stage>
+                      </React.Suspense>
+                      <OrbitControls makeDefault />
+                    </Canvas>
+                  </ErrorBoundary>
                 </div>
 
-                <div style={{ position: 'absolute', bottom: '12px', left: '12px', fontSize: '10px', fontFamily: 'var(--mono)', color: 'var(--text3)' }}>
-                  Click viewport to rotate | Model URL: {jobDetails.model_url || 'Generated'}
+                <div style={{ position: 'absolute', bottom: '12px', left: '12px', fontSize: '10px', fontFamily: 'var(--mono)', color: 'var(--text3)', background: 'var(--bg)', padding: '4px 8px', borderRadius: '4px', border: '1px solid var(--border)' }}>
+                  Left-click to orbit | Scroll to zoom | Right-click to pan
                 </div>
               </div>
             )}
