@@ -8,6 +8,17 @@ class User(Base):
     __tablename__ = "users"
 
     id = Column(UUID(as_uuid=True), primary_key=True)
+    email = Column(String, nullable=False, unique=True)
+    full_name = Column(String, nullable=False)
+    role = Column(String, nullable=False)
+    department = Column(String, nullable=True)
+    badge_number = Column(String, nullable=True)
+    clearance_level = Column(Integer, server_default="1", default=1)
+    is_active = Column(Boolean, server_default="true", default=True)
+    created_at = Column(DateTime(timezone=True), nullable=False, server_default=func.now())
+    can_create_case = Column(Boolean, server_default="true", default=True)
+    last_login = Column(DateTime(timezone=True), nullable=True)
+
 
 
 class Case(Base):

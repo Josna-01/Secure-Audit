@@ -159,7 +159,19 @@ class ApiService {
 
   // ── OCR ─────────────────────────────────────────────────────────────────
   async runOCR(evidenceId: string, language?: string) {
-    const { data } = await this.client.post<ApiResponse<{ extracted_text: string; translated_text?: string; detected_language: string }>>('/ai/ocr', { evidence_id: evidenceId, language })
+    const { data } = await this.client.post<ApiResponse<{
+      success: boolean;
+      evidence_id: string;
+      language: string;
+      confidence: number;
+      text: string;
+      pages?: { page_number: number; text: string; confidence: number; language: string }[];
+    }>>(`/ai/ocr/${evidenceId}`, { language })
+    return data
+  }
+
+  async searchOCR(q: string) {
+    const { data } = await this.client.get<ApiResponse<any[]>>('/ocr/search', { params: { q } })
     return data
   }
 

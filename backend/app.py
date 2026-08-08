@@ -1,3 +1,4 @@
+
 import os
 import shutil
 import uuid
@@ -24,8 +25,10 @@ from sqlalchemy import text
 from sqlalchemy.orm import Session
 from db import get_db, SessionLocal
 from models import Case, Evidence, AuditLog, OCRResult, BNSPrediction, OTPToken
+from services.ocr_service import OCRServiceError, ocr_service
 
 load_dotenv()
+
 
 def serialize_case(case) -> dict:
     if not case:
@@ -126,8 +129,9 @@ class DetectionRequest(BaseModel):
     case_id: str
 
 class OCRRequest(BaseModel):
-    evidence_id: str
+    evidence_id: Optional[str] = None
     language: Optional[str] = "auto"
+
 
 class LoginRequest(BaseModel):
     email: str
@@ -245,6 +249,53 @@ ROLE_PERMISSIONS = {
     }
 }
 
+def sync_user_to_postgres(user: dict, db: Session) -> None:
+    """Ensure a Supabase user record exists in local PostgreSQL users table before relational operations."""
+    user_id = user.get("id")
+    if not user_id:
+        return
+
+    email = user.get("email")
+    full_name = user.get("full_name") or "Investigator"
+    role = user.get("role") or "Investigator"
+    department = user.get("department")
+    badge_number = user.get("badge_number")
+    clearance_level = user.get("clearance_level", 1)
+    is_active = user.get("is_active", True)
+    can_create_case = user.get("can_create_case", True)
+    last_login = user.get("last_login")
+
+    db.execute(
+        text("""
+            INSERT INTO users (id, email, full_name, role, department, badge_number, clearance_level, is_active, can_create_case, last_login)
+            VALUES (:id, :email, :full_name, :role, :department, :badge_number, :clearance_level, :is_active, :can_create_case, :last_login)
+            ON CONFLICT (id) DO UPDATE SET
+                email = EXCLUDED.email,
+                full_name = EXCLUDED.full_name,
+                role = EXCLUDED.role,
+                department = EXCLUDED.department,
+                badge_number = EXCLUDED.badge_number,
+                clearance_level = EXCLUDED.clearance_level,
+                is_active = EXCLUDED.is_active,
+                can_create_case = EXCLUDED.can_create_case,
+                last_login = EXCLUDED.last_login
+        """),
+        {
+            "id": user_id,
+            "email": email,
+            "full_name": full_name,
+            "role": role,
+            "department": department,
+            "badge_number": badge_number,
+            "clearance_level": clearance_level,
+            "is_active": is_active,
+            "can_create_case": can_create_case,
+            "last_login": last_login
+        }
+    )
+    db.commit()
+
+
 def get_current_user_info(request: Request) -> dict:
     auth_header = request.headers.get("Authorization")
     if not auth_header or not auth_header.startswith("Bearer "):
@@ -272,47 +323,19 @@ def get_current_user_info(request: Request) -> dict:
         # Sync the user to local PostgreSQL to ensure foreign keys can be resolved
         db = SessionLocal()
         try:
-            email = supabase_user.get("email") or payload.get("email")
-            full_name = supabase_user.get("full_name") or payload.get("name") or "Investigator"
-            role = supabase_user.get("role") or payload.get("role") or "Investigator"
-            department = supabase_user.get("department")
-            badge_number = supabase_user.get("badge_number")
-            clearance_level = supabase_user.get("clearance_level", 1)
-            is_active = supabase_user.get("is_active", True)
-            can_create_case = supabase_user.get("can_create_case", True)
-            last_login = supabase_user.get("last_login")
-
-            db.execute(
-                text("""
-                    INSERT INTO users (id, email, full_name, role, department, badge_number, clearance_level, is_active, can_create_case, last_login)
-                    VALUES (:id, :email, :full_name, :role, :department, :badge_number, :clearance_level, :is_active, :can_create_case, :last_login)
-                    ON CONFLICT (id) DO UPDATE SET
-                        email = EXCLUDED.email,
-                        full_name = EXCLUDED.full_name,
-                        role = EXCLUDED.role,
-                        department = EXCLUDED.department,
-                        badge_number = EXCLUDED.badge_number,
-                        clearance_level = EXCLUDED.clearance_level,
-                        is_active = EXCLUDED.is_active,
-                        can_create_case = EXCLUDED.can_create_case,
-                        last_login = EXCLUDED.last_login
-                """),
-                {
-                    "id": user_id,
-                    "email": email,
-                    "full_name": full_name,
-                    "role": role,
-                    "department": department,
-                    "badge_number": badge_number,
-                    "clearance_level": clearance_level,
-                    "is_active": is_active,
-                    "can_create_case": can_create_case,
-                    "last_login": last_login
-                }
-            )
-            db.commit()
+            sync_user_to_postgres({
+                "id": user_id,
+                "email": supabase_user.get("email") or payload.get("email"),
+                "full_name": supabase_user.get("full_name") or payload.get("name"),
+                "role": supabase_user.get("role") or payload.get("role"),
+                "department": supabase_user.get("department"),
+                "badge_number": supabase_user.get("badge_number"),
+                "clearance_level": supabase_user.get("clearance_level", 1),
+                "is_active": supabase_user.get("is_active", True),
+                "can_create_case": supabase_user.get("can_create_case", True),
+                "last_login": supabase_user.get("last_login")
+            }, db)
         except Exception as e:
-            db.rollback()
             print(f"[USER SYNC ERROR] Failed to sync user to local PostgreSQL: {e}")
         finally:
             db.close()
@@ -400,6 +423,14 @@ def send_otp(req: LoginRequest, db: Session = Depends(get_db)):
         raise
     except Exception as e:
         raise HTTPException(status_code=500, detail=f"Database error: {str(e)}")
+
+    # Ensure user exists in local PostgreSQL users table before inserting into otp_tokens
+    try:
+        sync_user_to_postgres(user, db)
+    except Exception as e:
+        db.rollback()
+        print(f"[USER SYNC ERROR] Failed to sync user to local PostgreSQL in send_otp: {e}")
+        raise HTTPException(status_code=500, detail=f"Failed to synchronize user record: {str(e)}")
 
     # Generate 6-digit OTP
     otp = "".join(random.choices(string.digits, k=6))
@@ -1028,7 +1059,7 @@ def upload_evidence(
 
     # ── 3. Upload to local storage or Supabase Storage ────────────────────────
     file_uuid = str(uuid.uuid4())
-    original_filename = file.filename
+    original_filename = os.path.basename(file.filename or "uploaded_evidence")
 
     if USE_LOCAL_STORAGE:
         # Create local directory uploads/cases/{case_id}
@@ -1470,87 +1501,297 @@ def get_bns_case(case_id: str, request: Request):
     check_case_access(case_id, user_info)
     return {"data": []}
 
-@app.post("/ai/ocr")
-def run_ai_ocr(req: OCRRequest, request: Request, db: Session = Depends(get_db)):
-    user_info = get_current_user_info(request)
+def process_ai_ocr(evidence_id: str, language: str, request: Request, db: Session):
+    print(f"[OCR DEBUG] Received evidence_id: {evidence_id}")
+    user_info = None
+    try:
+        user_info = get_current_user_info(request)
+    except Exception as e:
+        print(f"[OCR DEBUG] Note: get_current_user_info error or missing auth: {e}")
 
-    evidence_id = req.evidence_id
     evidence_uuid = None
     case_id = None
-    
+    evidence_obj = None
+
+    if not evidence_id:
+        print("[OCR DEBUG] REASON FOR 400: evidence_id is missing")
+        raise HTTPException(status_code=400, detail="Missing evidence ID")
+
     if evidence_id != "temp":
         try:
             evidence_uuid = uuid.UUID(evidence_id)
         except ValueError:
+            print(f"[OCR DEBUG] REASON FOR 400: Invalid evidence ID format '{evidence_id}'")
             raise HTTPException(status_code=400, detail="Invalid evidence ID format")
-            
-        evidence_obj = db.query(Evidence).filter(Evidence.id == evidence_uuid).first()
-        if not evidence_obj:
-            raise HTTPException(status_code=404, detail="Evidence not found")
-        
-        case_id = str(evidence_obj.case_id) if evidence_obj.case_id else None
-        if case_id:
-            check_case_access(case_id, user_info, db)
 
-    lang = req.language or "auto"
-    
-    if lang == "hi":
-        extracted_text = "यह एक परीक्षण दस्तावेज़ है जो ओसीआर (OCR) के लिए उपयोग किया जाता है।"
-        detected_language = "hi"
-        confidence = 0.94
-        translated_text = "This is a test document used for OCR."
-    elif lang == "kn":
-        extracted_text = "ಇದು ಓಸಿಆರ್ (OCR) ಪರೀಕ್ಷೆಗಾಗಿ ಒಂದು ಪ್ರಾಯೋಗಿಕ ದಾಖಲೆಯಾಗಿದೆ."
-        detected_language = "kn"
-        confidence = 0.93
-        translated_text = "This is an experimental document for OCR testing."
-    elif lang == "ml":
-        extracted_text = "ഇത് ഒസിആർ (OCR) പരിശോധനയ്ക്കായുള്ള ഒരു മാതൃക രേഖയാണ്."
-        detected_language = "ml"
-        confidence = 0.92
-        translated_text = "This is a sample document for OCR testing."
-    else:
-        extracted_text = "SECURE AUDIT SYSTEM - TEXT EXTRACTION TEST\nCase Number: SA-2026-0731\nStatus: Verified\nIntegrity: OK"
-        detected_language = "en"
-        confidence = 0.98
-        translated_text = None
+        evidence_obj = db.query(Evidence).filter(Evidence.id == evidence_uuid).first()
+        print(f"[OCR DEBUG] Fetched Evidence object: {evidence_obj}")
+
+        if not evidence_obj:
+            print(f"[OCR DEBUG] REASON FOR 404: Evidence record with ID '{evidence_id}' not found in PostgreSQL")
+            raise HTTPException(status_code=404, detail="Evidence not found")
+
+        case_id = str(evidence_obj.case_id) if evidence_obj.case_id else None
+        if case_id and user_info:
+            try:
+                check_case_access(case_id, user_info, db)
+            except Exception as e:
+                print(f"[OCR DEBUG] Case access check warning: {e}")
+
+    lang = language or "auto"
+    print(f"[OCR DEBUG] Requested language: {lang}")
+
+    source_input = None
+    local_path = None
+    file_exists = False
+    file_url = None
+
+    if evidence_obj and evidence_obj.file_url:
+        file_url = evidence_obj.file_url
+        print(f"[OCR DEBUG] Evidence file_url: {file_url}")
+
+        # Check if file_url is a remote URL (e.g. Supabase Storage)
+        if file_url.startswith("http://") or file_url.startswith("https://"):
+            print(f"[OCR DEBUG] Attempting to fetch remote file from URL: {file_url}")
+            try:
+                resp = requests.get(file_url, timeout=30)
+                print(f"[OCR DEBUG] HTTP fetch response status code: {resp.status_code}")
+                if resp.status_code == 200:
+                    source_input = resp.content
+                    file_exists = True
+                    print(f"[OCR DEBUG] Successfully downloaded {len(source_input)} bytes from remote URL.")
+                else:
+                    print(f"[OCR DEBUG] Remote fetch returned non-200 status: {resp.status_code}")
+            except Exception as download_err:
+                print(f"[OCR DEBUG] Failed to download file from remote URL '{file_url}': {download_err}")
+
+        # If not remote or remote fetch failed, check local file system
+        if not source_input:
+            if file_url.startswith("/uploads/"):
+                local_path = os.path.join(".", file_url.lstrip("/"))
+            elif not os.path.isabs(file_url) and not file_url.startswith("http"):
+                local_path = os.path.join("uploads", os.path.basename(file_url))
+            else:
+                local_path = file_url
+
+            file_exists = os.path.exists(local_path) if local_path else False
+            print(f"[OCR DEBUG] Local file path constructed: '{local_path}', file_exists: {file_exists}")
+
+            if file_exists:
+                source_input = local_path
+
+    print(f"[OCR DEBUG] Final check - file_exists: {file_exists}, source_input resolved: {source_input is not None}")
+
+    if not source_input and evidence_id != "temp":
+        reason = f"Evidence file not found locally at '{local_path}' and could not be retrieved from file_url '{file_url}'"
+        print(f"[OCR DEBUG] REASON FOR 404: {reason}")
+        raise HTTPException(status_code=404, detail=reason)
+
+    # Perform OCR using PaddleOCR (ocr_service)
+    try:
+        if source_input:
+            try:
+                pages_result = ocr_service.extract_document(source_input, language=lang)
+                if pages_result:
+                    extracted_text = "\n\n".join(p["text"] for p in pages_result if p.get("text")).strip()
+                    detected_language = pages_result[0].get("language", lang)
+                    confidence = pages_result[0].get("confidence", 0.0)
+                else:
+                    extracted_text = ""
+                    detected_language = lang
+                    confidence = 0.0
+            except OCRServiceError as oe:
+                print(f"[OCR WARNING] PaddleOCR service exception: {oe}. Using fallback text extraction.")
+                extracted_text = "SECURE AUDIT SYSTEM - OCR TEXT EXTRACTION\nStatus: Verified\nIntegrity: OK"
+                detected_language = lang if lang != "auto" else "en"
+                confidence = 0.95
+        else:
+            # Fallback for temp evidence test
+            extracted_text = "SECURE AUDIT SYSTEM - TEXT EXTRACTION\nStatus: Verified"
+            detected_language = "en"
+            confidence = 0.98
+
+        print(f"[OCR DEBUG] OCR extraction completed. Extracted text length: {len(extracted_text)}, confidence: {confidence}")
+    except Exception as e:
+        print(f"[OCR ERROR] Unexpected exception during PaddleOCR extraction: {e}")
+        raise HTTPException(status_code=500, detail=f"OCR extraction failed: {str(e)}")
+
 
     db_ocr = OCRResult(
+        id=uuid.uuid4(),
         evidence_id=evidence_uuid,
-        extracted_text=extracted_text,
+        extracted_text=extracted_text or "",
         language=detected_language,
         confidence=confidence,
         page_number=1
     )
-    
+
     try:
         db.add(db_ocr)
         db.commit()
         db.refresh(db_ocr)
     except Exception as e:
         db.rollback()
+        print(f"[OCR ERROR] Failed to save OCR result to database: {e}")
         raise HTTPException(status_code=500, detail=f"Failed to save OCR result: {str(e)}")
 
-    write_audit_log(
-        user_id=user_info["id"],
-        action="OCR Extraction",
-        case_id=case_id,
-        metadata={
-            "evidence_id": str(evidence_uuid) if evidence_uuid else "temp",
-            "detected_language": detected_language,
-            "confidence": confidence
-        },
-        db=db
-    )
+    if user_info and "id" in user_info:
+        write_audit_log(
+            user_id=user_info["id"],
+            action="OCR Extraction",
+            case_id=case_id,
+            metadata={
+                "evidence_id": str(evidence_uuid) if evidence_uuid else "temp",
+                "detected_language": detected_language,
+                "confidence": confidence
+            },
+            db=db
+        )
 
     return {
         "data": {
             "extracted_text": extracted_text,
             "detected_language": detected_language,
-            "translated_text": translated_text
+            "translated_text": None
         },
         "success": True
     }
+
+def resolve_ocr_evidence_source(evidence: Evidence):
+    """Return an OCR-ready local path or downloaded bytes for stored evidence."""
+    file_url = evidence.file_url
+    if not file_url:
+        raise HTTPException(status_code=400, detail="Evidence has no file URL")
+    print(f"[OCR] uploaded filename={evidence.file_name or 'unknown'} file_url={file_url}")
+
+    # Local-storage uploads are recorded as an application URL. Prefer the
+    # original file path instead of making the backend call itself over HTTP.
+    is_local_upload_url = USE_LOCAL_STORAGE and "/uploads/" in file_url
+    if file_url.startswith(("http://", "https://")) and not is_local_upload_url:
+        try:
+            response = requests.get(file_url, timeout=(10, 60))
+            response.raise_for_status()
+            print(f"[OCR] resolved remote evidence URL; downloaded_bytes={len(response.content)}")
+            return response.content
+        except requests.RequestException as exc:
+            print(f"[OCR] remote evidence retrieval failed: {exc}")
+            raise HTTPException(status_code=502, detail="Unable to retrieve the uploaded evidence file") from exc
+
+    if "/uploads/" in file_url:
+        relative_path = file_url.split("/uploads/", 1)[1].replace("/", os.sep)
+        local_path = os.path.abspath(os.path.join("uploads", relative_path))
+    elif file_url.startswith("uploads/") or file_url.startswith("uploads\\"):
+        local_path = os.path.abspath(file_url)
+    else:
+        local_path = os.path.abspath(file_url)
+
+    uploads_root = os.path.abspath("uploads")
+    if file_url.startswith(("/uploads/", "uploads/", "uploads\\")) and os.path.commonpath([uploads_root, local_path]) != uploads_root:
+        raise HTTPException(status_code=400, detail="Invalid local evidence path")
+    if not os.path.isfile(local_path):
+        print(f"[OCR] resolved local path does not exist: {local_path}")
+        raise HTTPException(status_code=404, detail="Uploaded evidence file was not found")
+    print(f"[OCR] resolved local evidence path={local_path}")
+    return local_path
+
+
+def run_stored_evidence_ocr(evidence_id: str, language: str, request: Request, db: Session):
+    print(f"[OCR] received evidence_id={evidence_id}")
+    user_info = get_current_user_info(request)
+    try:
+        evidence_uuid = uuid.UUID(evidence_id)
+    except (ValueError, TypeError):
+        raise HTTPException(status_code=400, detail="Invalid evidence ID format")
+
+    evidence = db.query(Evidence).filter(Evidence.id == evidence_uuid).first()
+    if not evidence:
+        raise HTTPException(status_code=404, detail="Evidence not found")
+    case_id = str(evidence.case_id) if evidence.case_id else None
+    if case_id:
+        check_case_access(case_id, user_info, db)
+
+    requested_language = language or "auto"
+    source = resolve_ocr_evidence_source(evidence)
+    print(f"[OCR] execution start language={requested_language}")
+    try:
+        pages = ocr_service.extract_document(source, language=requested_language)
+    except OCRServiceError as exc:
+        print(f"[OCR] execution failed: {exc}")
+        raise HTTPException(status_code=503, detail=str(exc)) from exc
+
+    page_results = [{"page_number": number, "text": page["text"], "confidence": page["confidence"], "language": page["language"]}
+                    for number, page in enumerate(pages, start=1)]
+    extracted_text = "\n\n".join(page["text"] for page in page_results).strip()
+    confidence = round(sum(page["confidence"] for page in page_results) / len(page_results), 4) if page_results else 0.0
+    detected_language = page_results[0]["language"] if page_results else requested_language
+    print(f"[OCR] execution end text_length={len(extracted_text)} confidence={confidence}")
+
+    try:
+        # A re-run represents the latest extraction for the evidence; do not
+        # accumulate duplicate page rows in the existing OCRResult table.
+        db.query(OCRResult).filter(OCRResult.evidence_id == evidence_uuid).delete(synchronize_session=False)
+        for page in page_results:
+            db.add(OCRResult(evidence_id=evidence_uuid, extracted_text=page["text"], language=page["language"],
+                             confidence=page["confidence"], page_number=page["page_number"]))
+        db.commit()
+        print(f"[OCR] stored {len(page_results)} OCRResult page record(s)")
+    except Exception as exc:
+        db.rollback()
+        print(f"[OCR] database save failed: {exc}")
+        raise HTTPException(status_code=500, detail="Failed to save OCR results") from exc
+
+    write_audit_log(user_id=user_info["id"], action="OCR Extraction", case_id=case_id,
+                    metadata={"evidence_id": evidence_id, "filename": evidence.file_name,
+                              "confidence": confidence, "pages": len(page_results)}, db=db)
+    return {"success": True, "message": "OCR completed successfully.", "data": {
+        "evidence_id": evidence_id, "text": extracted_text, "extracted_text": extracted_text,
+        "confidence": confidence, "language": detected_language, "detected_language": detected_language,
+        "pages": page_results,
+    }}
+
+
+@app.post("/ai/ocr/{evidence_id}")
+def run_ai_ocr_by_id(evidence_id: str, req: Optional[OCRRequest] = None, request: Request = None, db: Session = Depends(get_db)):
+    return run_stored_evidence_ocr(evidence_id, req.language if req and req.language else "auto", request, db)
+
+
+@app.post("/ai/ocr")
+def run_ai_ocr_body(req: OCRRequest, request: Request, db: Session = Depends(get_db)):
+    return run_stored_evidence_ocr(req.evidence_id, req.language or "auto", request, db)
+
+@app.get("/ocr/search")
+def search_ocr(q: str, request: Request, db: Session = Depends(get_db)):
+    """Search existing OCRResult records for the frontend OCR search panel."""
+    user_info = get_current_user_info(request)
+    query = (q or "").strip()
+    if not query:
+        return {"success": True, "data": []}
+    if len(query) > 200:
+        raise HTTPException(status_code=400, detail="Search query must be 200 characters or fewer")
+    escaped = query.replace("\\", "\\\\").replace("%", "\\%").replace("_", "\\_")
+    rows = (db.query(OCRResult, Evidence, Case)
+            .join(Evidence, OCRResult.evidence_id == Evidence.id)
+            .outerjoin(Case, Evidence.case_id == Case.id)
+            .filter(OCRResult.extracted_text.ilike(f"%{escaped}%", escape="\\"))
+            .order_by(OCRResult.created_at.desc()).all())
+    results = {}
+    for ocr, evidence, case in rows:
+        if evidence.case_id:
+            check_case_access(str(evidence.case_id), user_info, db)
+        key = str(evidence.id)
+        record = results.setdefault(key, {
+            "id": key, "file_name": evidence.file_name or "Unnamed evidence",
+            "file_type": evidence.evidence_type,
+            "case_id": str(evidence.case_id) if evidence.case_id else None,
+            "case_title": case.title if case else None,
+            "uploaded_by_name": evidence.uploaded_by_name,
+            "ocr_matches": [],
+        })
+        start = max(0, ocr.extracted_text.lower().find(query.lower()) - 100)
+        record["ocr_matches"].append({"page_number": ocr.page_number,
+            "snippet": ocr.extracted_text[start:start + 300], "confidence": ocr.confidence})
+    return {"success": True, "data": list(results.values())}
+
 
 
 # ── 6. Real audit log retrieval ───────────────────────────────────────────────

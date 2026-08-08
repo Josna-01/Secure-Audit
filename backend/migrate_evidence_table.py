@@ -1,24 +1,11 @@
-
+"""Legacy evidence migration helper; credentials are supplied only via DATABASE_URL."""
 import os
-# pyrefly: ignore [missing-import]
-import pg8000.dbapi
+import sys
 
-host = "aws-0-ap-south-1.pooler.supabase.com"
-user = "postgres.taskxnlhzeaaddnxqxbw"
-database = "postgres"
-ports = [5432, 6543]
+from sqlalchemy import create_engine, text
 
-passwords_to_try = [
-    "Amisha@#01",
-    "Password123!",
-    "Password123",
-    "postgres",
-    "supabase",
-    "taskxnlhzeaaddnxqxbw",
-    "thkwmytgtlrwqhou"
-]
 
-sql_commands = [
+SQL_COMMANDS = [
     "ALTER TABLE evidence ADD COLUMN IF NOT EXISTS file_name text;",
     "ALTER TABLE evidence ADD COLUMN IF NOT EXISTS file_size bigint;",
     "ALTER TABLE evidence ADD COLUMN IF NOT EXISTS mime_type text;",
@@ -27,44 +14,19 @@ sql_commands = [
     "ALTER TABLE evidence ADD COLUMN IF NOT EXISTS verified_at timestamp with time zone;",
     "ALTER TABLE evidence ADD COLUMN IF NOT EXISTS verified_by uuid;",
     "ALTER TABLE evidence ADD COLUMN IF NOT EXISTS chain_of_custody_status text DEFAULT 'Collected';",
-    "ALTER TABLE evidence ADD COLUMN IF NOT EXISTS status text DEFAULT 'Verified';"
+    "ALTER TABLE evidence ADD COLUMN IF NOT EXISTS status text DEFAULT 'Verified';",
 ]
 
-success = False
-for port in ports:
-    if success:
-        break
-    for pwd in passwords_to_try:
-        print(f"Connecting to {host}:{port} with password...")
-        try:
-            conn = pg8000.dbapi.connect(
-                host=host,
-                user=user,
-                password=pwd,
-                database=database,
-                port=port,
-                timeout=5
-            )
-            print("Successfully connected to database!")
-            cursor = conn.cursor()
-            
-            for cmd in sql_commands:
-                print(f"Executing: {cmd}")
-                try:
-                    cursor.execute(cmd)
-                    conn.commit()
-                except Exception as e:
-                    print(f"Error executing command: {e}")
-                    conn.rollback()
-            
-            cursor.close()
-            conn.close()
-            success = True
-            break
-        except Exception as e:
-            print(f"Connection failed: {e}")
 
-if success:
-    print("\nDatabase migration completed successfully!")
-else:
-    print("\nError: Could not connect to the database to perform migrations.")
+def run() -> None:
+    database_url = os.getenv("DATABASE_URL")
+    if not database_url:
+        sys.exit("DATABASE_URL is required; no migration was run.")
+    with create_engine(database_url).begin() as connection:
+        for command in SQL_COMMANDS:
+            connection.execute(text(command))
+    print("Evidence migration completed successfully.")
+
+
+if __name__ == "__main__":
+    run()

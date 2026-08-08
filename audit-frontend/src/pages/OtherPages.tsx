@@ -457,82 +457,384 @@ export function BNSPage() {
 
 // ── OCR ───────────────────────────────────────────────────────────────────
 export function OCRPage() {
+  const navigate = useNavigate()
+  const [subTab, setSubTab] = useState(0)
+
+  // Extract Tab States
   const [file, setFile] = useState<File | null>(null)
-  const [language, setLanguage] = useState('auto')
+  const [language, setLanguage] = useState('eng')
   const [running, setRunning] = useState(false)
-  const [result, setResult] = useState<{ extracted_text: string; translated_text?: string; detected_language: string } | null>(null)
+  const [result, setResult] = useState<any | null>(null)
+  const [ocrError, setOcrError] = useState('')
+  const [previewUrl, setPreviewUrl] = useState<string | null>(null)
+  const [activeOcrPage, setActiveOcrPage] = useState(1)
   const fileRef = useRef<HTMLInputElement>(null)
 
-  const run = async () => {
-    if (!file) { alert('Please select a file.'); return }
+  // Case Select States
+  const [caseSearch, setCaseSearch] = useState('')
+  const [selectedCase, setSelectedCase] = useState<Case | null>(null)
+  const [caseResults, setCaseResults] = useState<Case[]>([])
+
+
+  // Search Tab States
+  const [searchQuery, setSearchQuery] = useState('')
+  const [searchLoading, setSearchLoading] = useState(false)
+  const [searchResults, setSearchResults] = useState<any[]>([])
+
+  useEffect(() => {
+    if (!file || !file.type.startsWith('image/')) {
+      setPreviewUrl(null)
+      return
+    }
+    const objectUrl = URL.createObjectURL(file)
+    setPreviewUrl(objectUrl)
+    return () => URL.revokeObjectURL(objectUrl)
+  }, [file])
+
+  const searchCases = async (q: string) => {
+    if (q.length < 2) { setCaseResults([]); return }
+    const res = await api.getCases({ search: q, per_page: 5 })
+    setCaseResults(res.data)
+  }
+
+  const runExtract = async () => {
+    if (!selectedCase) { alert('Please search and select a case reference first.'); return }
+    if (!file) { alert('Please upload a scanned document or image.'); return }
     setRunning(true)
+    setResult(null)
+    setOcrError('')
     try {
-      const res = await api.runOCR('temp', language)
-      setResult(res.data)
-    } catch { alert('OCR failed.') }
-    finally { setRunning(false) }
+      // 1. Upload file as case evidence first
+      let evidenceId: string
+      try {
+        const uploadRes = await api.uploadEvidence(selectedCase.id, file, { 
+          evidence_type: file.type.includes('pdf') ? 'Document' : 'Image',
+          description: 'Uploaded for OCR text extraction.'
+        })
+        evidenceId = uploadRes.data.id
+      } catch (uploadErr: any) {
+        // 409 = duplicate file — the backend tells us the existing evidence ID.
+        // Parse it out and re-use it so OCR still runs on the same file.
+        if (uploadErr.response?.status === 409) {
+          const detail: string = uploadErr.response?.data?.detail || ''
+          // Backend message: "Duplicate file detected. This file was already uploaded (evidence ID: <uuid>). SHA-256: ..."
+          const match = detail.match(/evidence ID:\s*([\w-]+)/i)
+          if (match) {
+            evidenceId = match[1]
+          } else {
+            // Cannot extract existing ID — surface the conflict message
+            setOcrError('This file was already uploaded. Please select it from the evidence list or upload a different file.')
+            return
+          }
+        } else {
+          throw uploadErr
+        }
+      }
+      
+      // 2. Execute OCR processing on evidence ID
+      const res = await api.runOCR(evidenceId, language)
+      // Keep compatibility with older OCR responses while immediately
+      // rendering the text returned by the PaddleOCR endpoint.
+      const ocr = res.data as any
+      setResult({ ...ocr, text: ocr.text ?? ocr.extracted_text ?? '' })
+      setActiveOcrPage(1)
+    } catch (err: any) {
+      console.error(err)
+      const detail = err.response?.data?.detail || 'OCR extraction failed. Check backend configuration.'
+      setOcrError(detail)
+    } finally {
+      setRunning(false)
+    }
+  }
+
+  const handleSearch = async () => {
+    if (!searchQuery.trim()) return
+    setSearchLoading(true)
+    try {
+      const res = await api.searchOCR(searchQuery)
+      setSearchResults(res.data || [])
+    } catch {
+      alert('Search failed.')
+    } finally {
+      setSearchLoading(false)
+    }
   }
 
   return (
-    <AppShell title="OCR Extraction">
-      <div style={{ display: 'grid', gridTemplateColumns: '1fr 1fr', gap: '16px' }}>
-        <div style={{ display: 'flex', flexDirection: 'column', gap: '16px' }}>
-          <Card>
-            <CardTitle>Upload Scanned FIR / Document</CardTitle>
-            <input ref={fileRef} type="file" accept="image/*,.pdf" style={{ display: 'none' }} onChange={(e) => setFile(e.target.files?.[0] || null)} />
-            <UploadZone
-              title={file ? file.name : 'Upload scanned FIR for OCR extraction'}
-              sub="JPG · PNG · PDF · Handwritten text supported"
-              onClick={() => fileRef.current?.click()}
-              onDropFile={(f) => setFile(f)}
-            />
-            <div style={{ marginBottom: '12px' }}>
-              <label style={{ fontSize: '11px', color: 'var(--text3)', display: 'block', marginBottom: '4px', textTransform: 'uppercase', letterSpacing: '.4px' }}>Document Language</label>
-              <select value={language} onChange={(e) => setLanguage(e.target.value)} style={{ width: '100%', background: 'var(--bg3)', border: '1px solid var(--border)', borderRadius: 'var(--r)', padding: '7px 10px', fontSize: '12px', color: 'var(--text)', fontFamily: 'var(--font)', outline: 'none' }}>
-                {[['auto', 'Auto Detect'], ['en', 'English'], ['hi', 'Hindi'], ['kn', 'Kannada'], ['ml', 'Malayalam']].map(([v, l]) => <option key={v} value={v}>{l}</option>)}
-              </select>
-            </div>
-            <Btn variant="primary" full loading={running} onClick={run}>Extract Text via Tesseract</Btn>
-          </Card>
-          <Card>
-            <CardTitle>Reference</CardTitle>
-            {[['Engine', 'Tesseract 4.0 + LSTM'], ['Accuracy', '96.87% word accuracy'], ['Preprocessing', 'Leptonica binarisation'], ['Reference', 'Al Sayem et al. (2023)'], ['Output', 'Original + English translation']].map(([k, v]) => (
-              <div key={k} style={{ display: 'flex', gap: '10px', padding: '5px 0', borderBottom: '1px solid var(--border)' }}>
-                <span style={{ fontSize: '11px', color: 'var(--text3)', minWidth: '100px' }}>{k}</span>
-                <span style={{ fontSize: '11px', color: 'var(--text2)' }}>{v}</span>
-              </div>
-            ))}
-          </Card>
-        </div>
-        <Card>
-          <CardHeader>
-            <CardTitle>Extracted Text</CardTitle>
-            <span style={{ fontSize: '10px', color: result ? 'var(--green)' : 'var(--text3)' }}>{result ? `Detected: ${result.detected_language}` : 'Awaiting upload'}</span>
-          </CardHeader>
-          {!result && <div style={{ textAlign: 'center', padding: '40px', color: 'var(--text3)', fontSize: '12px' }}>Extracted text appears here after processing</div>}
-          {result && (
-            <div>
+    <AppShell title="OCR Scanned Evidence Manager">
+      <div style={{ marginBottom: '16px' }}>
+        <Tabs tabs={['Scanned Document OCR', 'Search Scanned Evidence']} activeIndex={subTab} onChange={setSubTab} />
+      </div>
+
+      {subTab === 0 && (
+        <div style={{ display: 'grid', gridTemplateColumns: '1fr 1fr', gap: '16px' }}>
+          <div style={{ display: 'flex', flexDirection: 'column', gap: '16px' }}>
+            <Card>
+              <CardTitle>Case Link & Configuration</CardTitle>
+              
               <div style={{ marginBottom: '12px' }}>
-                <div style={{ fontSize: '11px', color: 'var(--text3)', textTransform: 'uppercase', letterSpacing: '.5px', marginBottom: '6px' }}>Original Text ({result.detected_language})</div>
-                <div style={{ fontSize: '13px', color: 'var(--text2)', lineHeight: 1.7, padding: '10px', background: 'var(--bg3)', borderRadius: 'var(--r)', whiteSpace: 'pre-wrap' }}>{result.extracted_text}</div>
+                <label style={{ fontSize: '11px', color: 'var(--text3)', display: 'block', marginBottom: '4px', textTransform: 'uppercase', letterSpacing: '.4px' }}>Case Reference</label>
+                <input 
+                  value={caseSearch} 
+                  onChange={(e) => { setCaseSearch(e.target.value); searchCases(e.target.value) }} 
+                  placeholder="Search case by title or number..." 
+                  style={{ width: '100%', background: 'var(--bg3)', border: '1px solid var(--border)', borderRadius: 'var(--r)', padding: '7px 10px', fontSize: '13px', color: 'var(--text)', fontFamily: 'var(--font)', outline: 'none' }} 
+                />
+                {caseResults.length > 0 && !selectedCase && (
+                  <div style={{ background: 'var(--bg2)', border: '1px solid var(--border)', borderRadius: 'var(--r)', marginTop: '4px' }}>
+                    {caseResults.map((c) => (
+                      <div 
+                        key={c.id} 
+                        onClick={() => { setSelectedCase(c); setCaseSearch(''); setCaseResults([]) }} 
+                        style={{ padding: '8px 10px', cursor: 'pointer', fontSize: '12px', borderBottom: '1px solid var(--border)' }}
+                        onMouseEnter={(e) => { e.currentTarget.style.background = 'var(--bg3)' }}
+                        onMouseLeave={(e) => { e.currentTarget.style.background = 'transparent' }}
+                      >
+                        <span style={{ fontFamily: 'var(--mono)', color: 'var(--blue)' }}>{c.case_number}</span> — {c.title}
+                      </div>
+                    ))}
+                  </div>
+                )}
+                {selectedCase && (
+                  <div style={{ marginTop: '6px', padding: '6px 10px', background: 'var(--blue-dim)', border: '1px solid var(--blue)', borderRadius: 'var(--r)', fontSize: '12px', color: 'var(--blue)', display: 'flex', justifyContent: 'space-between', alignItems: 'center' }}>
+                    <span>{selectedCase.case_number} — {selectedCase.title}</span>
+                    <span style={{ cursor: 'pointer', fontSize: '11px' }} onClick={() => setSelectedCase(null)}>Clear</span>
+                  </div>
+                )}
               </div>
-              {result.translated_text && (
-                <div>
-                  <div style={{ fontSize: '11px', color: 'var(--text3)', textTransform: 'uppercase', letterSpacing: '.5px', marginBottom: '6px' }}>Translated (English)</div>
-                  <div style={{ fontSize: '13px', color: 'var(--text2)', lineHeight: 1.7, padding: '10px', background: 'var(--green-bg)', borderRadius: 'var(--r)', border: '1px solid var(--green)', whiteSpace: 'pre-wrap' }}>{result.translated_text}</div>
+
+              <div style={{ marginBottom: '12px' }}>
+                <label style={{ fontSize: '11px', color: 'var(--text3)', display: 'block', marginBottom: '4px', textTransform: 'uppercase', letterSpacing: '.4px' }}>OCR Language Mode</label>
+                <select 
+                  value={language} 
+                  onChange={(e) => setLanguage(e.target.value)} 
+                  style={{ width: '100%', background: 'var(--bg3)', border: '1px solid var(--border)', borderRadius: 'var(--r)', padding: '7px 10px', fontSize: '12px', color: 'var(--text)', fontFamily: 'var(--font)', outline: 'none' }}
+                >
+                  <option value="eng">English (eng)</option>
+                  <option value="hin">Hindi (hin)</option>
+                  <option value="eng+hin">Multiple (eng+hin)</option>
+                </select>
+              </div>
+
+              <input ref={fileRef} type="file" accept="image/*,.pdf" style={{ display: 'none' }} onChange={(e) => { setFile(e.target.files?.[0] || null); setResult(null); setOcrError('') }} />
+              <UploadZone
+                title={file ? file.name : 'Upload scanned FIR or evidence document'}
+                sub="PDF · PNG · JPG · JPEG · Max 50MB"
+                onClick={() => fileRef.current?.click()}
+                onDropFile={(f) => { setFile(f); setResult(null); setOcrError('') }}
+              />
+
+              {previewUrl && (
+                <div style={{ marginTop: '12px' }}>
+                  <div style={{ fontSize: '11px', color: 'var(--text3)', marginBottom: '6px' }}>UPLOADED IMAGE PREVIEW</div>
+                  <img src={previewUrl} alt="Uploaded evidence preview" style={{ width: '100%', maxHeight: '190px', objectFit: 'contain', border: '1px solid var(--border)', borderRadius: 'var(--r)', background: 'var(--bg3)' }} />
                 </div>
               )}
-              <div style={{ display: 'flex', gap: '8px', marginTop: '12px' }}>
-                <Btn size="sm">Use for BNS Classification</Btn>
-                <Btn size="sm">Add to Case FIR</Btn>
+              {ocrError && <div style={{ marginTop: '12px' }}><AlertBox type="error">{ocrError}</AlertBox></div>}
+
+              <Btn variant="primary" full loading={running} onClick={runExtract}>
+                Process Scanned Document
+              </Btn>
+            </Card>
+
+            <Card>
+              <CardTitle>Technical Reference</CardTitle>
+              {[
+                ['Engine', 'PaddleOCR'],
+                ['Grayscale Binarisation', 'OpenCV Color Convert'],
+                ['Noise Cleanse', 'OpenCV Median Blur Filter (3px)'],
+                ['Adaptive Binarisation', 'Gaussian C Thresholding'],
+                ['Output Standard', 'Single / Multi-page PDF pagination']
+              ].map(([k, v]) => (
+                <div key={k} style={{ display: 'flex', gap: '10px', padding: '5px 0', borderBottom: '1px solid var(--border)' }}>
+                  <span style={{ fontSize: '11px', color: 'var(--text3)', minWidth: '130px' }}>{k}</span>
+                  <span style={{ fontSize: '11px', color: 'var(--text2)' }}>{v}</span>
+                </div>
+              ))}
+            </Card>
+          </div>
+
+          <Card style={{ minHeight: '400px' }}>
+            <CardHeader>
+              <CardTitle>Extracted Document Content</CardTitle>
+              {result && (
+                <div style={{ display: 'flex', gap: '6px' }}>
+                  <Btn 
+                    size="xs" 
+                    onClick={() => {
+                      const textToCopy = result.pages && result.pages.length > 1
+                        ? result.pages.find((p: any) => p.page_number === activeOcrPage)?.text || ''
+                        : result.text;
+                      navigator.clipboard.writeText(textToCopy);
+                      alert('Copied to clipboard!');
+                    }}
+                  >
+                    Copy Page
+                  </Btn>
+                  <Btn 
+                    size="xs" 
+                    onClick={() => {
+                      const element = document.createElement("a");
+                      const file = new Blob([result.text], {type: 'text/plain'});
+                      element.href = URL.createObjectURL(file);
+                      element.download = `ocr_extract_${selectedCase?.case_number || 'export'}.txt`;
+                      document.body.appendChild(element);
+                      element.click();
+                      document.body.removeChild(element);
+                    }}
+                  >
+                    Download Text
+                  </Btn>
+                </div>
+              )}
+            </CardHeader>
+
+            {!result && !running && (
+              <div style={{ display: 'flex', flexDirection: 'column', alignItems: 'center', justifyContent: 'center', height: '300px', color: 'var(--text3)', fontSize: '12px' }}>
+                Extracted page content will be displayed here after processing.
               </div>
+            )}
+
+            {running && (
+              <div style={{ display: 'flex', flexDirection: 'column', alignItems: 'center', justifyContent: 'center', height: '300px', gap: '12px' }}>
+                <Spinner size={24} />
+                <div style={{ fontSize: '11px', color: 'var(--text3)' }}>Running grayscale binarisation and text extraction...</div>
+              </div>
+            )}
+
+            {result && (
+              <div>
+                <div style={{ display: 'flex', justifyContent: 'space-between', alignItems: 'center', background: 'var(--bg3)', border: '1px solid var(--border)', borderRadius: '4px', padding: '6px 12px', fontSize: '11px', color: 'var(--text3)', marginBottom: '12px' }}>
+                  <span>Language: <span style={{ fontFamily: 'var(--mono)', color: 'var(--blue)' }}>{result.language}</span></span>
+                  <span>Confidence: <span style={{ fontWeight: 600, color: 'var(--green)' }}>{Math.round(result.confidence * 100)}%</span></span>
+                </div>
+
+                {result.pages && result.pages.length > 1 && (
+                  <div style={{ display: 'flex', flexWrap: 'wrap', gap: '4px', borderBottom: '1px solid var(--border)', paddingBottom: '10px', marginBottom: '12px' }}>
+                    {result.pages.map((p: any) => (
+                      <button
+                        key={p.page_number}
+                        onClick={() => setActiveOcrPage(p.page_number)}
+                        style={{
+                          border: '1px solid var(--border)',
+                          borderRadius: '4px',
+                          padding: '3px 8px',
+                          fontSize: '10px',
+                          fontFamily: 'var(--mono)',
+                          cursor: 'pointer',
+                          background: activeOcrPage === p.page_number ? 'var(--blue)' : 'var(--bg3)',
+                          color: activeOcrPage === p.page_number ? '#fff' : 'var(--text2)',
+                          fontWeight: activeOcrPage === p.page_number ? 600 : 400
+                        }}
+                      >
+                        Page {p.page_number}
+                      </button>
+                    ))}
+                  </div>
+                )}
+
+                <div 
+                  style={{
+                    fontSize: '12px',
+                    fontFamily: 'var(--mono)',
+                    color: 'var(--text2)',
+                    lineHeight: 1.6,
+                    padding: '12px',
+                    background: 'var(--bg3)',
+                    border: '1px solid var(--border)',
+                    borderRadius: 'var(--r)',
+                    whiteSpace: 'pre-wrap',
+                    maxHeight: '350px',
+                    overflowY: 'auto'
+                  }}
+                >
+                  {result.pages && result.pages.length > 1
+                    ? result.pages.find((p: any) => p.page_number === activeOcrPage)?.text || '(Empty page)'
+                    : result.text || '(No text extracted)'}
+                </div>
+              </div>
+            )}
+          </Card>
+        </div>
+      )}
+
+      {subTab === 1 && (
+        <div style={{ display: 'flex', flexDirection: 'column', gap: '16px' }}>
+          <Card>
+            <CardTitle>Search OCR Content across Scanned Evidence</CardTitle>
+            <div style={{ display: 'flex', gap: '12px' }}>
+              <input 
+                value={searchQuery}
+                onChange={(e) => setSearchQuery(e.target.value)}
+                onKeyDown={(e) => { if (e.key === 'Enter') handleSearch() }}
+                placeholder="Enter keywords to search in OCR extracted records (e.g. 'weapon', 'fir', 'theft')..."
+                style={{ flex: 1, background: 'var(--bg3)', border: '1px solid var(--border)', borderRadius: 'var(--r)', padding: '8px 12px', fontSize: '13px', color: 'var(--text)', fontFamily: 'var(--font)', outline: 'none' }}
+              />
+              <Btn variant="primary" loading={searchLoading} onClick={handleSearch}>
+                Search Records
+              </Btn>
             </div>
+          </Card>
+
+          {searchResults.length === 0 && !searchLoading && searchQuery && (
+            <Card style={{ textAlign: 'center', padding: '40px', color: 'var(--text3)' }}>
+              No matching OCR evidence records found for keyword "{searchQuery}".
+            </Card>
           )}
-        </Card>
-      </div>
+
+          {searchLoading && (
+            <Card style={{ textAlign: 'center', padding: '40px' }}>
+              <div style={{ margin: '0 auto 12px', display: 'flex', justifyContent: 'center' }}><Spinner size={24} /></div>
+              <div style={{ fontSize: '12px', color: 'var(--text3)' }}>Searching immutable OCR database...</div>
+            </Card>
+          )}
+
+          {searchResults.map((ev: any) => (
+            <Card key={ev.id} style={{ borderLeft: '4px solid var(--blue)' }}>
+              <div style={{ display: 'flex', justifyContent: 'space-between', alignItems: 'flex-start', flexWrap: 'wrap', gap: '12px', marginBottom: '12px' }}>
+                <div>
+                  <div style={{ fontSize: '13px', fontWeight: 600, color: 'var(--text)' }}>
+                    {ev.file_name} <span style={{ fontSize: '11px', color: 'var(--text3)', fontWeight: 400 }}>({ev.file_type})</span>
+                  </div>
+                  <div style={{ fontSize: '11px', color: 'var(--text3)', marginTop: '2px' }}>
+                    Case: <span 
+                      onClick={() => navigate(`/cases/${ev.case_id}`)}
+                      style={{ color: 'var(--blue)', cursor: 'pointer', fontWeight: 500 }}
+                    >
+                      {ev.case_title || 'View Case Detail'}
+                    </span> · uploaded by {ev.uploaded_by_name || 'Officer'}
+                  </div>
+                </div>
+                <Btn size="xs" onClick={() => navigate(`/cases/${ev.case_id}`)}>View Case</Btn>
+              </div>
+
+              {ev.ocr_matches && ev.ocr_matches.map((m: any, idx: number) => (
+                <div key={idx} style={{ background: 'var(--bg3)', border: '1px solid var(--border)', borderRadius: 'var(--r)', padding: '10px 12px', marginBottom: '8px' }}>
+                  <div style={{ display: 'flex', justifyContent: 'space-between', alignItems: 'center', marginBottom: '6px' }}>
+                    <span style={{ fontSize: '10px', fontFamily: 'var(--mono)', color: 'var(--blue)', fontWeight: 600 }}>MATCH ON PAGE {m.page_number}</span>
+                    <Btn 
+                      size="xs" 
+                      onClick={() => {
+                        navigator.clipboard.writeText(m.snippet);
+                        alert('Snippet copied!');
+                      }}
+                    >
+                      Copy Snippet
+                    </Btn>
+                  </div>
+                  <div style={{ fontSize: '12px', fontFamily: 'var(--mono)', color: 'var(--text2)', whiteSpace: 'pre-wrap', maxHeight: '120px', overflowY: 'auto', lineHeight: 1.5 }}>
+                    {m.snippet}
+                  </div>
+                </div>
+              ))}
+            </Card>
+          ))}
+        </div>
+      )}
     </AppShell>
   )
 }
+
 
 // ── PLACEHOLDER PAGE ──────────────────────────────────────────────────────
 export function PlaceholderPage({ title, description }: { title: string; description: string }) {
