@@ -20,4 +20,5 @@ uploads
 *.ply
 photogrammetry-backend/output/
 photogrammetry-backend/test_data/
+photogrammetry-backend/test_runs/
 point_cloud_preview.png
