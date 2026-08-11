@@ -7,9 +7,9 @@ logger = logging.getLogger(__name__)
 # Configurable Mode Thresholds: PRODUCTION vs TEST
 FRAME_SELECTOR_CONFIGS = {
     "PRODUCTION": {
-        "blur_threshold": 100.0,
+        "blur_threshold": 5.0,      # Very permissive — COLMAP handles mildly blurry frames fine; 30.0 was too strict for this video
         "lighting_threshold": 50.0,
-        "similarity_threshold": 10.0,
+        "similarity_threshold": 2.0,  # Allow more frames through; 8.0 caused only 2 frames to survive
     },
     "TEST": {
         "blur_threshold": 15.0,

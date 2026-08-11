@@ -24,6 +24,9 @@ from services.open3d_processor import Open3DProcessor
 # Load environment variables
 load_dotenv()
 
+# Set mode to PRODUCTION to ensure strict frame selection and robust COLMAP processing
+os.environ["PHOTOGRAMMETRY_MODE"] = "PRODUCTION"
+
 SUPABASE_URL = os.environ.get("SUPABASE_URL")
 SUPABASE_SERVICE_ROLE_KEY = os.environ.get("SUPABASE_SERVICE_ROLE_KEY")
 
@@ -98,7 +101,7 @@ def run_pipeline_background(job_id: str, case_id: str, file_url: str):
         # 2. Extract frames from video
         logger.info(f"[JOB {job_id}] Step 2/5: Extracting frames...")
         extractor = FrameExtractor()
-        extracted_paths = extractor.extract(video_path, frames_dir, fps=1)
+        extracted_paths = extractor.extract(video_path, frames_dir, fps=15)
         logger.info(f"[JOB {job_id}] Extracted {len(extracted_paths)} frames.")
 
         # 3. Select best frames
