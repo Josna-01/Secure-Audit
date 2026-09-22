@@ -23,7 +23,7 @@ import requests
 from sqlalchemy import text
 from sqlalchemy.orm import Session
 from db import get_db, SessionLocal
-from models import Case, Evidence, AuditLog, OCRResult, BNSPrediction, OTPToken
+from models import User, Case, Evidence, AuditLog, OCRResult, BNSPrediction, OTPToken
 
 load_dotenv()
 
@@ -408,9 +408,20 @@ def send_otp(req: LoginRequest, db: Session = Depends(get_db)):
 
     # Store OTP in PostgreSQL otp_tokens table
     try:
+        u_id = uuid.UUID(user["id"])
+        local_user = db.query(User).filter(User.id == u_id).first()
+        if not local_user:
+            db.add(User(
+                id=u_id,
+                email=user.get("email", ""),
+                full_name=user.get("full_name", "Officer"),
+                role=user.get("role", "Officer")
+            ))
+            db.commit()
+
         otp_db = OTPToken(
             id=uuid.uuid4(),
-            user_id=uuid.UUID(user["id"]),
+            user_id=u_id,
             token=otp,
             expires_at=expires_at,
             used=False
