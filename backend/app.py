@@ -89,6 +89,50 @@ def serialize_evidence(evidence) -> dict:
         }
     }
 
+def serialize_case(case) -> dict:
+    if not case:
+        return {}
+    return {
+        "id": str(case.id),
+        "title": case.title,
+        "offence_type": case.offence_type,
+        "fir_description": case.fir_description,
+        "fir_language": case.fir_language,
+        "complainant_name": case.complainant_name,
+        "complainant_contact": case.complainant_contact,
+        "victims": case.victims,
+        "suspects": case.suspects,
+        "incident_date": case.incident_date.isoformat() if case.incident_date else None,
+        "incident_time": case.incident_time.strftime("%H:%M") if case.incident_time else None,
+        "incident_location": case.incident_location,
+        "created_at": case.created_at.isoformat().replace("+00:00", "Z") if case.created_at else None,
+        "case_number": case.case_number,
+        "created_by": str(case.created_by) if case.created_by else None,
+        "created_by_name": case.created_by_name
+    }
+
+def serialize_evidence(evidence) -> dict:
+    if not evidence:
+        return {}
+    return {
+        "id": str(evidence.id),
+        "case_id": str(evidence.case_id) if evidence.case_id else None,
+        "evidence_type": evidence.evidence_type,
+        "description": evidence.description,
+        "file_url": evidence.file_url,
+        "file_hash": evidence.file_hash,
+        "created_at": evidence.created_at.isoformat().replace("+00:00", "Z") if evidence.created_at else None,
+        "file_name": evidence.file_name,
+        "file_size": evidence.file_size,
+        "mime_type": evidence.mime_type,
+        "uploaded_by": str(evidence.uploaded_by) if evidence.uploaded_by else None,
+        "uploaded_by_name": evidence.uploaded_by_name,
+        "verified_at": evidence.verified_at.isoformat().replace("+00:00", "Z") if evidence.verified_at else None,
+        "verified_by": str(evidence.verified_by) if evidence.verified_by else None,
+        "chain_of_custody_status": evidence.chain_of_custody_status,
+        "status": evidence.status
+    }
+
 SUPABASE_URL = os.environ.get("SUPABASE_URL")
 SUPABASE_KEY = os.environ.get("SUPABASE_KEY")
 SUPABASE_SERVICE_ROLE_KEY = os.environ.get("SUPABASE_SERVICE_ROLE_KEY")
@@ -538,9 +582,20 @@ def send_otp(req: LoginRequest, db: Session = Depends(get_db)):
 
     # Store OTP in PostgreSQL otp_tokens table
     try:
+        u_id = uuid.UUID(user["id"])
+        local_user = db.query(User).filter(User.id == u_id).first()
+        if not local_user:
+            db.add(User(
+                id=u_id,
+                email=user.get("email", ""),
+                full_name=user.get("full_name", "Officer"),
+                role=user.get("role", "Officer")
+            ))
+            db.commit()
+
         otp_db = OTPToken(
             id=uuid.uuid4(),
-            user_id=uuid.UUID(user["id"]),
+            user_id=u_id,
             token=otp,
             expires_at=expires_at,
             used=False
@@ -2034,6 +2089,14 @@ def process_ai_ocr(evidence_id: str, language: str, request: Request, db: Sessio
         print("[OCR DEBUG] REASON FOR 400: evidence_id is missing")
         raise HTTPException(status_code=400, detail="Missing evidence ID")
 
+@app.post("/ai/ocr")
+def run_ai_ocr(req: OCRRequest, request: Request, db: Session = Depends(get_db)):
+    user_info = get_current_user_info(request)
+
+    evidence_id = req.evidence_id
+    evidence_uuid = None
+    case_id = None
+    
     if evidence_id != "temp":
         try:
             evidence_uuid = uuid.UUID(evidence_id)
@@ -2142,7 +2205,7 @@ def process_ai_ocr(evidence_id: str, language: str, request: Request, db: Sessio
         confidence=confidence,
         page_number=1
     )
-
+    
     try:
         db.add(db_ocr)
         db.commit()
@@ -2169,7 +2232,7 @@ def process_ai_ocr(evidence_id: str, language: str, request: Request, db: Sessio
         "data": {
             "extracted_text": extracted_text,
             "detected_language": detected_language,
-            "translated_text": None
+            "translated_text": translated_text
         },
         "success": True
     }
