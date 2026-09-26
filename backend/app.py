@@ -30,7 +30,7 @@ import requests
 from sqlalchemy import text
 from sqlalchemy.orm import Session
 from db import get_db, SessionLocal
-from models import Case, Evidence, AuditLog, OCRResult, BNSPrediction, OTPToken, EvidenceCustodyRecord, BlockchainLog
+from models import User, Case, Evidence, AuditLog, OCRResult, BNSPrediction, OTPToken, EvidenceCustodyRecord, BlockchainLog
 from services.ocr_service import OCRServiceError, ocr_service
 from services.blockchain_service import blockchain_service, BlockchainUnavailable, BlockchainTransactionError
 
@@ -2173,13 +2173,14 @@ def run_ai_ocr(req: OCRRequest, request: Request, db: Session = Depends(get_db))
             except Exception as e:
                 print(f"[OCR DEBUG] Case access check warning: {e}")
 
-    lang = language or "auto"
+    lang = req.language or "auto"
     print(f"[OCR DEBUG] Requested language: {lang}")
 
     source_input = None
     local_path = None
     file_exists = False
     file_url = None
+    translated_text = None
 
     if evidence_obj and evidence_obj.file_url:
         file_url = evidence_obj.file_url
