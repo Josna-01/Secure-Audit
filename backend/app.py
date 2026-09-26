@@ -1230,8 +1230,8 @@ def upload_evidence(
     request: Request,
     case_id: str = Form(...),
     evidence_type: str = Form(...),
-    description: str = Form(None),
-    language: str = Form(None),
+    description: Optional[str] = Form(None),
+    language: Optional[str] = Form(None),
     file: UploadFile = File(...),
     db: Session = Depends(get_db)
 ):
@@ -1374,7 +1374,7 @@ def upload_evidence(
         raise HTTPException(status_code=400, detail="Failed to upload evidence")
 
 @app.get("/evidence")
-def get_evidence(request: Request, case_id: str = None, db: Session = Depends(get_db)):
+def get_evidence(request: Request, case_id: Optional[str] = None, db: Session = Depends(get_db)):
     user_info = get_current_user_info(request)
     
     # Check case access
