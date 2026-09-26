@@ -11,6 +11,14 @@ class User(Base):
     email = Column(String, nullable=False, unique=True)
     full_name = Column(String, nullable=False)
     role = Column(String, nullable=False)
+    department = Column(String, nullable=True)
+    badge_number = Column(String, nullable=True)
+    clearance_level = Column(Integer, server_default="1", default=1)
+    is_active = Column(Boolean, server_default="true", default=True)
+    created_at = Column(DateTime(timezone=True), nullable=False, server_default=func.now())
+    can_create_case = Column(Boolean, server_default="true", default=True)
+    last_login = Column(DateTime(timezone=True), nullable=True)
+
 
 
 class Case(Base):
@@ -53,6 +61,37 @@ class Evidence(Base):
     verified_by = Column(UUID(as_uuid=True), ForeignKey("users.id", ondelete="SET NULL"), nullable=True)
     chain_of_custody_status = Column(String, server_default="Collected", default="Collected")
     status = Column(String, server_default="Verified", default="Verified")
+    blockchain_tx_hash = Column(String, unique=True, nullable=True)
+    blockchain_block_number = Column(BigInteger, nullable=True)
+    blockchain_contract_address = Column(String, nullable=True)
+    blockchain_gas_used = Column(BigInteger, nullable=True)
+    blockchain_registered_at = Column(DateTime(timezone=True), nullable=True)
+    latest_verification_at = Column(DateTime(timezone=True), nullable=True)
+
+
+class EvidenceCustodyRecord(Base):
+    __tablename__ = "evidence_custody_records"
+
+    id = Column(UUID(as_uuid=True), primary_key=True, default=uuid.uuid4)
+    evidence_id = Column(UUID(as_uuid=True), ForeignKey("evidence.id", ondelete="CASCADE"), nullable=False, index=True)
+    officer_id = Column(String, nullable=False)
+    action = Column(String, nullable=False)
+    occurred_at = Column(DateTime(timezone=True), nullable=False)
+    transaction_hash = Column(String, nullable=True, unique=True)
+    block_number = Column(BigInteger, nullable=True)
+    created_at = Column(DateTime(timezone=True), nullable=False, server_default=func.now())
+
+
+class BlockchainLog(Base):
+    __tablename__ = "blockchain_logs"
+
+    id = Column(UUID(as_uuid=True), primary_key=True, default=uuid.uuid4)
+    evidence_id = Column(UUID(as_uuid=True), ForeignKey("evidence.id", ondelete="CASCADE"), nullable=True)
+    event_name = Column(String, nullable=False)
+    transaction_hash = Column(String, nullable=True, index=True)
+    block_number = Column(BigInteger, nullable=True)
+    payload = Column(JSONB, nullable=True)
+    created_at = Column(DateTime(timezone=True), nullable=False, server_default=func.now())
 
 
 class AuditLog(Base):

@@ -11,6 +11,7 @@ const NAV = [
   { id: '/cases', label: 'Case Management', icon: 'folder' },
   { id: '/personal', label: 'Personal Space', icon: 'notes', badge: 'Private' },
   { id: '/evidence', label: 'Evidence Upload', icon: 'upload' },
+  { id: '/blockchain', label: 'Blockchain', icon: 'cube' },
   { section: 'AI Modules' },
   { id: '/detection', label: 'Object Detection', icon: 'detect' },
   { id: '/bns', label: 'BNS Classification', icon: 'law' },

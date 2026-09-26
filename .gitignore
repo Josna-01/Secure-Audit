@@ -21,3 +21,7 @@ uploads
 photogrammetry-backend/output/
 photogrammetry-backend/test_data/
 point_cloud_preview.png
+CLAUDE.md
+.claude/settings.json
+bns-backend/.env
+

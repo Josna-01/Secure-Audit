@@ -105,6 +105,22 @@ export interface Evidence {
   created_at?: string
   description?: string
   language?: string
+  blockchain?: BlockchainEvidence
+}
+
+export interface BlockchainEvidence {
+  transactionHash?: string
+  blockNumber?: number
+  contractAddress?: string
+  gasUsed?: number
+  registeredAt?: string
+  latestVerificationAt?: string
+}
+
+export interface CustodyRecord {
+  officerId: string
+  action: string
+  timestamp: string
 }
 
 // ── DETECTION ─────────────────────────────────────────────────────────────

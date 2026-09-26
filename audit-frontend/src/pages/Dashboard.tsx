@@ -1,7 +1,7 @@
 import React, { useEffect, useState } from 'react'
 import { useNavigate } from 'react-router-dom'
 import { AppShell } from '../components/Layout'
-import { Card, CardTitle, CardHeader, Btn, Badge, ProgressBar } from '../components/UI'
+import { Card, CardTitle, CardHeader, Btn, Badge } from '../components/UI'
 import { api } from '../services/api'
 import type { Case, AuditLog } from '../types'
 import { format } from 'date-fns'
@@ -17,6 +17,24 @@ interface Stats {
   total_users?: number
 }
 
+interface BlockchainDashboard {
+  network: string
+  status: string
+  chain_id: number
+  contract_address: string
+  latest_block: number
+  registered_evidence: number
+  verified_evidence: number
+  tampered_evidence: number
+  recent_transactions: Array<{
+    event: string
+    transactionHash: string
+    blockNumber: number
+    createdAt: string
+    payload: Record<string, any>
+  }>
+}
+
 export default function Dashboard() {
   const navigate = useNavigate()
   const { user } = useAuth()
@@ -27,6 +45,8 @@ export default function Dashboard() {
   const [search, setSearch] = useState('')
   const [filter, setFilter] = useState('All')
   const [loading, setLoading] = useState(true)
+  const [blockchain, setBlockchain] = useState<BlockchainDashboard | null>(null)
+  const [blockchainLoading, setBlockchainLoading] = useState(true)
 
   useEffect(() => {
     Promise.all([
@@ -39,6 +59,15 @@ export default function Dashboard() {
       setLogs(logsRes.data)
     }).catch(console.error)
       .finally(() => setLoading(false))
+  }, [])
+
+  useEffect(() => {
+    api.getBlockchainDashboard()
+      .then((res: any) => {
+        setBlockchain(res.data || res)
+      })
+      .catch(console.error)
+      .finally(() => setBlockchainLoading(false))
   }, [])
 
   const filteredCases = cases.filter((c) => {
@@ -73,6 +102,13 @@ export default function Dashboard() {
     { label: 'My AI Analyses',  value: stats?.ai_analyses ?? '—',       sub: 'AI analyses run by me',color: 'var(--text3)',  page: '/detection',red: false },
     { label: 'My Audit Activity', value: stats?.my_audit_logs ?? '—',     sub: 'My audit log count',  color: 'var(--text3)',  page: '/audit',    red: false },
   ]
+
+  const eventColor = (event: string) => {
+    if (event === 'EvidenceRegistered') return 'var(--blue)'
+    if (event === 'EvidenceVerified') return 'var(--green)'
+    if (event === 'CustodyTransferred') return 'var(--purple)'
+    return 'var(--text3)'
+  }
 
   return (
     <AppShell title="Dashboard">
@@ -120,12 +156,100 @@ export default function Dashboard() {
           <Btn size="sm" onClick={() => navigate('/evidence')}>Upload Evidence</Btn>
           <Btn size="sm" onClick={() => navigate('/detection')}>Run Detection</Btn>
           <Btn size="sm" onClick={() => navigate('/audit')}>View Audit Log</Btn>
+          <Btn size="sm" onClick={() => navigate('/blockchain')}>Blockchain</Btn>
         </div>
       </Card>
 
-      {/* Main grid */}
-      <div style={{ display: 'grid', gridTemplateColumns: '1.5fr 1fr', gap: '16px' }}>
-        {/* Left: Cases */}
+      {/* ── BLOCKCHAIN OVERVIEW ── */}
+      <Card style={{ marginBottom: '16px' }}>
+        <CardHeader>
+          <div style={{ display: 'flex', alignItems: 'center', gap: '10px' }}>
+            <CardTitle>Blockchain Ledger</CardTitle>
+            {!blockchainLoading && blockchain && (
+              <span style={{
+                fontSize: '10px',
+                padding: '2px 8px',
+                borderRadius: '10px',
+                background: blockchain.status === 'online' ? 'var(--green-bg)' : 'var(--red-bg)',
+                color: blockchain.status === 'online' ? 'var(--green)' : 'var(--red)',
+                fontWeight: 600,
+                textTransform: 'uppercase',
+                letterSpacing: '.4px'
+              }}>
+                {blockchain.status === 'online' ? '● Connected' : '○ Offline'}
+              </span>
+            )}
+          </div>
+          <Btn size="xs" onClick={() => navigate('/blockchain')}>Full Dashboard</Btn>
+        </CardHeader>
+
+        {blockchainLoading ? (
+          <div style={{ padding: '20px', textAlign: 'center', color: 'var(--text3)', fontSize: '12px' }}>Loading blockchain data...</div>
+        ) : !blockchain || blockchain.status !== 'online' ? (
+          <div style={{ padding: '16px', textAlign: 'center', color: 'var(--text3)', fontSize: '12px' }}>
+            Ethereum provider unavailable. Ensure Ganache is running on port 8545.
+          </div>
+        ) : (
+          <div>
+            {/* Chain info banner */}
+            <div style={{ fontSize: '11px', color: 'var(--text3)', marginBottom: '14px', fontFamily: 'var(--mono)' }}>
+              Chain {blockchain.chain_id} · Block #{blockchain.latest_block} ·{' '}
+              <span style={{ color: 'var(--blue)' }}>{blockchain.contract_address}</span>
+            </div>
+
+            {/* Stats row */}
+            <div style={{ display: 'grid', gridTemplateColumns: 'repeat(3, 1fr)', gap: '10px', marginBottom: '16px' }}>
+              {[
+                { label: 'Registered', value: blockchain.registered_evidence, color: 'var(--blue)' },
+                { label: 'Verified', value: blockchain.verified_evidence, color: 'var(--green)' },
+                { label: 'Tampered', value: blockchain.tampered_evidence, color: 'var(--red)' },
+              ].map((item) => (
+                <div
+                  key={item.label}
+                  style={{ background: 'var(--bg3)', borderRadius: 'var(--r)', padding: '12px 14px', textAlign: 'center' }}
+                >
+                  <div style={{ fontSize: '22px', fontWeight: 700, fontFamily: 'var(--mono)', color: item.color, lineHeight: 1 }}>{item.value}</div>
+                  <div style={{ fontSize: '10px', color: 'var(--text3)', textTransform: 'uppercase', letterSpacing: '.4px', marginTop: '4px' }}>{item.label}</div>
+                </div>
+              ))}
+            </div>
+
+            {/* Recent transactions */}
+            {blockchain.recent_transactions.length > 0 && (
+              <div>
+                <div style={{ fontSize: '10px', color: 'var(--text3)', textTransform: 'uppercase', letterSpacing: '.5px', marginBottom: '8px', fontWeight: 600 }}>
+                  Recent Transactions
+                </div>
+                <div style={{ display: 'flex', flexDirection: 'column', gap: '4px' }}>
+                  {blockchain.recent_transactions.slice(0, 5).map((tx, i) => (
+                    <div key={i} style={{
+                      display: 'flex', alignItems: 'center', gap: '10px',
+                      padding: '7px 10px', background: 'var(--bg3)', borderRadius: 'var(--r)', fontSize: '11px'
+                    }}>
+                      <div style={{
+                        width: '6px', height: '6px', borderRadius: '50%',
+                        background: eventColor(tx.event), flexShrink: 0
+                      }} />
+                      <span style={{ color: 'var(--text2)', minWidth: '140px', whiteSpace: 'nowrap' }}>{tx.event}</span>
+                      <span style={{ color: 'var(--text3)', fontFamily: 'var(--mono)', fontSize: '10px' }}>block {tx.blockNumber}</span>
+                      <span style={{ color: 'var(--blue)', fontFamily: 'var(--mono)', fontSize: '10px', flex: 1, overflow: 'hidden', textOverflow: 'ellipsis', whiteSpace: 'nowrap' }}>
+                        {tx.transactionHash}
+                      </span>
+                      <span style={{ color: 'var(--text3)', fontSize: '10px', whiteSpace: 'nowrap' }}>
+                        {tx.createdAt ? format(new Date(tx.createdAt), 'HH:mm') : ''}
+                      </span>
+                    </div>
+                  ))}
+                </div>
+              </div>
+            )}
+          </div>
+        )}
+      </Card>
+
+      {/* Main 2-col grid: Cases + Audit Feed */}
+      <div style={{ display: 'grid', gridTemplateColumns: '3fr 2fr', gap: '16px', marginBottom: '16px' }}>
+        {/* Cases table */}
         <Card>
           <CardHeader>
             <CardTitle>Recent Cases</CardTitle>
@@ -182,6 +306,26 @@ export default function Dashboard() {
           )}
         </Card>
 
+        {/* Audit Feed */}
+        <Card>
+          <CardHeader>
+            <CardTitle>Live Audit Feed</CardTitle>
+            <Btn size="xs" onClick={() => navigate('/audit')}>Full Log</Btn>
+          </CardHeader>
+          {loading ? (
+            <div style={{ color: 'var(--text3)', fontSize: '12px' }}>Loading...</div>
+          ) : (
+            <div style={{ display: 'flex', flexDirection: 'column', gap: '2px' }}>
+              {logs.slice(0, 10).map((log) => (
+                <div key={log.id}
+                  style={{ display: 'flex', alignItems: 'flex-start', gap: '8px', padding: '5px 6px', borderRadius: 'var(--r)', fontSize: '12px', cursor: log.case_id ? 'pointer' : 'default' }}
+                  onMouseEnter={(e) => { e.currentTarget.style.background = 'var(--bg3)' }}
+                  onMouseLeave={(e) => { e.currentTarget.style.background = 'transparent' }}
+                  onClick={() => log.case_id && navigate(`/cases/${log.case_id}`)}
+                >
+                  <div style={{ width: '6px', height: '6px', borderRadius: '50%', flexShrink: 0, marginTop: '5px', background: actionColors[log.action] || 'var(--blue)' }} />
+                  <div style={{ fontFamily: 'var(--mono)', fontSize: '10px', color: 'var(--text3)', flexShrink: 0, minWidth: '46px' }}>
+                    {format(new Date(log.created_at), 'HH:mm')}
         {/* Right col */}
         <div style={{ display: 'flex', flexDirection: 'column', gap: '16px' }}>
           {/* Audit Feed */}
@@ -211,74 +355,64 @@ export default function Dashboard() {
                       {log.case_number && log.case_number !== 'N/A' && <span style={{ fontFamily: 'var(--mono)', fontSize: '10px', color: 'var(--text3)' }}> · {log.case_number}</span>}
                     </div>
                   </div>
-                ))}
+                  <div>
+                    <span style={{ color: 'var(--blue)', fontWeight: 500 }}>{log.user_name}</span>
+                    {' '}<span style={{ color: 'var(--text2)' }}>{log.action}</span>
+                    {log.case_number && log.case_number !== 'N/A' && <span style={{ fontFamily: 'var(--mono)', fontSize: '10px', color: 'var(--text3)' }}> · {log.case_number}</span>}
+                  </div>
+                </div>
+              ))}
+            </div>
+          )}
+        </Card>
+      </div>
+
+      {/* Bottom row: Hash Integrity + User Overview (Admin Only) */}
+      {role === 'Admin' && (
+        <div style={{ display: 'grid', gridTemplateColumns: '1fr 1fr', gap: '16px' }}>
+          {/* Hash Integrity */}
+          <Card>
+            <CardHeader>
+              <CardTitle>Hash Integrity</CardTitle>
+              <span style={{ fontSize: '10px', color: 'var(--green)' }}>Verified</span>
+            </CardHeader>
+            <div style={{ display: 'flex', flexDirection: 'column', gap: '8px' }}>
+              <div style={{ display: 'flex', alignItems: 'center', justifyContent: 'space-between', padding: '10px 14px', background: 'var(--bg3)', borderRadius: 'var(--r)' }}>
+                <span style={{ fontSize: '13px', color: 'var(--text2)' }}>Total Files</span>
+                <span style={{ fontFamily: 'var(--mono)', fontWeight: 700, fontSize: '18px', color: 'var(--text)' }}>{stats?.total_evidence ?? '—'}</span>
               </div>
-            )}
+              <div style={{ display: 'flex', alignItems: 'center', justifyContent: 'space-between', padding: '10px 14px', background: 'var(--green-bg)', borderRadius: 'var(--r)' }}>
+                <span style={{ fontSize: '13px', color: 'var(--green)' }}>Verified</span>
+                <span style={{ fontFamily: 'var(--mono)', fontWeight: 700, fontSize: '18px', color: 'var(--green)' }}>{(stats?.total_evidence ?? 0) - (stats?.tamper_alerts ?? 0)}</span>
+              </div>
+              {(stats?.tamper_alerts ?? 0) > 0 && (
+                <div
+                  onClick={() => navigate('/evidence')}
+                  style={{ display: 'flex', alignItems: 'center', justifyContent: 'space-between', padding: '10px 14px', background: 'var(--red-bg)', borderRadius: 'var(--r)', cursor: 'pointer' }}
+                  onMouseEnter={(e) => { e.currentTarget.style.opacity = '.8' }}
+                  onMouseLeave={(e) => { e.currentTarget.style.opacity = '1' }}
+                >
+                  <span style={{ fontSize: '13px', color: 'var(--red)' }}>Tampered</span>
+                  <span style={{ fontFamily: 'var(--mono)', fontWeight: 700, fontSize: '18px', color: 'var(--red)' }}>{stats?.tamper_alerts}</span>
+                </div>
+              )}
+            </div>
+            <Btn size="sm" full style={{ marginTop: '12px' }} onClick={() => navigate('/evidence')}>View Details</Btn>
           </Card>
 
-          {/* Hash Integrity (Admin Only) */}
-          {role === 'Admin' && (
-            <Card>
-              <CardHeader>
-                <CardTitle>Hash Integrity</CardTitle>
-                <span style={{ fontSize: '10px', color: 'var(--green)' }}>Verified</span>
-              </CardHeader>
-              <div style={{ display: 'flex', flexDirection: 'column', gap: '8px' }}>
-                <div style={{ display: 'flex', alignItems: 'center', justifyContent: 'space-between', padding: '8px 10px', background: 'var(--bg3)', borderRadius: 'var(--r)' }}>
-                  <span style={{ fontSize: '12px', color: 'var(--text2)' }}>Total Files</span>
-                  <span style={{ fontFamily: 'var(--mono)', fontWeight: 600, color: 'var(--text)' }}>{stats?.total_evidence ?? '—'}</span>
-                </div>
-                <div style={{ display: 'flex', alignItems: 'center', justifyContent: 'space-between', padding: '8px 10px', background: 'var(--green-bg)', borderRadius: 'var(--r)' }}>
-                  <span style={{ fontSize: '12px', color: 'var(--green)' }}>Verified</span>
-                  <span style={{ fontFamily: 'var(--mono)', fontWeight: 600, color: 'var(--green)' }}>{(stats?.total_evidence ?? 0) - (stats?.tamper_alerts ?? 0)}</span>
-                </div>
-                {(stats?.tamper_alerts ?? 0) > 0 && (
-                  <div
-                    onClick={() => navigate('/evidence')}
-                    style={{ display: 'flex', alignItems: 'center', justifyContent: 'space-between', padding: '8px 10px', background: 'var(--red-bg)', borderRadius: 'var(--r)', cursor: 'pointer' }}
-                    onMouseEnter={(e) => { e.currentTarget.style.opacity = '.8' }}
-                    onMouseLeave={(e) => { e.currentTarget.style.opacity = '1' }}
-                  >
-                    <span style={{ fontSize: '12px', color: 'var(--red)' }}>Tampered</span>
-                    <span style={{ fontFamily: 'var(--mono)', fontWeight: 600, color: 'var(--red)' }}>{stats?.tamper_alerts}</span>
-                  </div>
-                )}
-              </div>
-              <Btn size="sm" full style={{ marginTop: '10px' }} onClick={() => navigate('/evidence')}>View Details</Btn>
-            </Card>
-          )}
-
-          {/* User Overview (Admin Only) */}
-          {role === 'Admin' && (
-            <Card>
-              <CardTitle>User Overview</CardTitle>
-              <div style={{ display: 'flex', alignItems: 'center', justifyContent: 'space-between', padding: '8px 10px', background: 'var(--bg3)', borderRadius: 'var(--r)', marginBottom: '8px' }}>
-                <span style={{ fontSize: '12px', color: 'var(--text2)' }}>Total Registered Officers</span>
-                <span style={{ fontFamily: 'var(--mono)', fontWeight: 600, color: 'var(--text)' }}>{stats?.total_users ?? '—'}</span>
+          {/* User Overview */}
+          <Card>
+            <CardTitle>User Overview</CardTitle>
+            <div style={{ marginTop: '12px' }}>
+              <div style={{ display: 'flex', alignItems: 'center', justifyContent: 'space-between', padding: '10px 14px', background: 'var(--bg3)', borderRadius: 'var(--r)', marginBottom: '12px' }}>
+                <span style={{ fontSize: '13px', color: 'var(--text2)' }}>Total Registered Officers</span>
+                <span style={{ fontFamily: 'var(--mono)', fontWeight: 700, fontSize: '18px', color: 'var(--text)' }}>{stats?.total_users ?? '—'}</span>
               </div>
               <Btn size="sm" full onClick={() => navigate('/users')}>Manage Users</Btn>
-            </Card>
-          )}
-
-          {/* System Status */}
-          <Card>
-            <CardTitle>System Status</CardTitle>
-            <div style={{ display: 'flex', alignItems: 'center', justifyContent: 'space-between', marginBottom: '10px' }}>
-              <div style={{ display: 'flex', alignItems: 'center', gap: '6px' }}>
-                <div style={{ width: '8px', height: '8px', borderRadius: '50%', background: 'var(--green)' }} />
-                <span style={{ fontSize: '12px', color: 'var(--green)', fontWeight: 500 }}>System Online</span>
-              </div>
-              <span style={{ fontSize: '10px', color: 'var(--text3)' }}>Live</span>
             </div>
-            {[['YOLO Model', 'Loaded'], ['BNS Index', 'Loaded'], ['OCR Engine', 'Ready'], ['Database', 'Online']].map(([k, v]) => (
-              <div key={k} style={{ display: 'flex', justifyContent: 'space-between', padding: '4px 0', borderBottom: '1px solid var(--border)' }}>
-                <span style={{ fontSize: '11px', color: 'var(--text3)' }}>{k}</span>
-                <span style={{ fontSize: '11px', color: 'var(--green)', fontWeight: 500 }}>{v}</span>
-              </div>
-            ))}
           </Card>
         </div>
-      </div>
+      )}
     </AppShell>
   )
 }

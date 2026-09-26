@@ -14,7 +14,7 @@ class ApiService {
     this.client = axios.create({
       baseURL: BASE_URL,
 
-      timeout: 30000,
+      timeout: 120000,
       headers: { 'Content-Type': 'application/json' }
     })
 
@@ -140,6 +140,21 @@ class ApiService {
     return data
   }
 
+  async getEvidenceBlockchain(evidenceId: string) {
+    const { data } = await this.client.get<ApiResponse<{ status: any; evidence: import('../types').BlockchainEvidence; custodyHistory: import('../types').CustodyRecord[] }>>(`/evidence/${evidenceId}/blockchain`)
+    return data
+  }
+
+  async getBlockchainDashboard() {
+    const { data } = await this.client.get<ApiResponse<any>>('/blockchain/dashboard')
+    return data
+  }
+
+  async redeployEvidenceRegistry() {
+    const { data } = await this.client.post<ApiResponse<any>>('/admin/blockchain/redeploy')
+    return data
+  }
+
   // ── DETECTION ───────────────────────────────────────────────────────────
   async runDetection(evidenceId: string, caseId: string) {
     const { data } = await this.client.post<ApiResponse<DetectionResult>>('/ai/detect', { evidence_id: evidenceId, case_id: caseId })
@@ -159,7 +174,19 @@ class ApiService {
 
   // ── OCR ─────────────────────────────────────────────────────────────────
   async runOCR(evidenceId: string, language?: string) {
-    const { data } = await this.client.post<ApiResponse<{ extracted_text: string; translated_text?: string; detected_language: string }>>('/ai/ocr', { evidence_id: evidenceId, language })
+    const { data } = await this.client.post<ApiResponse<{
+      success: boolean;
+      evidence_id: string;
+      language: string;
+      confidence: number;
+      text: string;
+      pages?: { page_number: number; text: string; confidence: number; language: string }[];
+    }>>(`/ai/ocr/${evidenceId}`, { language }, { timeout: 300000 })
+    return data
+  }
+
+  async searchOCR(q: string) {
+    const { data } = await this.client.get<ApiResponse<any[]>>('/ocr/search', { params: { q } })
     return data
   }
 
