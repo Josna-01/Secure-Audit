@@ -306,26 +306,6 @@ export default function Dashboard() {
           )}
         </Card>
 
-        {/* Audit Feed */}
-        <Card>
-          <CardHeader>
-            <CardTitle>Live Audit Feed</CardTitle>
-            <Btn size="xs" onClick={() => navigate('/audit')}>Full Log</Btn>
-          </CardHeader>
-          {loading ? (
-            <div style={{ color: 'var(--text3)', fontSize: '12px' }}>Loading...</div>
-          ) : (
-            <div style={{ display: 'flex', flexDirection: 'column', gap: '2px' }}>
-              {logs.slice(0, 10).map((log) => (
-                <div key={log.id}
-                  style={{ display: 'flex', alignItems: 'flex-start', gap: '8px', padding: '5px 6px', borderRadius: 'var(--r)', fontSize: '12px', cursor: log.case_id ? 'pointer' : 'default' }}
-                  onMouseEnter={(e) => { e.currentTarget.style.background = 'var(--bg3)' }}
-                  onMouseLeave={(e) => { e.currentTarget.style.background = 'transparent' }}
-                  onClick={() => log.case_id && navigate(`/cases/${log.case_id}`)}
-                >
-                  <div style={{ width: '6px', height: '6px', borderRadius: '50%', flexShrink: 0, marginTop: '5px', background: actionColors[log.action] || 'var(--blue)' }} />
-                  <div style={{ fontFamily: 'var(--mono)', fontSize: '10px', color: 'var(--text3)', flexShrink: 0, minWidth: '46px' }}>
-                    {format(new Date(log.created_at), 'HH:mm')}
         {/* Right col */}
         <div style={{ display: 'flex', flexDirection: 'column', gap: '16px' }}>
           {/* Audit Feed */}
@@ -355,16 +335,11 @@ export default function Dashboard() {
                       {log.case_number && log.case_number !== 'N/A' && <span style={{ fontFamily: 'var(--mono)', fontSize: '10px', color: 'var(--text3)' }}> · {log.case_number}</span>}
                     </div>
                   </div>
-                  <div>
-                    <span style={{ color: 'var(--blue)', fontWeight: 500 }}>{log.user_name}</span>
-                    {' '}<span style={{ color: 'var(--text2)' }}>{log.action}</span>
-                    {log.case_number && log.case_number !== 'N/A' && <span style={{ fontFamily: 'var(--mono)', fontSize: '10px', color: 'var(--text3)' }}> · {log.case_number}</span>}
-                  </div>
-                </div>
-              ))}
+                ))}
             </div>
           )}
         </Card>
+        </div>
       </div>
 
       {/* Bottom row: Hash Integrity + User Overview (Admin Only) */}
