@@ -4,7 +4,9 @@ import shutil
 import logging
 import threading
 import datetime
+import time
 import requests
+from urllib.parse import urlparse
 from dotenv import load_dotenv
 from fastapi import FastAPI, HTTPException, Depends
 from fastapi.middleware.cors import CORSMiddleware
@@ -18,11 +20,13 @@ from models import PhotogrammetryModel
 # Import local service classes
 from services.frame_extractor import FrameExtractor
 from services.frame_selector import FrameSelector
+from services.roi_processor import ROIProcessor, NormalizedROI
 from services.colmap_runner import ColmapRunner
 from services.open3d_processor import Open3DProcessor
 
-# Load environment variables
-load_dotenv()
+# Load environment variables from this service's .env file
+BASE_DIR = os.path.dirname(os.path.abspath(__file__))
+load_dotenv(os.path.join(BASE_DIR, ".env"))
 
 SUPABASE_URL = os.environ.get("SUPABASE_URL")
 SUPABASE_SERVICE_ROLE_KEY = os.environ.get("SUPABASE_SERVICE_ROLE_KEY")
@@ -56,8 +60,9 @@ app.add_middleware(
 class TriggerRequest(BaseModel):
     evidence_id: str
     file_url: str
+    local_path: str | None = None
 
-def run_pipeline_background(job_id: str, case_id: str, file_url: str):
+def run_pipeline_background(job_id: str, case_id: str, file_url: str, local_path: str | None = None):
     """
     Executes the full photogrammetry pipeline asynchronously:
     1. Downloads video from remote storage
@@ -69,16 +74,32 @@ def run_pipeline_background(job_id: str, case_id: str, file_url: str):
     7. Updates job status in Supabase Database
     """
     logger.info(f"[JOB {job_id}] Starting background processing pipeline.")
+    pipeline_started_at = time.monotonic()
 
     # Workspace directory mapping
-    job_dir = os.path.join("/tmp/secure_audits", case_id)
+    # Keep job workspaces isolated and retain them for traceability/debugging.
+    job_dir = os.path.join(os.getenv("PHOTOGRAMMETRY_WORK_DIR", os.path.join(BASE_DIR, "jobs")), job_id)
     frames_dir = os.path.join(job_dir, "frames")
     selected_dir = os.path.join(job_dir, "selected")
+    roi_dir = os.path.join(job_dir, "roi_frames")
     colmap_dir = os.path.join(job_dir, "colmap")
     output_dir = os.path.join(job_dir, "output")
-    video_path = os.path.join(job_dir, "input_video.mp4")
+    source_name = local_path or urlparse(file_url).path
+    source_extension = os.path.splitext(source_name)[1].lower()
+    if source_extension not in {".mp4", ".mov", ".avi", ".mkv"}:
+        source_extension = ".mp4"
+    video_path = os.path.join(job_dir, f"input_video{source_extension}")
 
     try:
+        db = SessionLocal()
+        try:
+            job = db.query(PhotogrammetryModel).filter(PhotogrammetryModel.id == uuid.UUID(job_id)).first()
+            if not job:
+                raise RuntimeError("Photogrammetry job disappeared before processing could begin.")
+            job.status = "Processing"
+            db.commit()
+        finally:
+            db.close()
         # Create temporary working directories
         os.makedirs(job_dir, exist_ok=True)
         os.makedirs(frames_dir, exist_ok=True)
@@ -86,29 +107,54 @@ def run_pipeline_background(job_id: str, case_id: str, file_url: str):
         os.makedirs(colmap_dir, exist_ok=True)
         os.makedirs(output_dir, exist_ok=True)
 
-        # 1. Download video file from remote URL
-        logger.info(f"[JOB {job_id}] Step 1/5: Downloading video from {file_url}...")
-        response = requests.get(file_url, stream=True, timeout=60)
-        response.raise_for_status()
-        with open(video_path, "wb") as f:
-            for chunk in response.iter_content(chunk_size=8192):
-                f.write(chunk)
+        # 1. Resolve the evidence.  Locally stored evidence is deliberately
+        # passed by the authenticated main backend, while Supabase evidence is
+        # downloaded through its public URL.
+        if local_path:
+            if not os.path.isfile(local_path):
+                raise FileNotFoundError(f"Resolved local evidence file does not exist: {local_path}")
+            logger.info("[JOB %s] Step 1/5: Copying resolved local evidence.", job_id)
+            shutil.copy2(local_path, video_path)
+        else:
+            logger.info(f"[JOB {job_id}] Step 1/5: Downloading video from {file_url}...")
+            response = requests.get(file_url, stream=True, timeout=(10, 300))
+            response.raise_for_status()
+            with open(video_path, "wb") as f:
+                for chunk in response.iter_content(chunk_size=8192):
+                    if chunk:
+                        f.write(chunk)
+        if not os.path.exists(video_path) or os.path.getsize(video_path) == 0:
+            raise RuntimeError("Downloaded evidence video is empty.")
         logger.info(f"[JOB {job_id}] Video downloaded successfully to {video_path}")
 
         # 2. Extract frames from video
         logger.info(f"[JOB {job_id}] Step 2/5: Extracting frames...")
         extractor = FrameExtractor()
-        extracted_paths = extractor.extract(video_path, frames_dir, fps=1)
-        logger.info(f"[JOB {job_id}] Extracted {len(extracted_paths)} frames.")
+        interval = os.getenv("PHOTOGRAMMETRY_OBJECT_INTERVAL_SECONDS", "").strip()
+        start_seconds, end_seconds = 0.0, None
+        if interval:
+            start_seconds, end_seconds = (float(value.strip()) for value in interval.split(","))
+        extracted_paths = extractor.extract(video_path, frames_dir, fps=2,
+                                            start_seconds=start_seconds, end_seconds=end_seconds)
+        logger.info(f"[JOB {job_id}] Quality-mode candidate frames: {len(extracted_paths)} at 2 FPS.")
 
         # 3. Select best frames
         logger.info(f"[JOB {job_id}] Step 3/5: Selecting best frame candidates...")
+        roi_paths = ROIProcessor().crop(extracted_paths, roi_dir, NormalizedROI.from_environment())
         selector = FrameSelector()
-        selected_paths = selector.select(extracted_paths, max_frames=25)
-        logger.info(f"[JOB {job_id}] Selected {len(selected_paths)} high-quality frames.")
+        selected_paths = selector.select(roi_paths, max_frames=30)
+        source_order = {
+            os.path.normcase(os.path.normpath(path)): index
+            for index, path in enumerate(roi_paths)
+        }
+        selected_paths.sort(key=lambda path: source_order[os.path.normcase(os.path.normpath(path))])
+        logger.info(
+            f"[JOB {job_id}] Quality-mode selected frames: {len(selected_paths)}/{len(extracted_paths)} "
+            "in chronological source-video order."
+        )
 
-        if not selected_paths:
-            raise ValueError("No frames passed quality and similarity criteria. Cannot run reconstruction.")
+        if len(selected_paths) < 2:
+            raise ValueError("Fewer than two frames passed quality and similarity criteria; reconstruction cannot proceed.")
 
         # Copy selected frames to selection workspace folder
         for idx, path in enumerate(selected_paths):
@@ -119,19 +165,37 @@ def run_pipeline_background(job_id: str, case_id: str, file_url: str):
         # 4. Execute COLMAP Reconstruction
         logger.info(f"[JOB {job_id}] Step 4/5: Running COLMAP reconstruction (SfM + MVS)...")
         runner = ColmapRunner()
-        colmap_res = runner.reconstruct(selected_dir, colmap_dir)
+        colmap_res = runner.reconstruct(selected_dir, colmap_dir, minimum_registration_ratio=0.8)
         dense_ply = colmap_res["dense_ply_path"]
+        sparse_stats = colmap_res["sparse_stats"]
+        registration_percent = 100 * sparse_stats["registered_image_count"] / len(selected_paths)
+        logger.info(
+            f"[JOB {job_id}] SfM passed quality gate: registered "
+            f"{sparse_stats['registered_image_count']}/{len(selected_paths)} "
+            f"({registration_percent:.2f}%), sparse points={sparse_stats['sparse_point_count']}."
+        )
         logger.info(f"[JOB {job_id}] COLMAP completed. Dense point cloud created: {dense_ply}")
 
         # 5. Open3D Post-Processing
         logger.info(f"[JOB {job_id}] Step 5/5: Running Open3D cleaning and mesh reconstruction...")
         processor = Open3DProcessor()
         o3d_res = processor.process(dense_ply, output_dir)
+        logger.info(
+            f"[JOB {job_id}] Geometry diagnostics: dense points={o3d_res['dense_point_count']}, "
+            f"filtered points={o3d_res['filtered_point_count']}, "
+            f"mesh vertices={o3d_res['mesh_vertex_count']}, triangles={o3d_res['mesh_triangle_count']}."
+        )
         logger.info(f"[JOB {job_id}] Open3D processing completed. Assets generated.")
 
         # 6. Upload processed artifacts to Supabase Storage
         model_ply_local = o3d_res["ply_url"]
         model_glb_local = o3d_res["glb_url"]
+
+        # The processor validates geometry before returning. Retain an additional
+        # file-level guard here so failed/empty exports are never published.
+        for artifact_path, artifact_name in ((model_ply_local, "PLY"), (model_glb_local, "GLB")):
+            if not os.path.isfile(artifact_path) or os.path.getsize(artifact_path) == 0:
+                raise RuntimeError(f"Generated {artifact_name} artifact is missing or empty.")
 
         # Upload model.ply
         ply_storage_path = f"models/{case_id}/{job_id}_model.ply"
@@ -166,27 +230,36 @@ def run_pipeline_background(job_id: str, case_id: str, file_url: str):
         db = SessionLocal()
         try:
             job = db.query(PhotogrammetryModel).filter(PhotogrammetryModel.id == uuid.UUID(job_id)).first()
-            if job:
-                job.status = "Completed"
-                job.model_url = glb_url
-                job.point_cloud_url = ply_url
-                job.frame_count = len(selected_paths)
-                job.completed_at = completed_at
-                db.commit()
-            logger.info(f"[JOB {job_id}] Pipeline execution completed successfully. Database record updated.")
+            if not job:
+                raise RuntimeError("Photogrammetry job disappeared before completion could be saved.")
+            job.status = "Completed"
+            job.model_url = glb_url
+            job.point_cloud_url = ply_url
+            job.frame_count = len(selected_paths)
+            job.completed_at = completed_at
+            job.error_message = None
+            db.commit()
+            logger.info(
+                f"[JOB {job_id}] Pipeline execution completed successfully in "
+                f"{time.monotonic() - pipeline_started_at:.2f}s. Database record updated."
+            )
         except Exception as db_err:
             db.rollback()
             logger.error(f"[JOB {job_id}] Failed to update job database record status: {db_err}")
+            raise RuntimeError(f"Could not persist completed job state: {db_err}") from db_err
         finally:
             db.close()
 
     except Exception as e:
+        logger.error(f"[JOB {job_id}] Pipeline failed after {time.monotonic() - pipeline_started_at:.2f}s: {e}")
         logger.exception(f"[JOB {job_id}] Pipeline execution failed.")
         db = SessionLocal()
         try:
             job = db.query(PhotogrammetryModel).filter(PhotogrammetryModel.id == uuid.UUID(job_id)).first()
             if job:
                 job.status = "Failed"
+                job.error_message = str(e)[:4000]
+                job.completed_at = datetime.datetime.now(datetime.timezone.utc)
                 db.commit()
             logger.info(f"[JOB {job_id}] Job database record marked as Failed.")
         except Exception as db_err:
@@ -195,14 +268,8 @@ def run_pipeline_background(job_id: str, case_id: str, file_url: str):
         finally:
             db.close()
 
-    finally:
-        # Cleanup temporary workspace
-        try:
-            if os.path.exists(job_dir):
-                shutil.rmtree(job_dir)
-                logger.info(f"[JOB {job_id}] Cleaned up temporary directory: {job_dir}")
-        except Exception as cleanup_err:
-            logger.error(f"[JOB {job_id}] Failed to clean up temp dir {job_dir}: {cleanup_err}")
+    # Workspaces are deliberately retained; a scheduled retention policy can remove
+    # completed jobs after the evidence-retention period.
 
 
 @app.get("/")
@@ -226,7 +293,7 @@ def trigger_reconstruction(case_id: str, payload: TriggerRequest, db: Session = 
             id=uuid.uuid4(),
             case_id=uuid.UUID(case_id),
             evidence_id=uuid.UUID(payload.evidence_id),
-            status="Processing"
+            status="Pending"
         )
         db.add(db_job)
         db.commit()
@@ -235,16 +302,21 @@ def trigger_reconstruction(case_id: str, payload: TriggerRequest, db: Session = 
         # Spawn pipeline processing thread
         thread = threading.Thread(
             target=run_pipeline_background,
-            args=(str(db_job.id), case_id, payload.file_url)
+            args=(str(db_job.id), case_id, payload.file_url, payload.local_path),
+            name=f"photogrammetry-{db_job.id}",
+            daemon=True,
         )
         thread.start()
 
         return {
             "job_id": str(db_job.id),
-            "status": "Processing"
+            "case_id": str(db_job.case_id),
+            "evidence_id": str(db_job.evidence_id),
+            "status": "Pending"
         }
 
     except Exception as e:
+        db.rollback()
         logger.exception("Failed to trigger reconstruction request.")
         raise HTTPException(status_code=500, detail=f"Trigger failed: {str(e)}")
 
@@ -267,12 +339,16 @@ def get_reconstruction_status(case_id: str, db: Session = Depends(get_db)):
             )
 
         return {
+            "job_id": str(row.id),
+            "case_id": str(row.case_id),
+            "evidence_id": str(row.evidence_id) if row.evidence_id else None,
             "status": row.status,
             "model_url": row.model_url,
             "point_cloud_url": row.point_cloud_url,
             "frame_count": row.frame_count,
             "created_at": row.created_at.isoformat().replace("+00:00", "Z") if row.created_at else None,
-            "completed_at": row.completed_at.isoformat().replace("+00:00", "Z") if row.completed_at else None
+            "completed_at": row.completed_at.isoformat().replace("+00:00", "Z") if row.completed_at else None,
+            "error_message": row.error_message
         }
 
     except HTTPException:
@@ -280,6 +356,26 @@ def get_reconstruction_status(case_id: str, db: Session = Depends(get_db)):
     except Exception as e:
         logger.exception(f"Failed to query job status for case: {case_id}")
         raise HTTPException(status_code=500, detail=f"Database query failed: {str(e)}")
+
+
+@app.get("/status/job/{job_id}")
+def get_reconstruction_status_by_job(job_id: str, db: Session = Depends(get_db)):
+    """Return exactly the reconstruction run that the caller started."""
+    try:
+        row = db.query(PhotogrammetryModel).filter(PhotogrammetryModel.id == uuid.UUID(job_id)).first()
+    except ValueError as exc:
+        raise HTTPException(status_code=400, detail="job_id must be a valid UUID.") from exc
+    if not row:
+        raise HTTPException(status_code=404, detail="Photogrammetry reconstruction job was not found.")
+    return {
+        "job_id": str(row.id), "case_id": str(row.case_id),
+        "evidence_id": str(row.evidence_id) if row.evidence_id else None,
+        "status": row.status, "model_url": row.model_url,
+        "point_cloud_url": row.point_cloud_url, "frame_count": row.frame_count,
+        "created_at": row.created_at.isoformat().replace("+00:00", "Z") if row.created_at else None,
+        "completed_at": row.completed_at.isoformat().replace("+00:00", "Z") if row.completed_at else None,
+        "error_message": row.error_message,
+    }
 
 
 if __name__ == "__main__":

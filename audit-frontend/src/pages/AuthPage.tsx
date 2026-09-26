@@ -26,6 +26,11 @@ export default function AuthPage() {
   const [tokenLoading, setTokenLoading] = useState(false)
   const [signInLoading, setSignInLoading] = useState(false)
   
+  // Reset password states
+  const [isResetMode, setIsResetMode] = useState(false)
+  const [resetLoading, setResetLoading] = useState(false)
+  const [newPasswordInput, setNewPasswordInput] = useState('')
+
   // UI states
   const [error, setError] = useState('')
   const [successMsg, setSuccessMsg] = useState('')
@@ -50,6 +55,39 @@ export default function AuthPage() {
       setError(err.response?.data?.detail || 'Failed to send token. Please check email address.')
     } finally {
       setTokenLoading(false)
+    }
+  }
+
+
+  const handleResetPassword = async (e: React.FormEvent) => {
+    e.preventDefault()
+    setError('')
+    setSuccessMsg('')
+
+    if (!email) {
+      setError('Official email is required.')
+      return
+    }
+    if (!tokenInput) {
+      setError('Verification token is required.')
+      return
+    }
+    if (!newPasswordInput || newPasswordInput.length < 6) {
+      setError('New passphrase must be at least 6 characters long.')
+      return
+    }
+
+    setResetLoading(true)
+    try {
+      const res = await api.resetPassword(email, tokenInput, newPasswordInput)
+      setSuccessMsg(res.message || 'Passphrase reset successfully! You can now sign in with your new passphrase.')
+      setIsResetMode(false)
+      setPassword(newPasswordInput)
+      setNewPasswordInput('')
+    } catch (err: any) {
+      setError(err.response?.data?.detail || 'Failed to reset passphrase. Check your email and verification token.')
+    } finally {
+      setResetLoading(false)
     }
   }
 
@@ -472,6 +510,26 @@ export default function AuthPage() {
             </svg>
             Secure Sign In
           </Btn>
+
+        
+          <div style={{ marginTop: '16px', textAlign: 'center' }}>
+            <span
+              onClick={() => {
+                setIsResetMode(!isResetMode)
+                setError('')
+                setSuccessMsg('')
+              }}
+              style={{
+                fontSize: '12px',
+                color: 'var(--blue)',
+                cursor: 'pointer',
+                fontWeight: 600,
+                userSelect: 'none'
+              }}
+            >
+              {isResetMode ? '← Back to Sign In' : 'Forgot Passphrase? Reset via Email Token'}
+            </span>
+          </div>
 
         </form>
       </div>

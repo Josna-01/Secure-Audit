@@ -10,7 +10,8 @@ class FrameExtractor:
     at a target frame rate (FPS).
     """
 
-    def extract(self, video_path: str, output_dir: str, fps: int = 1) -> list[str]:
+    def extract(self, video_path: str, output_dir: str, fps: int = 1,
+                start_seconds: float = 0.0, end_seconds: float | None = None) -> list[str]:
         """
         Extracts frames from a video file and saves them as JPEGs.
 
@@ -51,16 +52,23 @@ class FrameExtractor:
                 logger.warning("Retrieved video FPS is invalid (<= 0). Defaulting to 25.0 FPS.")
                 video_fps = 25.0
 
+            if start_seconds < 0 or (end_seconds is not None and end_seconds <= start_seconds):
+                raise ValueError("Frame interval must satisfy 0 <= start_seconds < end_seconds.")
+            start_frame = int(start_seconds * video_fps)
+            end_frame = int(end_seconds * video_fps) if end_seconds is not None else total_frames
+            cap.set(cv2.CAP_PROP_POS_FRAMES, start_frame)
             # Calculate how many frames to skip to match target FPS
             interval = max(1, round(video_fps / fps))
             logger.info(f"Target extraction rate: {fps} FPS. Extracting 1 frame every {interval} frames.")
 
-            current_frame_idx = 0
+            current_frame_idx = start_frame
             saved_frame_count = 0
 
             while True:
                 ret, frame = cap.read()
                 if not ret:
+                    break
+                if current_frame_idx >= end_frame:
                     break
 
                 if current_frame_idx % interval == 0:
