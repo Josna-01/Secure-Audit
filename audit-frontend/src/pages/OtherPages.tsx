@@ -365,7 +365,7 @@ export function BNSPage() {
     try {
       const res = await api.predictBNS(firText)
       setResult(res.data || res)
-    } catch { setErr('Classification failed. Ensure the BNS model server is running on port 8001.') }
+    } catch { setErr('Classification failed. The BNS prediction service is unavailable. Please ensure the BNS server is running (uvicorn app.main:app --port 8001 --reload in bns-backend/).') }
     finally { setRunning(false) }
   }
 
@@ -516,10 +516,13 @@ export function OCRPage() {
         // 409 = duplicate file — the backend tells us the existing evidence ID.
         // Parse it out and re-use it so OCR still runs on the same file.
         if (uploadErr.response?.status === 409) {
-          const detail: string = uploadErr.response?.data?.detail || ''
-          // Backend message: "Duplicate file detected. This file was already uploaded (evidence ID: <uuid>). SHA-256: ..."
+          const respData = uploadErr.response?.data
+          const dupId = respData?.evidence_id
+          const detail: string = typeof respData === 'string' ? respData : (respData?.detail || '')
           const match = detail.match(/evidence ID:\s*([\w-]+)/i)
-          if (match) {
+          if (dupId) {
+            evidenceId = dupId
+          } else if (match) {
             evidenceId = match[1]
           } else {
             // Cannot extract existing ID — surface the conflict message

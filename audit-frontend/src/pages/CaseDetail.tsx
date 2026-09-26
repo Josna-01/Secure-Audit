@@ -3,7 +3,7 @@ import { useParams, useNavigate } from 'react-router-dom'
 import { AppShell } from '../components/Layout'
 import { Card, CardTitle, CardHeader, Btn, Badge, Tabs, InfoRow, HashChip, AlertBox, Spinner } from '../components/UI'
 import { api } from '../services/api'
-import type { Case, Evidence, BNSResult, Storyboard } from '../types'
+import type { Case, Evidence, BNSResult, Storyboard, CustodyRecord } from '../types'
 import { format } from 'date-fns'
 import { useAuth } from '../context/AuthContext'
 
@@ -26,6 +26,8 @@ export default function CaseDetail() {
   const [ocrResult, setOcrResult] = useState<any | null>(null)
   const [ocrError, setOcrError] = useState('')
   const [activeOcrPage, setActiveOcrPage] = useState(1)
+  const [chainData, setChainData] = useState<Record<string, { status: any; custodyHistory: CustodyRecord[] }>>({})
+  const [verifyResult, setVerifyResult] = useState<Record<string, string>>({})
 
   useEffect(() => {
     if (!id) return
@@ -41,6 +43,21 @@ export default function CaseDetail() {
     }).catch(console.error)
       .finally(() => setLoading(false))
   }, [id])
+
+  const loadBlockchain = async (evidenceId: string) => {
+    try { const result = await api.getEvidenceBlockchain(evidenceId); setChainData((current) => ({ ...current, [evidenceId]: result.data })) }
+    catch (e: any) { setVerifyResult((current) => ({ ...current, [evidenceId]: e.response?.data?.detail || 'Blockchain details unavailable' })) }
+  }
+
+  const verifyIntegrity = async (evidenceId: string) => {
+    setVerifyResult((current) => ({ ...current, [evidenceId]: 'Verifying integrity on Ethereum…' }))
+    try {
+      const result = await api.verifyHash(evidenceId)
+      setVerifyResult((current) => ({ ...current, [evidenceId]: result.data.isVerified ? '✓ Integrity verified on-chain' : '⚠ Hash mismatch — tampering detected' }))
+      await loadBlockchain(evidenceId)
+      const evRes = await api.getEvidence(id); setEvidence(evRes.data)
+    } catch (e: any) { setVerifyResult((current) => ({ ...current, [evidenceId]: e.response?.data?.detail || 'Verification failed' })) }
+  }
 
   const generateStoryboard = async () => {
     if (!id) return
@@ -179,27 +196,25 @@ export default function CaseDetail() {
               <div style={{ display: 'flex', alignItems: 'center', gap: '8px', marginTop: '8px' }}>
                 <HashChip hash={f.sha256_hash} />
                 <div style={{ flex: 1 }} />
-                {/* <Btn size="xs" onClick={() => api.verifyHash(f.id)}>Verify Hash</Btn> */}
-                <Btn size="xs" onClick={async () => {
-                  try {
-                    const res = await api.verifyHash(f.id);
-                    if (res.data.verified) {
-                      alert("✅ Hash Verified: Match!");
-                    } else {
-                      alert("🚨 TAMPER DETECTED: Hash mismatch!");
-                    }
-                    // Refresh evidence list to immediately show the red Tampered UI
-                    const evRes = await api.getEvidence(id);
-                    setEvidence(evRes.data);
-                  } catch (err) {
-                    alert("❌ Error verifying hash");
-                  }
-                }}>Verify Hash</Btn>
+                <Btn size="xs" onClick={() => verifyIntegrity(f.id)}>Verify Integrity</Btn>
+                <Btn size="xs" onClick={() => loadBlockchain(f.id)}>Blockchain Details</Btn>
                 <Btn size="xs" onClick={() => navigate('/detection')}>Run YOLO</Btn>
               </div>
               {f.status === 'Tampered' && (
                 <div style={{ marginTop: '6px', fontSize: '10px', color: 'var(--red)', padding: '4px 8px', background: 'var(--red-bg)', borderRadius: '4px' }}>Hash mismatch — file may have been modified after upload</div>
               )}
+              <div style={{ marginTop: 10, paddingTop: 10, borderTop: '1px solid var(--border)', fontSize: 11 }}>
+                <div style={{ color: 'var(--text3)', textTransform: 'uppercase', letterSpacing: '.4px', marginBottom: 6 }}>Blockchain Status</div>
+                <div style={{ color: chainData[f.id]?.status?.connected ? 'var(--green)' : 'var(--text3)' }}>{chainData[f.id]?.status?.connected ? 'Connected' : 'Load blockchain details to check status'}</div>
+                {f.blockchain && <div style={{ display: 'grid', gridTemplateColumns: '130px 1fr', gap: '4px 8px', marginTop: 7, color: 'var(--text2)' }}>
+                  <span>Evidence Hash</span><span style={{ fontFamily: 'var(--mono)', overflow: 'hidden', textOverflow: 'ellipsis' }}>{f.sha256_hash}</span>
+                  <span>Transaction Hash</span><span style={{ fontFamily: 'var(--mono)', overflow: 'hidden', textOverflow: 'ellipsis' }}>{f.blockchain.transactionHash || '—'}</span>
+                  <span>Block Number</span><span>{f.blockchain.blockNumber ?? '—'}</span><span>Contract Address</span><span style={{ fontFamily: 'var(--mono)' }}>{f.blockchain.contractAddress || '—'}</span>
+                  <span>Gas Used</span><span>{f.blockchain.gasUsed ?? '—'}</span><span>Latest Verification</span><span>{f.blockchain.latestVerificationAt ? new Date(f.blockchain.latestVerificationAt).toLocaleString() : '—'}</span>
+                </div>}
+                {verifyResult[f.id] && <div style={{ marginTop: 7, color: verifyResult[f.id].startsWith('✓') ? 'var(--green)' : verifyResult[f.id].startsWith('⚠') ? 'var(--red)' : 'var(--text2)' }}>{verifyResult[f.id]}</div>}
+                {chainData[f.id]?.custodyHistory?.length > 0 && <div style={{ marginTop: 9 }}><div style={{ color: 'var(--text3)', marginBottom: 5 }}>Chain of Custody Timeline</div>{chainData[f.id].custodyHistory.map((record, index) => <div key={`${record.timestamp}-${index}`} style={{ padding: '4px 0', borderLeft: '2px solid var(--blue)', paddingLeft: 8 }}>{record.action} · {record.officerId} · {new Date(record.timestamp).toLocaleString()}</div>)}</div>}
+              </div>
             </div>
           ))}
         </div>

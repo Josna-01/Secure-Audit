@@ -16,6 +16,7 @@ import {
 import { ProfilePage } from './pages/ProfilePage'
 import UsersPage from './pages/UsersPage'
 import ForcedPasswordPage from './pages/ForcedPasswordPage'
+import BlockchainDashboard from './pages/BlockchainDashboard'
 
 function ProtectedRoute({ children }: { children: React.ReactNode }) {
   const { isAuthenticated, isLoading, user } = useAuth()
@@ -65,6 +66,7 @@ function AppRoutes() {
       <Route path="/audit" element={<ProtectedRoute><AuditPage /></ProtectedRoute>} />
       <Route path="/profile" element={<ProtectedRoute><ProfilePage /></ProtectedRoute>} />
       <Route path="/users" element={<ProtectedRoute><UsersPage /></ProtectedRoute>} />
+      <Route path="/blockchain" element={<ProtectedRoute><BlockchainDashboard /></ProtectedRoute>} />
       <Route path="/forced-password-change" element={<ForcedPasswordRoute><ForcedPasswordPage /></ForcedPasswordRoute>} />
 
       <Route path="*" element={<Navigate to="/dashboard" replace />} />

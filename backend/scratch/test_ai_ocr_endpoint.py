@@ -6,22 +6,39 @@ import io
 
 sys.path.append(os.path.dirname(os.path.dirname(os.path.abspath(__file__))))
 
+from sqlalchemy import text
 from db import SessionLocal
 from models import Evidence, Case, OCRResult
-from app import app
 from fastapi.testclient import TestClient
+from app import app, create_jwt, sync_user_to_postgres
 
 client = TestClient(app)
 
 def test_ocr_endpoint():
     db = SessionLocal()
     try:
+        test_user_id = str(uuid.uuid4())
+        test_email = f"test_{test_user_id[:8]}@secureaudit.gov"
+        token = create_jwt(test_user_id, test_email, "Admin", "Test Admin")
+        headers = {"Authorization": f"Bearer {token}"}
+
+        # Sync test user to postgres
+        sync_user_to_postgres({
+            "id": test_user_id,
+            "email": test_email,
+            "full_name": "Test Admin",
+            "role": "Admin",
+            "is_active": True,
+            "can_create_case": True
+        }, db)
+
         # Create test case and evidence in PostgreSQL
         test_case_id = uuid.uuid4()
         test_case = Case(
             id=test_case_id,
             title="OCR Test Case",
-            offence_type="Fraud"
+            offence_type="Fraud",
+            created_by=uuid.UUID(test_user_id)
         )
         db.add(test_case)
 
@@ -47,7 +64,7 @@ def test_ocr_endpoint():
         db.commit()
 
         print(f"[TEST] Sending POST /ai/ocr/{test_evidence_id}...")
-        response = client.post(f"/ai/ocr/{test_evidence_id}", json={"language": "en"})
+        response = client.post(f"/ai/ocr/{test_evidence_id}", json={"language": "en"}, headers=headers)
 
         print(f"[TEST] Response Status Code: {response.status_code}")
         print(f"[TEST] Response Body: {response.json()}")
@@ -61,13 +78,10 @@ def test_ocr_endpoint():
         assert saved_ocr is not None, "OCRResult record not found in PostgreSQL!"
         print(f"[TEST SUCCESS] Saved OCR text: '{saved_ocr.extracted_text}'")
 
-        # Cleanup
-        if saved_ocr:
-            db.delete(saved_ocr)
-        if test_evidence:
-            db.delete(test_evidence)
+        # Cleanup: deleting case cascades to evidence and ocr_results
         if test_case:
             db.delete(test_case)
+        db.execute(text("DELETE FROM users WHERE id = :uid"), {"uid": test_user_id})
         db.commit()
 
 

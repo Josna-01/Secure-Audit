@@ -6,6 +6,11 @@ import datetime
 import random
 import string
 import smtplib
+import logging
+import subprocess
+import threading
+import time
+from pathlib import Path
 from email.mime.text import MIMEText
 from email.mime.multipart import MIMEMultipart
 from fastapi import FastAPI, File, UploadFile, HTTPException, Form, BackgroundTasks, Request, Depends
@@ -24,10 +29,12 @@ import requests
 from sqlalchemy import text
 from sqlalchemy.orm import Session
 from db import get_db, SessionLocal
-from models import Case, Evidence, AuditLog, OCRResult, BNSPrediction, OTPToken
+from models import Case, Evidence, AuditLog, OCRResult, BNSPrediction, OTPToken, EvidenceCustodyRecord, BlockchainLog
 from services.ocr_service import OCRServiceError, ocr_service
+from services.blockchain_service import blockchain_service, BlockchainUnavailable, BlockchainTransactionError
 
 load_dotenv()
+logger = logging.getLogger("secure_audit.application")
 
 
 def serialize_case(case) -> dict:
@@ -71,7 +78,15 @@ def serialize_evidence(evidence) -> dict:
         "verified_at": evidence.verified_at.isoformat().replace("+00:00", "Z") if evidence.verified_at else None,
         "verified_by": str(evidence.verified_by) if evidence.verified_by else None,
         "chain_of_custody_status": evidence.chain_of_custody_status,
-        "status": evidence.status
+        "status": evidence.status,
+        "blockchain": {
+            "transactionHash": evidence.blockchain_tx_hash,
+            "blockNumber": evidence.blockchain_block_number,
+            "contractAddress": evidence.blockchain_contract_address,
+            "gasUsed": evidence.blockchain_gas_used,
+            "registeredAt": evidence.blockchain_registered_at.isoformat() if evidence.blockchain_registered_at else None,
+            "latestVerificationAt": evidence.latest_verification_at.isoformat() if evidence.latest_verification_at else None,
+        }
     }
 
 SUPABASE_URL = os.environ.get("SUPABASE_URL")
@@ -87,6 +102,89 @@ supabase: Client = create_client(SUPABASE_URL, SUPABASE_KEY)
 supabase_admin: Client = create_client(SUPABASE_URL, SUPABASE_SERVICE_ROLE_KEY)
 
 app = FastAPI()
+
+_blockchain_event_cursor: Optional[int] = None
+
+
+def make_json_safe(obj):
+    if isinstance(obj, (bytes, bytearray)):
+        return "0x" + obj.hex() if not str(obj).startswith("0x") else obj.hex()
+    if isinstance(obj, dict):
+        return {str(k): make_json_safe(v) for k, v in obj.items()}
+    if isinstance(obj, (list, tuple)):
+        return [make_json_safe(x) for x in obj]
+    return obj
+
+
+def synchronize_blockchain_events() -> None:
+    """Mirror contract events created outside this API without duplicating receipt writes."""
+    global _blockchain_event_cursor
+    session = SessionLocal()
+    try:
+        if _blockchain_event_cursor is None:
+            status = blockchain_service.status()
+            if not status["connected"]:
+                return
+            _blockchain_event_cursor = max(0, status["latestBlock"] - 1)
+        events, latest = blockchain_service.events_since(_blockchain_event_cursor)
+        for event in events:
+            raw_ev_id = event["args"].get("evidenceId")
+            ev_str = raw_ev_id.hex() if isinstance(raw_ev_id, (bytes, bytearray)) else str(raw_ev_id)
+            
+            # Find evidence by transaction hash or valid UUID
+            evidence = session.query(Evidence).filter(Evidence.blockchain_tx_hash == event["transactionHash"]).first()
+            if not evidence and ev_str:
+                try:
+                    parsed_uuid = uuid.UUID(ev_str)
+                    evidence = session.query(Evidence).filter(Evidence.id == parsed_uuid).first()
+                except Exception:
+                    evidence = None
+            
+            safe_payload = make_json_safe(event["args"])
+
+            if evidence:
+                if event["name"] == "EvidenceVerified":
+                    evidence.status = "Verified" if event["args"].get("isMatch") else "Tampered"
+                    evidence.latest_verification_at = event["timestamp"]
+                if event["name"] == "CustodyTransferred" and not session.query(EvidenceCustodyRecord.id).filter(EvidenceCustodyRecord.transaction_hash == event["transactionHash"]).first():
+                    session.add(EvidenceCustodyRecord(
+                        evidence_id=evidence.id,
+                        officer_id=str(event["args"].get("officerId", "system")),
+                        action=str(event["args"].get("action", "TRANSFERRED")),
+                        occurred_at=event["timestamp"],
+                        transaction_hash=event["transactionHash"],
+                        block_number=event["blockNumber"]
+                    ))
+            
+            if not session.query(BlockchainLog.id).filter(
+                BlockchainLog.transaction_hash == event["transactionHash"],
+                BlockchainLog.event_name == event["name"]
+            ).first():
+                session.add(BlockchainLog(
+                    evidence_id=evidence.id if evidence else None,
+                    event_name=event["name"],
+                    transaction_hash=event["transactionHash"],
+                    block_number=event["blockNumber"],
+                    payload=safe_payload
+                ))
+        session.commit()
+        _blockchain_event_cursor = latest + 1
+    except Exception as exc:
+        session.rollback()
+        logger.warning("Blockchain event synchronization deferred: %s", exc)
+    finally:
+        session.close()
+
+
+def blockchain_event_listener() -> None:
+    while True:
+        synchronize_blockchain_events()
+        time.sleep(int(os.getenv("BLOCKCHAIN_EVENT_POLL_SECONDS", "10")))
+
+
+@app.on_event("startup")
+def start_blockchain_event_listener() -> None:
+    threading.Thread(target=blockchain_event_listener, name="blockchain-event-listener", daemon=True).start()
 
 app.add_middleware(
     CORSMiddleware,
@@ -131,6 +229,7 @@ class DetectionRequest(BaseModel):
 class OCRRequest(BaseModel):
     evidence_id: Optional[str] = None
     language: Optional[str] = "auto"
+    force: Optional[bool] = False
 
 
 class LoginRequest(BaseModel):
@@ -1048,13 +1147,18 @@ def upload_evidence(
         case_uuid = uuid.UUID(case_id) if case_id else None
         dup_check = db.query(Evidence.id).filter(Evidence.case_id == case_uuid, Evidence.file_hash == hash_hex).first()
         if dup_check:
-            raise HTTPException(
+            dup_id_str = str(dup_check[0])
+            return JSONResponse(
                 status_code=409,
-                detail=f"Duplicate file detected. This file was already uploaded (evidence ID: {dup_check[0]}). SHA-256: {hash_hex[:16]}..."
+                content={
+                    "detail": f"Duplicate file detected. This file was already uploaded (evidence ID: {dup_id_str}). SHA-256: {hash_hex[:16]}...",
+                    "evidence_id": dup_id_str,
+                    "duplicate": True
+                }
             )
-    except HTTPException:
-        raise
-    except Exception:
+    except Exception as e:
+        if isinstance(e, HTTPException):
+            raise e
         pass  # if duplicate check fails, continue — don't block uploads
 
     # ── 3. Upload to local storage or Supabase Storage ────────────────────────
@@ -1097,7 +1201,7 @@ def upload_evidence(
         except Exception:
             file_url = f"{SUPABASE_URL}/storage/v1/object/public/evidence/{storage_path}"
 
-    # ── 4. Store evidence record with hash and metadata ──────────────────────
+    # Flush relational metadata, wait for a mined chain receipt, then commit both.
     db_evidence = Evidence(
         case_id=uuid.UUID(case_id) if case_id else None,
         evidence_type=evidence_type,
@@ -1115,6 +1219,15 @@ def upload_evidence(
 
     try:
         db.add(db_evidence)
+        db.flush()
+        registration = blockchain_service.register_evidence(str(db_evidence.id), case_id, original_filename, hash_hex, user_info["id"])
+        db_evidence.blockchain_tx_hash = registration["transactionHash"]
+        db_evidence.blockchain_block_number = registration["blockNumber"]
+        db_evidence.blockchain_contract_address = registration["contractAddress"]
+        db_evidence.blockchain_gas_used = registration["gasUsed"]
+        db_evidence.blockchain_registered_at = registration["timestamp"]
+        db.add(EvidenceCustodyRecord(evidence_id=db_evidence.id, officer_id=user_info["id"], action="REGISTERED", occurred_at=registration["timestamp"], transaction_hash=registration["transactionHash"], block_number=registration["blockNumber"]))
+        db.add(BlockchainLog(evidence_id=db_evidence.id, event_name="EvidenceRegistered", transaction_hash=registration["transactionHash"], block_number=registration["blockNumber"], payload={"contractAddress": registration["contractAddress"], "gasUsed": registration["gasUsed"]}))
         db.commit()
         db.refresh(db_evidence)
         evidence_row = serialize_evidence(db_evidence)
@@ -1139,7 +1252,12 @@ def upload_evidence(
             },
             db=db
         )
-        return {"data": evidence_row}
+        logger.info("Evidence %s registered on chain: %s", db_evidence.id, registration["transactionHash"])
+        return {"data": evidence_row, "success": True}
+    except (BlockchainUnavailable, BlockchainTransactionError) as e:
+        db.rollback()
+        logger.exception("Blockchain registration failed; rolling back evidence upload")
+        raise HTTPException(status_code=503, detail=str(e))
     except Exception as e:
         db.rollback()
         print(f"[EVIDENCE UPLOAD DB ERROR] {e}")
@@ -1271,13 +1389,34 @@ def verify_evidence_hash(evidence_id: str, request: Request, db: Session = Depen
                     sha256.update(chunk)
             current_hash = sha256.hexdigest()
 
-    is_verified = current_hash == stored_hash
+    try:
+        is_verified, chain_result = blockchain_service.verify_evidence(evidence_id, current_hash, user_info["id"])
+        on_chain = blockchain_service.custody_history(evidence_id)
+    except (BlockchainUnavailable, BlockchainTransactionError) as e:
+        logger.exception("Blockchain verification failed for %s", evidence_id)
+        raise HTTPException(status_code=503, detail=str(e))
 
     # Update status and verification metadata
     try:
         evidence_obj.verified_at = datetime.datetime.now(datetime.timezone.utc)
         evidence_obj.verified_by = uuid.UUID(user_info["id"]) if user_info["id"] else None
         evidence_obj.status = "Verified" if is_verified else "Tampered"
+        evidence_obj.latest_verification_at = chain_result["timestamp"]
+        custody = chain_result["custodyTransaction"]
+        db.add(EvidenceCustodyRecord(evidence_id=evidence_obj.id, officer_id=user_info["id"], action="VERIFIED", occurred_at=custody["timestamp"], transaction_hash=custody["transactionHash"], block_number=custody["blockNumber"]))
+        db.add(BlockchainLog(
+            evidence_id=evidence_obj.id,
+            event_name="EvidenceVerified",
+            transaction_hash=chain_result["transactionHash"],
+            block_number=chain_result["blockNumber"],
+            payload={
+                "isMatch": is_verified,
+                "status": "Verified" if is_verified else "Tampered",
+                "calculatedHash": current_hash,
+                "contractAddress": chain_result.get("contractAddress"),
+                "gasUsed": chain_result.get("gasUsed")
+            }
+        ))
         db.commit()
     except Exception as e:
         db.rollback()
@@ -1301,13 +1440,391 @@ def verify_evidence_hash(evidence_id: str, request: Request, db: Session = Depen
 
     return {
         "data": {
+            "isVerified": is_verified,
             "verified": is_verified,
+            "storedHash": stored_hash,
             "stored_hash": stored_hash,
+            "calculatedHash": current_hash,
             "computed_hash": current_hash,
+            "transactionHash": chain_result["transactionHash"],
+            "blockNumber": chain_result["blockNumber"],
+            "custodyHistory": on_chain,
             "status": "Verified" if is_verified else "Tampered"
         },
         "success": True
     }
+
+
+@app.get("/evidence/{evidence_id}/blockchain")
+def evidence_blockchain_details(evidence_id: str, request: Request, db: Session = Depends(get_db)):
+    user_info = get_current_user_info(request)
+    evidence = db.query(Evidence).filter(Evidence.id == evidence_id).first()
+    if not evidence:
+        raise HTTPException(status_code=404, detail="Evidence not found")
+    check_case_access(str(evidence.case_id), user_info, db)
+    try:
+        custody = blockchain_service.custody_history(evidence_id)
+    except BlockchainUnavailable as e:
+        raise HTTPException(status_code=503, detail=str(e))
+    return {"data": {"status": blockchain_service.status(), "evidence": serialize_evidence(evidence)["blockchain"], "custodyHistory": custody}, "success": True}
+
+
+class CustodyTransferRequest(BaseModel):
+    officer_id: str
+
+
+@app.post("/evidence/{evidence_id}/custody/transfer")
+def transfer_evidence_custody(evidence_id: str, body: CustodyTransferRequest, request: Request, db: Session = Depends(get_db)):
+    user_info = get_current_user_info(request)
+    evidence = db.query(Evidence).filter(Evidence.id == evidence_id).first()
+    if not evidence:
+        raise HTTPException(status_code=404, detail="Evidence not found")
+    check_case_access(str(evidence.case_id), user_info, db)
+    if not body.officer_id.strip():
+        raise HTTPException(status_code=422, detail="officer_id is required")
+    try:
+        result = blockchain_service.transfer_custody(evidence_id, body.officer_id.strip())
+        db.add(EvidenceCustodyRecord(evidence_id=evidence.id, officer_id=body.officer_id.strip(), action="TRANSFERRED", occurred_at=result["timestamp"], transaction_hash=result["transactionHash"], block_number=result["blockNumber"]))
+        db.add(BlockchainLog(
+            evidence_id=evidence.id,
+            event_name="CustodyTransferred",
+            transaction_hash=result["transactionHash"],
+            block_number=result["blockNumber"],
+            payload={
+                "officerId": body.officer_id.strip(),
+                "contractAddress": result.get("contractAddress"),
+                "gasUsed": result.get("gasUsed")
+            }
+        ))
+        db.commit()
+        write_audit_log(user_info["id"], "Evidence Custody Transferred", str(evidence.case_id), evidence.file_hash, {"evidence_id": evidence_id, "officer_id": body.officer_id, "transaction_hash": result["transactionHash"]}, db)
+        return {"data": result, "success": True}
+    except (BlockchainUnavailable, BlockchainTransactionError) as e:
+        db.rollback()
+        raise HTTPException(status_code=503, detail=str(e))
+
+
+@app.get("/blockchain/status")
+def blockchain_status():
+    status = blockchain_service.status()
+    return {
+        "network": "Ganache" if status.get("connected") else "Unavailable",
+        "status": "online" if status.get("connected") else "offline",
+        "connected": status.get("connected", False),
+        "chainId": status.get("chainId"),
+        "chain_id": status.get("chainId"),
+        "contractAddress": status.get("contractAddress"),
+        "contract_address": status.get("contractAddress"),
+        "latestBlock": status.get("latestBlock"),
+        "latest_block": status.get("latestBlock"),
+        "sender": status.get("sender"),
+        "error": status.get("error"),
+        "success": True
+    }
+
+
+class BlockchainRegisterRequest(BaseModel):
+    evidence_id: str
+    case_id: str
+    file_name: str
+    sha256_hash: str
+    officer_id: Optional[str] = None
+
+
+@app.post("/blockchain/register")
+def blockchain_register(body: BlockchainRegisterRequest, request: Request, db: Session = Depends(get_db)):
+    user_info = get_current_user_info(request)
+    officer_id = body.officer_id or user_info.get("id") or "system"
+    try:
+        receipt = blockchain_service.register_evidence(
+            evidence_id=body.evidence_id,
+            case_id=body.case_id,
+            file_name=body.file_name,
+            sha256_hash=body.sha256_hash,
+            officer_id=str(officer_id)
+        )
+        
+        # Sync with local database if evidence record exists
+        evidence = None
+        try:
+            val_uuid = uuid.UUID(str(body.evidence_id))
+            evidence = db.query(Evidence).filter(Evidence.id == val_uuid).first()
+        except (ValueError, TypeError, AttributeError):
+            evidence = None
+
+        if evidence:
+            evidence.blockchain_tx_hash = receipt["transactionHash"]
+            evidence.blockchain_block_number = receipt["blockNumber"]
+            evidence.blockchain_contract_address = receipt["contractAddress"]
+            evidence.blockchain_gas_used = receipt["gasUsed"]
+            evidence.blockchain_registered_at = receipt["timestamp"]
+            evidence.status = "Verified"
+            
+            db.add(EvidenceCustodyRecord(
+                evidence_id=evidence.id,
+                officer_id=str(officer_id),
+                action="REGISTERED",
+                occurred_at=receipt["timestamp"],
+                transaction_hash=receipt["transactionHash"],
+                block_number=receipt["blockNumber"]
+            ))
+            db.add(BlockchainLog(
+                evidence_id=evidence.id,
+                event_name="EvidenceRegistered",
+                transaction_hash=receipt["transactionHash"],
+                block_number=receipt["blockNumber"],
+                payload={
+                    "caseId": body.case_id,
+                    "fileName": body.file_name,
+                    "sha256Hash": body.sha256_hash,
+                    "officerId": str(officer_id),
+                    "contractAddress": receipt["contractAddress"],
+                    "gasUsed": receipt["gasUsed"]
+                }
+            ))
+        else:
+            db.add(BlockchainLog(
+                event_name="EvidenceRegistered",
+                transaction_hash=receipt["transactionHash"],
+                block_number=receipt["blockNumber"],
+                payload={
+                    "evidenceId": body.evidence_id,
+                    "caseId": body.case_id,
+                    "fileName": body.file_name,
+                    "sha256Hash": body.sha256_hash,
+                    "officerId": str(officer_id),
+                    "contractAddress": receipt["contractAddress"],
+                    "gasUsed": receipt["gasUsed"]
+                }
+            ))
+        db.commit()
+
+        formatted_receipt = {
+            "transactionHash": receipt["transactionHash"],
+            "blockNumber": receipt["blockNumber"],
+            "gasUsed": receipt["gasUsed"],
+            "contractAddress": receipt["contractAddress"],
+            "timestamp": receipt["timestamp"].isoformat()
+        }
+        return {"data": formatted_receipt, "success": True}
+    except (BlockchainUnavailable, BlockchainTransactionError) as e:
+        db.rollback()
+        raise HTTPException(status_code=503, detail=str(e))
+    except Exception as e:
+        db.rollback()
+        logger.exception("Error in blockchain register: %s", e)
+        raise HTTPException(status_code=500, detail=str(e))
+
+
+class BlockchainVerifyRequest(BaseModel):
+    evidence_id: str
+    sha256_hash: str
+    officer_id: Optional[str] = None
+
+
+@app.post("/blockchain/verify")
+def blockchain_verify(body: BlockchainVerifyRequest, request: Request, db: Session = Depends(get_db)):
+    user_info = get_current_user_info(request)
+    officer_id = body.officer_id or user_info.get("id") or "system"
+    try:
+        is_match, verification = blockchain_service.verify_evidence(
+            evidence_id=body.evidence_id,
+            sha256_hash=body.sha256_hash,
+            officer_id=str(officer_id)
+        )
+        
+        evidence = None
+        try:
+            val_uuid = uuid.UUID(str(body.evidence_id))
+            evidence = db.query(Evidence).filter(Evidence.id == val_uuid).first()
+        except (ValueError, TypeError, AttributeError):
+            evidence = None
+
+        if evidence:
+            evidence.status = "Verified" if is_match else "Tampered"
+            evidence.latest_verification_at = verification["timestamp"]
+            custody = verification.get("custodyTransaction", {})
+            db.add(EvidenceCustodyRecord(
+                evidence_id=evidence.id,
+                officer_id=str(officer_id),
+                action="VERIFIED",
+                occurred_at=custody.get("timestamp", verification["timestamp"]),
+                transaction_hash=custody.get("transactionHash"),
+                block_number=custody.get("blockNumber")
+            ))
+            db.add(BlockchainLog(
+                evidence_id=evidence.id,
+                event_name="EvidenceVerified",
+                transaction_hash=verification["transactionHash"],
+                block_number=verification["blockNumber"],
+                payload={
+                    "isMatch": is_match,
+                    "status": "Verified" if is_match else "Tampered",
+                    "calculatedHash": body.sha256_hash,
+                    "officerId": str(officer_id),
+                    "contractAddress": verification.get("contractAddress"),
+                    "gasUsed": verification.get("gasUsed")
+                }
+            ))
+        else:
+            db.add(BlockchainLog(
+                event_name="EvidenceVerified",
+                transaction_hash=verification["transactionHash"],
+                block_number=verification["blockNumber"],
+                payload={
+                    "evidenceId": body.evidence_id,
+                    "isMatch": is_match,
+                    "status": "Verified" if is_match else "Tampered",
+                    "calculatedHash": body.sha256_hash,
+                    "officerId": str(officer_id),
+                    "contractAddress": verification.get("contractAddress"),
+                    "gasUsed": verification.get("gasUsed")
+                }
+            ))
+        db.commit()
+
+        return {
+            "data": {
+                "verified": is_match,
+                "isMatch": is_match,
+                "status": "Verified" if is_match else "Tampered",
+                "transactionHash": verification["transactionHash"],
+                "blockNumber": verification["blockNumber"],
+                "gasUsed": verification.get("gasUsed"),
+                "timestamp": verification["timestamp"].isoformat()
+            },
+            "success": True
+        }
+    except (BlockchainUnavailable, BlockchainTransactionError) as e:
+        db.rollback()
+        raise HTTPException(status_code=503, detail=str(e))
+    except Exception as e:
+        db.rollback()
+        logger.exception("Error in blockchain verify: %s", e)
+        raise HTTPException(status_code=500, detail=str(e))
+
+
+@app.get("/blockchain/history/{evidence_id}")
+def blockchain_evidence_history(evidence_id: str, request: Request, db: Session = Depends(get_db)):
+    user_info = get_current_user_info(request)
+    try:
+        chain_history = blockchain_service.custody_history(evidence_id)
+    except BlockchainUnavailable as e:
+        raise HTTPException(status_code=503, detail=str(e))
+    
+    try:
+        try:
+            val_uuid = uuid.UUID(str(evidence_id))
+            logs = db.query(BlockchainLog).filter(
+                (BlockchainLog.evidence_id == val_uuid) | 
+                (BlockchainLog.payload["evidenceId"].astext == str(evidence_id))
+            ).order_by(BlockchainLog.created_at.asc()).all()
+        except (ValueError, TypeError, AttributeError):
+            logs = db.query(BlockchainLog).filter(
+                BlockchainLog.payload["evidenceId"].astext == str(evidence_id)
+            ).order_by(BlockchainLog.created_at.asc()).all()
+    except Exception:
+        logs = []
+
+    serialized_logs = [
+        {
+            "id": str(log.id),
+            "eventName": log.event_name,
+            "transactionHash": log.transaction_hash,
+            "blockNumber": log.block_number,
+            "payload": log.payload,
+            "createdAt": log.created_at.isoformat() if log.created_at else None
+        }
+        for log in logs
+    ]
+    return {
+        "data": {
+            "evidenceId": evidence_id,
+            "custodyHistory": chain_history,
+            "blockchainLogs": serialized_logs
+        },
+        "success": True
+    }
+
+
+@app.get("/blockchain/dashboard")
+def blockchain_dashboard(request: Request, db: Session = Depends(get_db)):
+    user_info = get_current_user_info(request)
+    status = blockchain_service.status()
+    total_ev = db.query(Evidence).filter(Evidence.blockchain_tx_hash.isnot(None)).count()
+    verified_ev = db.query(Evidence).filter(Evidence.blockchain_tx_hash.isnot(None), Evidence.status == "Verified").count()
+    tampered_ev = db.query(Evidence).filter(Evidence.blockchain_tx_hash.isnot(None), Evidence.status == "Tampered").count()
+
+    log_reg_count = db.query(BlockchainLog).filter(BlockchainLog.event_name == "EvidenceRegistered").count()
+    total = max(total_ev, log_reg_count)
+
+    log_ver_count = db.query(BlockchainLog).filter(BlockchainLog.event_name == "EvidenceVerified", BlockchainLog.payload["isMatch"].astext == "true").count()
+    verified = max(verified_ev, log_ver_count)
+
+    log_tamp_count = db.query(BlockchainLog).filter(BlockchainLog.event_name == "EvidenceVerified", BlockchainLog.payload["isMatch"].astext == "false").count()
+    tampered = max(tampered_ev, log_tamp_count)
+
+    transactions = db.query(BlockchainLog).order_by(BlockchainLog.created_at.desc()).limit(10).all()
+    recent_txs = [
+        {
+            "event": log.event_name,
+            "transactionHash": log.transaction_hash,
+            "transaction_hash": log.transaction_hash,
+            "blockNumber": log.block_number,
+            "block_number": log.block_number,
+            "createdAt": log.created_at.isoformat() if log.created_at else None,
+            "created_at": log.created_at.isoformat() if log.created_at else None,
+            "payload": log.payload
+        }
+        for log in transactions
+    ]
+    blocks = []
+    if status.get("connected"):
+        try:
+            blocks = blockchain_service.recent_blocks()
+        except Exception as e:
+            logger.warning("Could not fetch recent blocks: %s", e)
+            blocks = []
+            
+    return {
+        "network": "Ganache" if status.get("connected") else "Unavailable",
+        "chain_id": status.get("chainId", 1337),
+        "contract_address": status.get("contractAddress", ""),
+        "latest_block": status.get("latestBlock", 0),
+        "registered_evidence": total,
+        "verified_evidence": verified,
+        "tampered_evidence": tampered,
+        "pending_transactions": 0,
+        "recent_transactions": recent_txs,
+        "status": "online" if status.get("connected") else "offline",
+        "data": {
+            "status": status,
+            "totalRegisteredEvidence": total,
+            "verifiedEvidence": verified,
+            "tamperedEvidence": tampered,
+            "latestTransactions": recent_txs,
+            "latestBlocks": blocks,
+            "pendingTransactions": 0
+        },
+        "success": True
+    }
+
+
+@app.post("/admin/blockchain/redeploy")
+def redeploy_evidence_registry(request: Request):
+    user_info = get_current_user_info(request)
+    if user_info.get("role", "").lower() != "admin":
+        raise HTTPException(status_code=403, detail="Administrator access required")
+    root = Path(__file__).resolve().parents[1]
+    try:
+        completed = subprocess.run(["npx", "hardhat", "compile"], cwd=root / "blockchain", check=True, capture_output=True, text=True, timeout=120)
+        completed = subprocess.run(["node", "scripts/deploy.js"], cwd=root / "blockchain", check=True, capture_output=True, text=True, timeout=120)
+        blockchain_service.reload()
+        write_audit_log(user_info["id"], "EvidenceRegistry Redeployed", metadata={"contract_address": blockchain_service.status().get("contractAddress")})
+        return {"data": blockchain_service.status(), "success": True}
+    except (subprocess.SubprocessError, BlockchainUnavailable) as e:
+        logger.exception("Admin contract redeployment failed")
+        raise HTTPException(status_code=503, detail=f"Contract deployment failed: {e}")
 
 # ====== DETECTION ENDPOINTS ======
 @app.post("/detect")
@@ -1695,8 +2212,8 @@ def resolve_ocr_evidence_source(evidence: Evidence):
     return local_path
 
 
-def run_stored_evidence_ocr(evidence_id: str, language: str, request: Request, db: Session):
-    print(f"[OCR] received evidence_id={evidence_id}")
+def run_stored_evidence_ocr(evidence_id: str, language: str, request: Request, db: Session, force: bool = False):
+    print(f"[OCR] received evidence_id={evidence_id} force={force}")
     user_info = get_current_user_info(request)
     try:
         evidence_uuid = uuid.UUID(evidence_id)
@@ -1711,6 +2228,28 @@ def run_stored_evidence_ocr(evidence_id: str, language: str, request: Request, d
         check_case_access(case_id, user_info, db)
 
     requested_language = language or "auto"
+
+    # Fast-path: Return cached OCRResult if text was already extracted, unless force re-run is requested
+    # or existing text is corrupted by old adaptive-threshold preprocessor.
+    if not force:
+        existing_ocr = db.query(OCRResult).filter(OCRResult.evidence_id == evidence_uuid).order_by(OCRResult.page_number.asc()).all()
+        if existing_ocr:
+            combined_text = "\n\n".join(p.extracted_text for p in existing_ocr)
+            # Invalidate cache if previous extraction contains corrupted or fallback placeholder text
+            is_corrupt_cache = ("FT DOATION" in combined_text or "9555" in combined_text or "SECURE AUDIT OCR ENGINE" in combined_text)
+            if not is_corrupt_cache:
+                print(f"[OCR] returning cached OCRResult ({len(existing_ocr)} page(s)) for evidence_id={evidence_id}")
+                page_results = [{"page_number": p.page_number, "text": p.extracted_text, "confidence": p.confidence or 0.95, "language": p.language or requested_language}
+                                for p in existing_ocr]
+                extracted_text = combined_text.strip()
+                confidence = round(sum(p["confidence"] for p in page_results) / len(page_results), 4) if page_results else 0.0
+                detected_language = page_results[0]["language"] if page_results else requested_language
+                return {"success": True, "message": "OCR completed successfully.", "data": {
+                    "evidence_id": evidence_id, "text": extracted_text, "extracted_text": extracted_text,
+                    "confidence": confidence, "language": detected_language, "detected_language": detected_language,
+                    "pages": page_results,
+                }}
+
     source = resolve_ocr_evidence_source(evidence)
     print(f"[OCR] execution start language={requested_language}")
     try:
@@ -1752,12 +2291,14 @@ def run_stored_evidence_ocr(evidence_id: str, language: str, request: Request, d
 
 @app.post("/ai/ocr/{evidence_id}")
 def run_ai_ocr_by_id(evidence_id: str, req: Optional[OCRRequest] = None, request: Request = None, db: Session = Depends(get_db)):
-    return run_stored_evidence_ocr(evidence_id, req.language if req and req.language else "auto", request, db)
+    lang = req.language if req and req.language else "auto"
+    force = req.force if req and req.force is not None else False
+    return run_stored_evidence_ocr(evidence_id, lang, request, db, force=force)
 
 
 @app.post("/ai/ocr")
 def run_ai_ocr_body(req: OCRRequest, request: Request, db: Session = Depends(get_db)):
-    return run_stored_evidence_ocr(req.evidence_id, req.language or "auto", request, db)
+    return run_stored_evidence_ocr(req.evidence_id, req.language or "auto", request, db, force=req.force or False)
 
 @app.get("/ocr/search")
 def search_ocr(q: str, request: Request, db: Session = Depends(get_db)):
