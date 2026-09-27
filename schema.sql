@@ -172,14 +172,15 @@ CREATE TABLE IF NOT EXISTS photogrammetry_models (
     evidence_id UUID,
     model_url TEXT,
     point_cloud_url TEXT,
-    status TEXT DEFAULT 'Processing',
+    status TEXT DEFAULT 'Pending',
     frame_count INTEGER,
     created_at TIMESTAMPTZ DEFAULT now(),
     completed_at TIMESTAMPTZ,
+    error_message TEXT,
     CONSTRAINT pk_photogrammetry_models PRIMARY KEY (id),
     CONSTRAINT fk_photogrammetry_models_case_id FOREIGN KEY (case_id) REFERENCES cases(id) ON DELETE CASCADE,
     CONSTRAINT fk_photogrammetry_models_evidence_id FOREIGN KEY (evidence_id) REFERENCES evidence(id) ON DELETE CASCADE,
-    CONSTRAINT chk_photogrammetry_models_status CHECK (status IN ('Processing', 'Completed', 'Failed'))
+    CONSTRAINT chk_photogrammetry_models_status CHECK (status IN ('Pending', 'Processing', 'Completed', 'Failed'))
 );
 
 CREATE INDEX IF NOT EXISTS idx_photogrammetry_models_case_id ON photogrammetry_models(case_id);

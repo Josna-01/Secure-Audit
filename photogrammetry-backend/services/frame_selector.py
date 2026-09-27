@@ -1,127 +1,75 @@
+"""Quality-aware, chronological video-frame selection for SfM/MVS."""
 import os
 import cv2
 import logging
+import numpy as np
 
 logger = logging.getLogger(__name__)
 
-# Configurable Mode Thresholds: PRODUCTION vs TEST
 FRAME_SELECTOR_CONFIGS = {
-    "PRODUCTION": {
-        "blur_threshold": 100.0,
-        "lighting_threshold": 50.0,
-        "similarity_threshold": 10.0,
-    },
-    "TEST": {
-        "blur_threshold": 15.0,
-        "lighting_threshold": 50.0,
-        "similarity_threshold": 5.0,
-    }
+    "PRODUCTION": {"blur_threshold": 80.0, "lighting_threshold": 35.0, "duplicate_similarity": 0.985},
+    "TEST": {"blur_threshold": 30.0, "lighting_threshold": 30.0, "duplicate_similarity": 0.990},
 }
 
+
 class FrameSelector:
-    """
-    Service class responsible for filtering and selecting high-quality,
-    distinct frame images for 3D reconstruction.
-    """
+    """Reject unusable frames, then retain sharp views distributed over the clip."""
 
-    def select(self, frame_paths: list[str], max_frames: int = 25, mode: str = None) -> list[str]:
-        """
-        Filters out low-quality (blurry, dark) and duplicate/similar frames,
-        returning up to max_frames paths sorted by overall composite quality.
+    def __init__(self):
+        self.last_diagnostics: dict = {}
 
-        Args:
-            frame_paths (list[str]): List of file paths to the input frame images.
-            max_frames (int): Maximum number of frames to return in the selection. Defaults to 25.
-            mode (str, optional): Configurable mode ('PRODUCTION' or 'TEST').
-                                  Defaults to environment variable PHOTOGRAMMETRY_MODE or 'TEST'.
+    @staticmethod
+    def _perceptual_similarity(first: np.ndarray, second: np.ndarray) -> float:
+        first = cv2.resize(first, (160, 90), interpolation=cv2.INTER_AREA)
+        second = cv2.resize(second, (160, 90), interpolation=cv2.INTER_AREA)
+        return float(cv2.matchTemplate(first, second, cv2.TM_CCOEFF_NORMED)[0, 0])
 
-        Returns:
-            list[str]: List of selected frame image paths, sorted by composite quality score descending.
-        """
-        total_input = len(frame_paths)
-        if total_input == 0:
-            logger.info("No frame paths provided for selection.")
+    def select(self, frame_paths: list[str], max_frames: int = 30, mode: str | None = None) -> list[str]:
+        if not frame_paths:
+            self.last_diagnostics = {"input_frames": 0, "selected_frames": 0}
             return []
+        mode = (mode or os.environ.get("PHOTOGRAMMETRY_MODE", "PRODUCTION")).upper()
+        config = FRAME_SELECTOR_CONFIGS.get(mode, FRAME_SELECTOR_CONFIGS["PRODUCTION"])
+        accepted: list[dict] = []
+        previous_gray = None
+        rejected = {"invalid": 0, "blur": 0, "dark": 0, "duplicate": 0}
 
-        # Determine mode (env fallback or default to TEST)
-        if mode is None:
-            mode = os.environ.get("PHOTOGRAMMETRY_MODE", "TEST").upper()
-
-        config = FRAME_SELECTOR_CONFIGS.get(mode, FRAME_SELECTOR_CONFIGS["TEST"])
-        blur_threshold = config["blur_threshold"]
-        lighting_threshold = config["lighting_threshold"]
-        similarity_threshold = config["similarity_threshold"]
-
-        logger.info(
-            f"Starting frame selection [{mode} MODE] from {total_input} frames (target limit: {max_frames}). "
-            f"Thresholds: blur={blur_threshold}, lighting={lighting_threshold}, similarity={similarity_threshold}"
-        )
-
-        invalid_files = 0
-        blur_rejected = 0
-        lighting_rejected = 0
-        similarity_rejected = 0
-
-        passed_candidates = []  # List of tuples: (composite_score, path)
-        last_accepted_gray = None
-
-        for path in frame_paths:
-            if not os.path.exists(path):
-                logger.warning(f"Frame file does not exist: {path}")
-                invalid_files += 1
+        for source_index, path in enumerate(frame_paths):
+            image = cv2.imread(path)
+            if image is None:
+                rejected["invalid"] += 1
                 continue
-
-            img = cv2.imread(path)
-            if img is None:
-                logger.warning(f"Could not read image frame: {path}")
-                invalid_files += 1
+            gray = cv2.cvtColor(image, cv2.COLOR_BGR2GRAY)
+            sharpness = float(cv2.Laplacian(gray, cv2.CV_64F).var())
+            exposure = float(cv2.cvtColor(image, cv2.COLOR_BGR2HSV)[:, :, 2].mean())
+            if sharpness < config["blur_threshold"]:
+                rejected["blur"] += 1
                 continue
-
-            # Convert to Grayscale for blur and similarity analysis
-            gray = cv2.cvtColor(img, cv2.COLOR_BGR2GRAY)
-
-            # 1. Sharpness/Blur Filter (Variance of Laplacian)
-            blur_score = cv2.Laplacian(gray, cv2.CV_64F).var()
-            if blur_score < blur_threshold:
-                blur_rejected += 1
+            if exposure < config["lighting_threshold"]:
+                rejected["dark"] += 1
                 continue
-
-            # 2. Lighting/Exposure Filter (Mean of V channel in HSV)
-            hsv = cv2.cvtColor(img, cv2.COLOR_BGR2HSV)
-            lighting_score = float(hsv[:, :, 2].mean())
-            if lighting_score < lighting_threshold:
-                lighting_rejected += 1
+            similarity = self._perceptual_similarity(gray, previous_gray) if previous_gray is not None else 0.0
+            if previous_gray is not None and similarity >= config["duplicate_similarity"]:
+                rejected["duplicate"] += 1
                 continue
+            previous_gray = gray
+            # Stop a highly textured background frame from winning every bin.
+            quality = np.log1p(sharpness) + 0.015 * exposure
+            accepted.append({"path": path, "index": source_index, "quality": float(quality)})
 
-            # 3. Near-Duplicate/Similarity Filter (Mean pixel difference vs. last accepted frame)
-            if last_accepted_gray is not None:
-                diff = cv2.absdiff(gray, last_accepted_gray)
-                mean_diff = float(diff.mean())
-                if mean_diff < similarity_threshold:
-                    similarity_rejected += 1
-                    continue
+        if len(accepted) <= max_frames:
+            selected = accepted
+        else:
+            # Each temporal bin contributes one strong frame. This preserves a
+            # continuous viewpoint trajectory rather than quality-sorting it.
+            edges = np.linspace(0, len(accepted), max_frames + 1, dtype=int)
+            selected = []
+            for start, stop in zip(edges[:-1], edges[1:]):
+                selected.append(max(accepted[start:max(start + 1, stop)], key=lambda item: item["quality"]))
+            selected.sort(key=lambda item: item["index"])
 
-            # Frame passed all filters. Keep track of it and update the comparison baseline.
-            last_accepted_gray = gray
-            composite_score = blur_score + lighting_score
-            passed_candidates.append((composite_score, path))
-
-        # Log filter statistics
-        logger.info(
-            f"Frame selection filtering statistics [{mode} MODE]: "
-            f"Total Input = {total_input}, "
-            f"Invalid = {invalid_files}, "
-            f"Rejected (Blurry) = {blur_rejected}, "
-            f"Rejected (Dark) = {lighting_rejected}, "
-            f"Rejected (Similar) = {similarity_rejected}, "
-            f"Passed Filters = {len(passed_candidates)}"
-        )
-
-        # Sort candidate frames by composite score in descending order (highest quality first)
-        passed_candidates.sort(key=lambda x: x[0], reverse=True)
-
-        # Retrieve up to max_frames paths
-        selected_paths = [path for _, path in passed_candidates[:max_frames]]
-        logger.info(f"Successfully selected {len(selected_paths)} frames.")
-
-        return selected_paths
+        self.last_diagnostics = {"input_frames": len(frame_paths), "passed_quality": len(accepted),
+            "selected_frames": len(selected), "rejected": rejected, "mode": mode,
+            "selection": "temporal_stratified_quality"}
+        logger.info("Frame selection: %s", self.last_diagnostics)
+        return [item["path"] for item in selected]

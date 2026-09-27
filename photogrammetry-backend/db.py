@@ -8,8 +8,9 @@ from sqlalchemy.orm import declarative_base, sessionmaker
 # Set up logging
 logger = logging.getLogger("photogrammetry.db")
 
-# Load environment variables
-load_dotenv()
+# Load this service's configuration before creating the engine.  Importing this
+# module from another working directory must not silently select a different DB.
+load_dotenv(os.path.join(os.path.dirname(os.path.abspath(__file__)), ".env"))
 
 import urllib.parse
 

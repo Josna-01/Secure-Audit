@@ -5,11 +5,16 @@ CREATE TABLE IF NOT EXISTS photogrammetry_models (
     evidence_id UUID REFERENCES evidence(id) ON DELETE CASCADE,
     model_url TEXT,
     point_cloud_url TEXT,
-    status TEXT DEFAULT 'Processing' CHECK (status IN ('Processing', 'Completed', 'Failed')),
+    status TEXT DEFAULT 'Pending' CHECK (status IN ('Pending', 'Processing', 'Completed', 'Failed')),
     frame_count INT,
     created_at TIMESTAMPTZ DEFAULT now(),
     completed_at TIMESTAMPTZ
 );
+
+ALTER TABLE photogrammetry_models ADD COLUMN IF NOT EXISTS error_message TEXT;
+ALTER TABLE photogrammetry_models ALTER COLUMN status SET DEFAULT 'Pending';
+ALTER TABLE photogrammetry_models DROP CONSTRAINT IF EXISTS chk_photogrammetry_models_status;
+ALTER TABLE photogrammetry_models ADD CONSTRAINT chk_photogrammetry_models_status CHECK (status IN ('Pending', 'Processing', 'Completed', 'Failed'));
 
 -- Disable Row Level Security (RLS) to match other tables in this project
 ALTER TABLE photogrammetry_models DISABLE ROW LEVEL SECURITY;

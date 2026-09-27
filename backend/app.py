@@ -1,5 +1,6 @@
 
 import os
+from urllib.parse import urlparse
 import shutil
 import uuid
 import datetime
@@ -29,7 +30,7 @@ import requests
 from sqlalchemy import text
 from sqlalchemy.orm import Session
 from db import get_db, SessionLocal
-from models import Case, Evidence, AuditLog, OCRResult, BNSPrediction, OTPToken, EvidenceCustodyRecord, BlockchainLog
+from models import User, Case, Evidence, AuditLog, OCRResult, BNSPrediction, OTPToken, EvidenceCustodyRecord, BlockchainLog
 from services.ocr_service import OCRServiceError, ocr_service
 from services.blockchain_service import blockchain_service, BlockchainUnavailable, BlockchainTransactionError
 
@@ -147,6 +148,7 @@ supabase_admin: Client = create_client(SUPABASE_URL, SUPABASE_SERVICE_ROLE_KEY)
 
 app = FastAPI()
 
+
 _blockchain_event_cursor: Optional[int] = None
 
 
@@ -230,6 +232,11 @@ def blockchain_event_listener() -> None:
 def start_blockchain_event_listener() -> None:
     threading.Thread(target=blockchain_event_listener, name="blockchain-event-listener", daemon=True).start()
 
+BACKEND_DIR = os.path.dirname(os.path.abspath(__file__))
+UPLOADS_DIR = os.path.join(BACKEND_DIR, "uploads")
+os.makedirs(UPLOADS_DIR, exist_ok=True)
+
+
 app.add_middleware(
     CORSMiddleware,
     allow_origins=["*"],
@@ -238,7 +245,7 @@ app.add_middleware(
     allow_headers=["*"],
 )
 
-app.mount("/uploads", StaticFiles(directory="uploads"), name="uploads")
+app.mount("/uploads", StaticFiles(directory=UPLOADS_DIR), name="uploads")
 
 # Load model
 try:
@@ -248,9 +255,6 @@ try:
 except Exception as e:
     print(f"Warning: Failed to load Roboflow model. Provide a valid key. Error: {e}")
     model = None
-
-# Ensure uploads directory
-os.makedirs("uploads", exist_ok=True)
 
 # ====== Pydantic Models ======
 class CaseCreate(BaseModel):
@@ -295,6 +299,11 @@ class RegisterRequest(BaseModel):
 
 class ForgotPasswordRequest(BaseModel):
     email: str
+
+class ResetPasswordRequest(BaseModel):
+    email: str
+    otp: str
+    new_password: str
 
 class ChangePasswordRequest(BaseModel):
     new_password: str
@@ -877,6 +886,52 @@ def change_password(req: ChangePasswordRequest, request: Request):
     except Exception as e:
         raise HTTPException(status_code=500, detail=f"Failed to change password: {str(e)}")
 
+@app.post("/auth/reset-password")
+def reset_password(req: ResetPasswordRequest, db: Session = Depends(get_db)):
+    """Reset password using 2FA OTP sent to registered email."""
+    try:
+        user_res = supabase_admin.table("users").select("*").eq("email", req.email).execute()
+        if not user_res.data:
+            raise HTTPException(status_code=404, detail="Account not found.")
+        user = user_res.data[0]
+        if not user.get("is_active", True):
+            raise HTTPException(status_code=403, detail="Your account has been deactivated.")
+
+        otp_record = db.query(OTPToken)\
+            .filter(OTPToken.user_id == uuid.UUID(user["id"]), OTPToken.token == req.otp)\
+            .order_by(OTPToken.created_at.desc())\
+            .first()
+
+        if not otp_record or otp_record.used:
+            raise HTTPException(status_code=401, detail="Invalid or expired verification code.")
+
+        now_utc = datetime.datetime.now(datetime.timezone.utc)
+        exp_at = otp_record.expires_at
+        if exp_at.tzinfo is None:
+            exp_at = exp_at.replace(tzinfo=datetime.timezone.utc)
+        if exp_at < now_utc:
+            raise HTTPException(status_code=401, detail="Verification code has expired.")
+
+        supabase_admin.auth.admin.update_user_by_id(
+            user["id"],
+            attributes={"password": req.new_password}
+        )
+
+        otp_record.used = True
+        db.commit()
+
+        write_audit_log(
+            user_id=user["id"],
+            action="Password Reset via OTP",
+            metadata={"email": user["email"], "full_name": user["full_name"]}
+        )
+
+        return {"success": True, "message": "Password reset successfully. You can now log in with your new passphrase."}
+    except HTTPException:
+        raise
+    except Exception as e:
+        raise HTTPException(status_code=500, detail=f"Failed to reset password: {str(e)}")
+
 
 # ====== AUDIT LOG HELPER ======
 def write_audit_log(user_id: str, action: str, case_id: str = None, file_hash: str = None, metadata: dict = None, db: Session = None):
@@ -1178,8 +1233,8 @@ def upload_evidence(
     request: Request,
     case_id: str = Form(...),
     evidence_type: str = Form(...),
-    description: str = Form(None),
-    language: str = Form(None),
+    description: Optional[str] = Form(None),
+    language: Optional[str] = Form(None),
     file: UploadFile = File(...),
     db: Session = Depends(get_db)
 ):
@@ -1225,7 +1280,7 @@ def upload_evidence(
 
     if USE_LOCAL_STORAGE:
         # Create local directory uploads/cases/{case_id}
-        local_dir = os.path.join("uploads", "cases", case_id)
+        local_dir = os.path.join(UPLOADS_DIR, "cases", case_id)
         os.makedirs(local_dir, exist_ok=True)
         local_file_path = os.path.join(local_dir, f"{file_uuid}_{original_filename}")
         try:
@@ -1322,7 +1377,7 @@ def upload_evidence(
         raise HTTPException(status_code=400, detail="Failed to upload evidence")
 
 @app.get("/evidence")
-def get_evidence(request: Request, case_id: str = None, db: Session = Depends(get_db)):
+def get_evidence(request: Request, case_id: Optional[str] = None, db: Session = Depends(get_db)):
     user_info = get_current_user_info(request)
     
     # Check case access
@@ -1412,7 +1467,7 @@ def verify_evidence_hash(evidence_id: str, request: Request, db: Session = Depen
     if "/uploads/" in file_path:
         # Extract the relative path and map it to disk
         relative_path = file_path.split("/uploads/")[-1]
-        disk_path = os.path.join("uploads", relative_path.replace("/", os.sep))
+        disk_path = os.path.join(UPLOADS_DIR, relative_path.replace("/", os.sep))
         if not os.path.exists(disk_path):
             raise HTTPException(status_code=404, detail=f"Evidence file not found on local disk: {disk_path}")
         
@@ -1934,7 +1989,7 @@ def run_ai_detect(req: DetectionRequest, request: Request, db: Session = Depends
         if "/uploads/" in file_path:
             # Local file on disk
             relative_path = file_path.split("/uploads/")[-1]
-            disk_path = os.path.join("uploads", relative_path.replace("/", os.sep))
+            disk_path = os.path.join(UPLOADS_DIR, relative_path.replace("/", os.sep))
             if not os.path.exists(disk_path):
                 raise HTTPException(status_code=404, detail="File missing on local disk")
             local_temp_file = disk_path
@@ -1957,7 +2012,7 @@ def run_ai_detect(req: DetectionRequest, request: Request, db: Session = Depends
             # Save to temporary local file for Roboflow prediction
             file_id = str(uuid.uuid4())
             ext = file_path.split(".")[-1].split("?")[0]
-            local_temp_file = f"uploads/temp_{file_id}.{ext}"
+            local_temp_file = os.path.join(UPLOADS_DIR, f"temp_{file_id}.{ext}")
             with open(local_temp_file, "wb") as f:
                 f.write(file_bytes)
         else:
@@ -2121,13 +2176,14 @@ def run_ai_ocr(req: OCRRequest, request: Request, db: Session = Depends(get_db))
             except Exception as e:
                 print(f"[OCR DEBUG] Case access check warning: {e}")
 
-    lang = language or "auto"
+    lang = req.language or "auto"
     print(f"[OCR DEBUG] Requested language: {lang}")
 
     source_input = None
     local_path = None
     file_exists = False
     file_url = None
+    translated_text = None
 
     if evidence_obj and evidence_obj.file_url:
         file_url = evidence_obj.file_url
@@ -3036,15 +3092,50 @@ def create_user_admin(payload: UserCreateRequest, request: Request):
 # ====== PHOTOGRAMMETRY PROXY ENDPOINTS ======
 class PhotogrammetryRequest(BaseModel):
     evidence_id: str
-    file_url: str
+
+
+def resolve_local_evidence_path(file_url: str) -> str | None:
+    """Map this backend's /uploads URL to the shared local evidence file."""
+    path = urlparse(file_url).path.replace("\\", "/")
+    marker = "/uploads/"
+    if marker not in path:
+        return None
+    relative = path.split(marker, 1)[1]
+    upload_root = UPLOADS_DIR
+    candidate = os.path.abspath(os.path.join(upload_root, *relative.split("/")))
+    if os.path.commonpath([upload_root, candidate]) != upload_root:
+        raise HTTPException(status_code=400, detail="Evidence URL resolves outside the uploads directory.")
+    if not os.path.isfile(candidate):
+        raise HTTPException(
+            status_code=409,
+            detail="Evidence record refers to a local upload that no longer exists on disk."
+        )
+    return candidate
 
 @app.post("/photogrammetry/trigger/{case_id}")
-def photogrammetry_trigger(case_id: str, payload: PhotogrammetryRequest):
+def photogrammetry_trigger(case_id: str, payload: PhotogrammetryRequest, request: Request, db: Session = Depends(get_db)):
     try:
+        user_info = get_current_user_info(request)
+        if not has_permission(user_info, "run_ai_analysis"):
+            raise HTTPException(status_code=403, detail="Forbidden: You do not have permission to run reconstruction.")
+        try:
+            case_uuid = uuid.UUID(case_id)
+            evidence_uuid = uuid.UUID(payload.evidence_id)
+        except ValueError as exc:
+            raise HTTPException(status_code=400, detail="case_id and evidence_id must be valid UUIDs.") from exc
+
+        check_case_access(case_id, user_info, db)
+        evidence = db.query(Evidence).filter(Evidence.id == evidence_uuid, Evidence.case_id == case_uuid).first()
+        if not evidence:
+            raise HTTPException(status_code=404, detail="Video evidence for this case was not found.")
+        media_type = (evidence.mime_type or "").lower()
+        if not (media_type.startswith("video/") or (evidence.file_name or "").lower().endswith((".mp4", ".mov", ".avi", ".mkv"))):
+            raise HTTPException(status_code=400, detail="Selected evidence is not a supported video file.")
         # Proxy request to photogrammetry-backend server on port 8004
+        local_path = resolve_local_evidence_path(evidence.file_url)
         res = requests.post(
             f"http://localhost:8004/trigger/{case_id}",
-            json={"evidence_id": payload.evidence_id, "file_url": payload.file_url},
+            json={"evidence_id": payload.evidence_id, "file_url": evidence.file_url, "local_path": local_path},
             timeout=10
         )
         res.raise_for_status()
@@ -3053,12 +3144,30 @@ def photogrammetry_trigger(case_id: str, payload: PhotogrammetryRequest):
         raise HTTPException(status_code=502, detail=f"Failed to communicate with photogrammetry server: {str(e)}")
 
 @app.get("/photogrammetry/status/{case_id}")
-def photogrammetry_status(case_id: str):
+def photogrammetry_status(case_id: str, request: Request):
     try:
+        user_info = get_current_user_info(request)
+        # Keep the microservice private behind this authenticated, case-scoped proxy.
+        with SessionLocal() as db:
+            check_case_access(case_id, user_info, db)
         # Proxy request to photogrammetry-backend server on port 8004
         res = requests.get(f"http://localhost:8004/status/{case_id}", timeout=10)
         res.raise_for_status()
         return res.json()
+    except requests.RequestException as e:
+        raise HTTPException(status_code=502, detail=f"Failed to communicate with photogrammetry server: {str(e)}")
+
+
+@app.get("/photogrammetry/status/job/{job_id}")
+def photogrammetry_job_status(job_id: str, request: Request):
+    try:
+        user_info = get_current_user_info(request)
+        res = requests.get(f"http://localhost:8004/status/job/{job_id}", timeout=10)
+        res.raise_for_status()
+        payload = res.json()
+        with SessionLocal() as db:
+            check_case_access(payload["case_id"], user_info, db)
+        return payload
     except requests.RequestException as e:
         raise HTTPException(status_code=502, detail=f"Failed to communicate with photogrammetry server: {str(e)}")
 

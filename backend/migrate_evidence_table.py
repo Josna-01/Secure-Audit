@@ -1,9 +1,6 @@
-"""Legacy evidence migration helper; credentials are supplied only via DATABASE_URL."""
 import os
 import sys
-
 from sqlalchemy import create_engine, text
-
 
 SQL_COMMANDS = [
     "ALTER TABLE evidence ADD COLUMN IF NOT EXISTS file_name text;",
@@ -17,16 +14,25 @@ SQL_COMMANDS = [
     "ALTER TABLE evidence ADD COLUMN IF NOT EXISTS status text DEFAULT 'Verified';",
 ]
 
+def run_migration():
+    db_url = os.environ.get("DATABASE_URL")
+    if not db_url:
+        print("ERROR: DATABASE_URL environment variable is not set.")
+        sys.exit(1)
 
-def run() -> None:
-    database_url = os.getenv("DATABASE_URL")
-    if not database_url:
-        sys.exit("DATABASE_URL is required; no migration was run.")
-    with create_engine(database_url).begin() as connection:
-        for command in SQL_COMMANDS:
-            connection.execute(text(command))
-    print("Evidence migration completed successfully.")
+    engine = create_engine(db_url)
+    with engine.connect() as conn:
+        for cmd in SQL_COMMANDS:
+            print(f"Executing: {cmd}")
+            try:
+                conn.execute(text(cmd))
+                conn.commit()
+                print("  -> OK")
+            except Exception as e:
+                print(f"  -> Error: {e}")
+                conn.rollback()
 
+    print("\nDatabase migration completed successfully!")
 
 if __name__ == "__main__":
-    run()
+    run_migration()

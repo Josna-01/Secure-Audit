@@ -1,21 +1,31 @@
-"""Legacy user migration helper; credentials are supplied only via DATABASE_URL."""
+"""Migration: add can_create_case column to users; credentials via DATABASE_URL only."""
 import os
 import sys
-
 from sqlalchemy import create_engine, text
 
+SQL_COMMANDS = [
+    "ALTER TABLE users ADD COLUMN IF NOT EXISTS can_create_case BOOLEAN DEFAULT true;",
+]
 
-SQL_COMMAND = "ALTER TABLE users ADD COLUMN IF NOT EXISTS can_create_case BOOLEAN DEFAULT true;"
+def run_migration():
+    db_url = os.environ.get("DATABASE_URL")
+    if not db_url:
+        print("ERROR: DATABASE_URL environment variable is not set.")
+        sys.exit(1)
 
+    engine = create_engine(db_url)
+    with engine.connect() as conn:
+        for cmd in SQL_COMMANDS:
+            print(f"Executing: {cmd}")
+            try:
+                conn.execute(text(cmd))
+                conn.commit()
+                print("  -> OK")
+            except Exception as e:
+                print(f"  -> Error: {e}")
+                conn.rollback()
 
-def run() -> None:
-    database_url = os.getenv("DATABASE_URL")
-    if not database_url:
-        sys.exit("DATABASE_URL is required; no migration was run.")
-    with create_engine(database_url).begin() as connection:
-        connection.execute(text(SQL_COMMAND))
-    print("User migration completed successfully.")
-
+    print("\nDatabase migration completed successfully!")
 
 if __name__ == "__main__":
-    run()
+    run_migration()

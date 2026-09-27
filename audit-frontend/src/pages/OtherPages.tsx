@@ -8,6 +8,9 @@ import type { Evidence, Case } from '../types'
 import { format } from 'date-fns'
 import { useAuth } from '../context/AuthContext'
 import axios from 'axios'
+import * as THREE from 'three'
+import { OrbitControls } from 'three/examples/jsm/controls/OrbitControls.js'
+import { GLTFLoader } from 'three/examples/jsm/loaders/GLTFLoader.js'
 
 // ── EVIDENCE ──────────────────────────────────────────────────────────────
 export function EvidencePage() {
@@ -852,6 +855,94 @@ export function PlaceholderPage({ title, description }: { title: string; descrip
   )
 }
 
+function GLBViewer({ modelUrl, wireframe, resetKey }: { modelUrl: string, wireframe: boolean, resetKey: number }) {
+  const hostRef = useRef<HTMLDivElement>(null)
+  const [viewerError, setViewerError] = useState('')
+  const maxViewportDimension = 4096
+
+  useEffect(() => {
+    const host = hostRef.current
+    if (!host) return
+    setViewerError('')
+
+    const scene = new THREE.Scene()
+    scene.background = new THREE.Color(0x111827)
+    const camera = new THREE.PerspectiveCamera(45, 1, 0.01, 10000)
+    const renderer = new THREE.WebGLRenderer({ antialias: true })
+    renderer.setPixelRatio(Math.min(window.devicePixelRatio || 1, 1.5))
+    renderer.outputColorSpace = THREE.SRGBColorSpace
+    renderer.domElement.style.display = 'block'
+    renderer.domElement.style.width = '100%'
+    renderer.domElement.style.height = '100%'
+    host.appendChild(renderer.domElement)
+
+    const controls = new OrbitControls(camera, renderer.domElement)
+    controls.enableDamping = true
+    scene.add(new THREE.HemisphereLight(0xffffff, 0x243447, 2))
+    const keyLight = new THREE.DirectionalLight(0xffffff, 2)
+    keyLight.position.set(3, 5, 4)
+    scene.add(keyLight)
+
+    let model: THREE.Object3D | undefined
+    const frameModel = () => {
+      if (!model) return
+      const box = new THREE.Box3().setFromObject(model)
+      const size = box.getSize(new THREE.Vector3()).length()
+      const center = box.getCenter(new THREE.Vector3())
+      model.position.sub(center)
+      camera.position.set(size || 3, size || 3, size || 3)
+      camera.near = Math.max((size || 3) / 1000, 0.001)
+      camera.far = Math.max((size || 3) * 100, 100)
+      camera.updateProjectionMatrix()
+      controls.target.set(0, 0, 0)
+      controls.update()
+    }
+
+    const loader = new GLTFLoader()
+    loader.load(modelUrl, (gltf) => {
+      model = gltf.scene
+      model.traverse(child => {
+        if (child instanceof THREE.Mesh) {
+          const materials = Array.isArray(child.material) ? child.material : [child.material]
+          materials.forEach(material => { material.wireframe = wireframe })
+        }
+      })
+      scene.add(model)
+      frameModel()
+    }, undefined, () => setViewerError('The GLB could not be loaded. Check the artifact URL and storage CORS settings.'))
+
+    const resize = () => {
+      const bounds = host.getBoundingClientRect()
+      const width = Math.min(Math.max(Math.floor(bounds.width), 1), maxViewportDimension)
+      const height = Math.min(Math.max(Math.floor(bounds.height), 1), maxViewportDimension)
+      renderer.setSize(width, height, false)
+      camera.aspect = width / height
+      camera.updateProjectionMatrix()
+    }
+    const observer = new ResizeObserver(resize)
+    observer.observe(host)
+    resize()
+    let animationFrame = 0
+    const animate = () => {
+      animationFrame = requestAnimationFrame(animate)
+      controls.update()
+      renderer.render(scene, camera)
+    }
+    animate()
+    return () => {
+      cancelAnimationFrame(animationFrame)
+      observer.disconnect()
+      controls.dispose()
+      renderer.dispose()
+      host.replaceChildren()
+    }
+  }, [modelUrl, wireframe, resetKey])
+
+  return <div ref={hostRef} style={{ width: '100%', height: '100%', minWidth: 0, minHeight: 0, position: 'relative' }}>
+    {viewerError && <div style={{ position: 'absolute', inset: 0, display: 'grid', placeItems: 'center', padding: '24px', color: 'var(--red)', textAlign: 'center', zIndex: 2 }}>{viewerError}</div>}
+  </div>
+}
+
 // ── 3D SCENE RECONSTRUCTION (PHOTOGRAMMETRY) PAGE ────────────────────────
 export function Photo3DPage() {
   const [cases, setCases] = useState<Case[]>([])
@@ -859,19 +950,20 @@ export function Photo3DPage() {
   const [evidenceList, setEvidenceList] = useState<Evidence[]>([])
   const [selectedEvidenceId, setSelectedEvidenceId] = useState<string>('')
   
-  const [status, setStatus] = useState<'Waiting' | 'Processing' | 'Completed' | 'Failed'>('Waiting')
+  const [status, setStatus] = useState<'Waiting' | 'Pending' | 'Processing' | 'Completed' | 'Failed'>('Waiting')
   const [jobDetails, setJobDetails] = useState<{
     model_url?: string
     point_cloud_url?: string
     frame_count?: number
     created_at?: string
     completed_at?: string
+    error_message?: string
   }>({})
   
   const [pipelineStep, setPipelineStep] = useState<number>(1)
   const [isLogOpen, setIsLogOpen] = useState(false) // Default state: Collapsed
   const [viewMode, setViewMode] = useState<'orbit' | 'wireframe' | 'pointcloud'>('orbit')
-  const [rotationAngle, setRotationAngle] = useState(35)
+  const [viewerReset, setViewerReset] = useState(0)
   const [errorMsg, setErrorMsg] = useState('')
 
   const [logs, setLogs] = useState<string[]>([])
@@ -907,19 +999,20 @@ export function Photo3DPage() {
   }, [])
 
   // Function to query status
-  const checkCurrentStatus = async (caseId: string) => {
+  const checkCurrentStatus = async (jobId: string) => {
     try {
-      const res = await api.getPhotogrammetryStatus(caseId)
+      const res = await api.getPhotogrammetryStatus(jobId)
       if (res && res.status) {
         setStatus(res.status as any)
         setJobDetails(res)
         if (res.status === 'Completed') {
           setPipelineStep(8)
-        } else if (res.status === 'Processing') {
-          setPipelineStep(4)
-          startPolling(caseId)
+        } else if (res.status === 'Processing' || res.status === 'Pending') {
+          setPipelineStep(1)
+          startPolling(jobId)
         } else if (res.status === 'Failed') {
           setPipelineStep(1)
+          setErrorMsg(`Reconstruction failed.${res.error_message ? ` ${res.error_message}` : ''}`)
         }
       }
     } catch {
@@ -928,27 +1021,31 @@ export function Photo3DPage() {
   }
 
   // Polling function (every 3 seconds)
-  const startPolling = (caseId: string) => {
+  const startPolling = (jobId: string) => {
     stopPolling()
     pollTimerRef.current = setInterval(async () => {
       try {
-        const res = await api.getPhotogrammetryStatus(caseId)
+        const res = await api.getPhotogrammetryStatus(jobId)
         if (!res) return
         setStatus(res.status as any)
         setJobDetails(res)
 
         const timeStr = new Date().toLocaleTimeString()
 
-        if (res.status === 'Processing') {
-          setPipelineStep(prev => (prev < 7 ? prev + 1 : prev))
-          setLogs(prev => [...prev, `[${timeStr}] Pipeline processing... (Status: ${res.status})`])
+        if (res.status === 'Processing' || res.status === 'Pending') {
+          // The service currently exposes job-level state, not per-stage state.
+          // Do not fabricate pipeline progress in the UI.
+          setPipelineStep(1)
+          setLogs(prev => [...prev, `[${timeStr}] Pipeline ${res.status.toLowerCase()}...`])
         } else if (res.status === 'Completed') {
           setPipelineStep(8)
           setLogs(prev => [...prev, `[${timeStr}] Model Generated Successfully. Saved GLB & PLY.`])
           stopPolling()
         } else if (res.status === 'Failed') {
           setPipelineStep(1)
-          setLogs(prev => [...prev, `[${timeStr}] Reconstruction Failed.`])
+          const reason = res.error_message ? ` ${res.error_message}` : ''
+          setErrorMsg(`Reconstruction failed.${reason}`)
+          setLogs(prev => [...prev, `[${timeStr}] Reconstruction failed.${reason}`])
           stopPolling()
         }
       } catch (err) {
@@ -976,12 +1073,20 @@ export function Photo3DPage() {
         const res = await api.getEvidence(selectedCaseId)
         const evData = res.data || []
         setEvidenceList(evData)
-        if (evData.length > 0) {
-          setSelectedEvidenceId(evData[0].id)
+        const videoEvidence = evData.filter(ev => {
+          const type = (ev.evidence_type || ev.file_type || '').toLowerCase()
+          return type === 'video' || /\.(mp4|mov|avi|mkv)$/i.test(ev.file_name || '')
+        })
+        setEvidenceList(videoEvidence)
+        if (videoEvidence.length > 0) {
+          setSelectedEvidenceId(videoEvidence[0].id)
         } else {
           setSelectedEvidenceId('')
         }
-        checkCurrentStatus(selectedCaseId)
+        // Do not adopt an older case-level run here.  A new trigger below owns
+        // its returned job id and is the only job this page polls.
+        setStatus('Waiting')
+        setJobDetails({})
       } catch (err) {
         console.error('Failed to load evidence:', err)
       }
@@ -1002,25 +1107,20 @@ export function Photo3DPage() {
       setErrorMsg('Please select an uploaded video evidence item.')
       return
     }
-    if (!currentEvidence.file_url) {
-      setErrorMsg('Selected evidence file URL is missing.')
-      return
-    }
 
     setErrorMsg('')
-    setStatus('Processing')
+    setStatus('Pending')
     setPipelineStep(1)
     const timeStr = new Date().toLocaleTimeString()
     setLogs([
       `[${timeStr}] Triggering photogrammetry pipeline...`,
-      `[${timeStr}] Evidence ID: ${currentEvidence.id}`,
-      `[${timeStr}] File URL: ${currentEvidence.file_url}`
+      `[${timeStr}] Evidence ID: ${currentEvidence.id}`
     ])
 
     try {
-      await api.triggerPhotogrammetry(selectedCaseId, currentEvidence.id, currentEvidence.file_url)
+      const job = await api.triggerPhotogrammetry(selectedCaseId, currentEvidence.id)
       setLogs(prev => [...prev, `[${new Date().toLocaleTimeString()}] Pipeline triggered successfully. Starting polling...`])
-      startPolling(selectedCaseId)
+      checkCurrentStatus(job.job_id)
     } catch (err: any) {
       const detail = err.response?.data?.detail || err.message || 'Trigger failed'
       setStatus('Failed')
@@ -1188,8 +1288,8 @@ export function Photo3DPage() {
                 borderRadius: 'var(--r)', padding: '8px 12px', fontSize: '13px', color: 'var(--text)', outline: 'none'
               }}
             >
-              {evidenceList.length === 0 ? (
-                <option value="">No evidence found for selected case</option>
+            {evidenceList.length === 0 ? (
+                <option value="">No video evidence found for selected case</option>
               ) : (
                 evidenceList.map(ev => (
                   <option key={ev.id} value={ev.id}>
@@ -1243,15 +1343,15 @@ export function Photo3DPage() {
             variant="primary"
             size="md"
             full
-            loading={status === 'Processing'}
-            disabled={status === 'Processing' || !currentEvidence}
+            loading={status === 'Pending' || status === 'Processing'}
+            disabled={status === 'Pending' || status === 'Processing' || !currentEvidence}
             onClick={handleStartReconstruction}
             style={{ padding: '12px 20px', fontSize: '14px', fontWeight: 600, justifyContent: 'center' }}
           >
             <svg width="18" height="18" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2">
               <polygon points="5 3 19 12 5 21 5 3" />
             </svg>
-            {status === 'Processing' ? 'Processing COLMAP Pipeline...' : 'Generate 3D Reconstruction'}
+            {status === 'Pending' || status === 'Processing' ? 'Processing COLMAP Pipeline...' : 'Generate 3D Reconstruction'}
           </Btn>
           <div style={{ fontSize: '11px', color: 'var(--text3)', marginTop: '8px' }}>
             Estimated Processing Time: Approx. 2–5 minutes
@@ -1298,7 +1398,7 @@ export function Photo3DPage() {
       </Card>
 
       {/* SECTION 5 — RESULTS */}
-      <div style={{ display: 'grid', gridTemplateColumns: '1fr 2.2fr', gap: '20px', marginBottom: '24px' }}>
+      <div style={{ display: 'grid', gridTemplateColumns: '1fr 2.2fr', gap: '20px', marginBottom: '24px', alignItems: 'stretch' }}>
         {/* LEFT COLUMN: Reconstruction Metrics */}
         <Card style={{ display: 'flex', flexDirection: 'column', justifyContent: 'space-between' }}>
           <div>
@@ -1344,20 +1444,20 @@ export function Photo3DPage() {
         </Card>
 
         {/* RIGHT COLUMN: Large 3D Model Viewer */}
-        <Card style={{ display: 'flex', flexDirection: 'column', minHeight: '440px' }}>
+        <Card style={{ display: 'flex', flexDirection: 'column', height: 'clamp(440px, 55vh, 720px)', minHeight: 0, minWidth: 0 }}>
           <CardHeader>
             <CardTitle>3D Model Viewer</CardTitle>
             <div style={{ display: 'flex', gap: '6px' }}>
               <Btn size="xs" variant={viewMode === 'orbit' ? 'primary' : 'default'} onClick={() => setViewMode('orbit')}>Orbit</Btn>
               <Btn size="xs" variant={viewMode === 'wireframe' ? 'primary' : 'default'} onClick={() => setViewMode('wireframe')}>Wireframe</Btn>
               <Btn size="xs" variant={viewMode === 'pointcloud' ? 'primary' : 'default'} onClick={() => setViewMode('pointcloud')}>Points</Btn>
-              <Btn size="xs" variant="default" onClick={() => setRotationAngle(35)}>Reset</Btn>
+              <Btn size="xs" variant="default" onClick={() => setViewerReset(prev => prev + 1)}>Reset</Btn>
             </div>
           </CardHeader>
 
           {/* Viewport Canvas Area */}
           <div style={{
-            flex: 1, borderRadius: 'var(--r)',
+            flex: '1 1 0', minHeight: 0, minWidth: 0, borderRadius: 'var(--r)',
             background: 'radial-gradient(circle at center, var(--bg3) 0%, var(--bg2) 100%)',
             border: '1px dashed var(--border2)', position: 'relative',
             display: 'flex', flexDirection: 'column', alignItems: 'center', justifyContent: 'center',
@@ -1391,35 +1491,7 @@ export function Photo3DPage() {
                 </div>
               </div>
             ) : (
-              <div style={{ width: '100%', height: '100%', display: 'flex', flexDirection: 'column', alignItems: 'center', justifyContent: 'center', position: 'relative', zIndex: 2 }}>
-                {/* 3D Mesh Graphic / Model View */}
-                <div
-                  onClick={() => setRotationAngle(prev => (prev + 45) % 360)}
-                  style={{
-                    width: '240px', height: '210px', border: viewMode === 'wireframe' ? '1px dashed var(--blue)' : '1px solid var(--border2)',
-                    borderRadius: '12px', background: 'rgba(0, 112, 243, 0.05)',
-                    display: 'flex', alignItems: 'center', justifyContent: 'center',
-                    transform: `perspective(600px) rotateY(${rotationAngle}deg) rotateX(15deg)`,
-                    transition: 'transform 0.5s cubic-bezier(0.2, 0.8, 0.2, 1)', cursor: 'pointer',
-                    boxShadow: '0 12px 36px rgba(0,0,0,0.3)', position: 'relative'
-                  }}
-                >
-                  <div style={{ textAlign: 'center' }}>
-                    <svg width="72" height="72" viewBox="0 0 24 24" fill="none" stroke="var(--green)" strokeWidth="1.2">
-                      <polygon points="12 2 22 8.5 22 15.5 12 22 2 15.5 2 8.5 12 2" />
-                      <line x1="12" y1="22" x2="12" y2="12" />
-                      <polyline points="22 8.5 12 12 2 8.5" />
-                    </svg>
-                    <div style={{ fontSize: '11px', fontFamily: 'var(--mono)', color: 'var(--green)', marginTop: '6px' }}>
-                      Model Generated Successfully
-                    </div>
-                  </div>
-                </div>
-
-                <div style={{ position: 'absolute', bottom: '12px', left: '12px', fontSize: '10px', fontFamily: 'var(--mono)', color: 'var(--text3)' }}>
-                  Click viewport to rotate | Model URL: {jobDetails.model_url || 'Generated'}
-                </div>
-              </div>
+              jobDetails.model_url && <GLBViewer modelUrl={jobDetails.model_url} wireframe={viewMode === 'wireframe'} resetKey={viewerReset} />
             )}
           </div>
         </Card>

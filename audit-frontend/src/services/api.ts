@@ -80,6 +80,11 @@ class ApiService {
     return data
   }
 
+  async resetPassword(email: string, otp: string, newPassword: string) {
+    const { data } = await this.client.post<ApiResponse<{ message: string }>>('/auth/reset-password', { email, otp, new_password: newPassword })
+    return data
+  }
+
   async changePassword(newPassword: string) {
     const { data } = await this.client.post<ApiResponse<{ message: string }>>('/auth/change-password', { new_password: newPassword })
     return data
@@ -297,15 +302,16 @@ class ApiService {
   }
 
   // ── PHOTOGRAMMETRY ────────────────────────────────────────────────────────
-  async triggerPhotogrammetry(caseId: string, evidenceId: string, fileUrl: string) {
-    const { data } = await this.client.post<ApiResponse<{ job_id: string; status: string }>>(
+  async triggerPhotogrammetry(caseId: string, evidenceId: string) {
+    // This proxy deliberately returns the microservice job envelope directly.
+    const { data } = await this.client.post<{ job_id: string; status: string }>(
       `/photogrammetry/trigger/${caseId}`,
-      { evidence_id: evidenceId, file_url: fileUrl }
+      { evidence_id: evidenceId }
     )
     return data
   }
 
-  async getPhotogrammetryStatus(caseId: string) {
+  async getPhotogrammetryStatus(jobId: string) {
     const { data } = await this.client.get<{
       status: string
       model_url?: string
@@ -313,7 +319,10 @@ class ApiService {
       frame_count?: number
       created_at?: string
       completed_at?: string
-    }>(`/photogrammetry/status/${caseId}`)
+      error_message?: string
+      job_id: string
+      evidence_id?: string
+    }>(`/photogrammetry/status/job/${jobId}`)
     return data
   }
 }
