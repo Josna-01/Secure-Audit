@@ -179,15 +179,32 @@ class ApiService {
   }
 
   // ── OCR ─────────────────────────────────────────────────────────────────
-  async runOCR(evidenceId: string, language?: string) {
+  async runOCR(evidenceId: string, language?: string,
+               options: { translate?: boolean; target_language?: string; force?: boolean } = {}) {
     const { data } = await this.client.post<ApiResponse<{
       success: boolean;
       evidence_id: string;
       language: string;
       confidence: number;
       text: string;
-      pages?: { page_number: number; text: string; confidence: number; language: string }[];
-    }>>(`/ai/ocr/${evidenceId}`, { language }, { timeout: 300000 })
+      extracted_text?: string;
+      detected_languages?: { code: string; name: string; ratio: number; char_count: number }[];
+      total_pages?: number;
+      processing_time_ms?: number;
+      warnings?: string[];
+      cached?: boolean;
+      translated_text?: string | null;
+      translation?: {
+        status: 'success' | 'partial' | 'failed' | 'skipped'; target_language: string; target_language_name?: string;
+        source_languages: string[]; providers: string[]; error: string | null; cached?: boolean;
+      } | null;
+      pages?: {
+        page_number: number; text: string; confidence: number; language: string;
+        status?: 'success' | 'empty' | 'failed'; warnings?: string[]; translated_text?: string | null;
+        raw_text?: string;
+        tables?: { rows: string[][]; row_count: number; column_count: number }[];
+      }[];
+    }>>(`/ai/ocr/${evidenceId}`, { language, ...options }, { timeout: 300000 })
     return data
   }
 

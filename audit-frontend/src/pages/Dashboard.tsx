@@ -18,20 +18,23 @@ interface Stats {
 }
 
 interface BlockchainDashboard {
-  network: string
-  status: string
-  chain_id: number
-  contract_address: string
-  latest_block: number
-  registered_evidence: number
-  verified_evidence: number
-  tampered_evidence: number
-  recent_transactions: Array<{
+  status: {
+    connected: boolean
+    chainId?: number
+    contractAddress?: string
+    latestBlock?: number
+    sender?: string
+    error?: string
+  }
+  totalRegisteredEvidence: number
+  verifiedEvidence: number
+  tamperedEvidence: number
+  latestTransactions?: Array<{
     event: string
     transactionHash: string
     blockNumber: number
     createdAt: string
-    payload: Record<string, any>
+    payload?: Record<string, any>
   }>
 }
 
@@ -170,13 +173,13 @@ export default function Dashboard() {
                 fontSize: '10px',
                 padding: '2px 8px',
                 borderRadius: '10px',
-                background: blockchain.status === 'online' ? 'var(--green-bg)' : 'var(--red-bg)',
-                color: blockchain.status === 'online' ? 'var(--green)' : 'var(--red)',
+                background: blockchain.status?.connected ? 'var(--green-bg)' : 'var(--red-bg)',
+                color: blockchain.status?.connected ? 'var(--green)' : 'var(--red)',
                 fontWeight: 600,
                 textTransform: 'uppercase',
                 letterSpacing: '.4px'
               }}>
-                {blockchain.status === 'online' ? '● Connected' : '○ Offline'}
+                {blockchain.status?.connected ? '● Connected' : '○ Offline'}
               </span>
             )}
           </div>
@@ -185,7 +188,7 @@ export default function Dashboard() {
 
         {blockchainLoading ? (
           <div style={{ padding: '20px', textAlign: 'center', color: 'var(--text3)', fontSize: '12px' }}>Loading blockchain data...</div>
-        ) : !blockchain || blockchain.status !== 'online' ? (
+        ) : !blockchain || !blockchain.status?.connected ? (
           <div style={{ padding: '16px', textAlign: 'center', color: 'var(--text3)', fontSize: '12px' }}>
             Ethereum provider unavailable. Ensure Ganache is running on port 8545.
           </div>
@@ -193,16 +196,16 @@ export default function Dashboard() {
           <div>
             {/* Chain info banner */}
             <div style={{ fontSize: '11px', color: 'var(--text3)', marginBottom: '14px', fontFamily: 'var(--mono)' }}>
-              Chain {blockchain.chain_id} · Block #{blockchain.latest_block} ·{' '}
-              <span style={{ color: 'var(--blue)' }}>{blockchain.contract_address}</span>
+              Chain {blockchain.status.chainId} · Block #{blockchain.status.latestBlock} ·{' '}
+              <span style={{ color: 'var(--blue)' }}>{blockchain.status.contractAddress}</span>
             </div>
 
             {/* Stats row */}
             <div style={{ display: 'grid', gridTemplateColumns: 'repeat(3, 1fr)', gap: '10px', marginBottom: '16px' }}>
               {[
-                { label: 'Registered', value: blockchain.registered_evidence, color: 'var(--blue)' },
-                { label: 'Verified', value: blockchain.verified_evidence, color: 'var(--green)' },
-                { label: 'Tampered', value: blockchain.tampered_evidence, color: 'var(--red)' },
+                { label: 'Registered', value: blockchain.totalRegisteredEvidence, color: 'var(--blue)' },
+                { label: 'Verified', value: blockchain.verifiedEvidence, color: 'var(--green)' },
+                { label: 'Tampered', value: blockchain.tamperedEvidence, color: 'var(--red)' },
               ].map((item) => (
                 <div
                   key={item.label}
@@ -215,13 +218,13 @@ export default function Dashboard() {
             </div>
 
             {/* Recent transactions */}
-            {blockchain.recent_transactions.length > 0 && (
+            {blockchain.latestTransactions && blockchain.latestTransactions.length > 0 && (
               <div>
                 <div style={{ fontSize: '10px', color: 'var(--text3)', textTransform: 'uppercase', letterSpacing: '.5px', marginBottom: '8px', fontWeight: 600 }}>
                   Recent Transactions
                 </div>
                 <div style={{ display: 'flex', flexDirection: 'column', gap: '4px' }}>
-                  {blockchain.recent_transactions.slice(0, 5).map((tx, i) => (
+                  {blockchain.latestTransactions.slice(0, 5).map((tx, i) => (
                     <div key={i} style={{
                       display: 'flex', alignItems: 'center', gap: '10px',
                       padding: '7px 10px', background: 'var(--bg3)', borderRadius: 'var(--r)', fontSize: '11px'

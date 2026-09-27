@@ -3,6 +3,7 @@ import React, { useEffect, useRef, useState } from 'react'
 import { useNavigate, useParams } from 'react-router-dom'
 import { AppShell } from '../components/Layout'
 import { Card, CardTitle, CardHeader, Btn, Badge, HashChip, AlertBox, FutureNotice, UploadZone, InfoRow, Spinner, Tabs } from '../components/UI'
+import { OcrTextViewer } from '../components/OcrTextViewer'
 import { api } from '../services/api'
 import type { Evidence, Case } from '../types'
 import { format } from 'date-fns'
@@ -465,12 +466,12 @@ export function OCRPage() {
 
   // Extract Tab States
   const [file, setFile] = useState<File | null>(null)
-  const [language, setLanguage] = useState('eng')
+  const [language, setLanguage] = useState('auto')
   const [running, setRunning] = useState(false)
   const [result, setResult] = useState<any | null>(null)
   const [ocrError, setOcrError] = useState('')
   const [previewUrl, setPreviewUrl] = useState<string | null>(null)
-  const [activeOcrPage, setActiveOcrPage] = useState(1)
+  const [ocrRunLang, setOcrRunLang] = useState('auto')
   const fileRef = useRef<HTMLInputElement>(null)
 
   // Case Select States
@@ -543,7 +544,7 @@ export function OCRPage() {
       // rendering the text returned by the PaddleOCR endpoint.
       const ocr = res.data as any
       setResult({ ...ocr, text: ocr.text ?? ocr.extracted_text ?? '' })
-      setActiveOcrPage(1)
+      setOcrRunLang(language)
     } catch (err: any) {
       console.error(err)
       const detail = err.response?.data?.detail || 'OCR extraction failed. Check backend configuration.'
@@ -616,9 +617,15 @@ export function OCRPage() {
                   onChange={(e) => setLanguage(e.target.value)} 
                   style={{ width: '100%', background: 'var(--bg3)', border: '1px solid var(--border)', borderRadius: 'var(--r)', padding: '7px 10px', fontSize: '12px', color: 'var(--text)', fontFamily: 'var(--font)', outline: 'none' }}
                 >
+                  <option value="auto">Auto-detect (all supported languages)</option>
                   <option value="eng">English (eng)</option>
                   <option value="hin">Hindi (hin)</option>
-                  <option value="eng+hin">Multiple (eng+hin)</option>
+                  <option value="kan">Kannada (kan)</option>
+                  <option value="tel">Telugu (tel)</option>
+                  <option value="tam">Tamil (tam)</option>
+                  <option value="mal">Malayalam (mal)</option>
+                  <option value="eng+hin">English + Hindi</option>
+                  <option value="eng+kan">English + Kannada</option>
                 </select>
               </div>
 
@@ -646,11 +653,12 @@ export function OCRPage() {
             <Card>
               <CardTitle>Technical Reference</CardTitle>
               {[
-                ['Engine', 'PaddleOCR'],
-                ['Grayscale Binarisation', 'OpenCV Color Convert'],
-                ['Noise Cleanse', 'OpenCV Median Blur Filter (3px)'],
-                ['Adaptive Binarisation', 'Gaussian C Thresholding'],
-                ['Output Standard', 'Single / Multi-page PDF pagination']
+                ['Engine', 'PaddleOCR + Tesseract (Kannada, Malayalam)'],
+                ['Languages', 'English · Hindi · Kannada · Telugu · Tamil · Malayalam'],
+                ['Orientation', 'Page rotation + skew correction'],
+                ['Enhancement', 'Adaptive upscaling, denoise, contrast (only when needed)'],
+                ['Layout', 'Paragraphs, lists and tables preserved'],
+                ['Output Standard', 'Page-wise results for images, TIFF and PDF']
               ].map(([k, v]) => (
                 <div key={k} style={{ display: 'flex', gap: '10px', padding: '5px 0', borderBottom: '1px solid var(--border)' }}>
                   <span style={{ fontSize: '11px', color: 'var(--text3)', minWidth: '130px' }}>{k}</span>
@@ -661,39 +669,7 @@ export function OCRPage() {
           </div>
 
           <Card style={{ minHeight: '400px' }}>
-            <CardHeader>
-              <CardTitle>Extracted Document Content</CardTitle>
-              {result && (
-                <div style={{ display: 'flex', gap: '6px' }}>
-                  <Btn 
-                    size="xs" 
-                    onClick={() => {
-                      const textToCopy = result.pages && result.pages.length > 1
-                        ? result.pages.find((p: any) => p.page_number === activeOcrPage)?.text || ''
-                        : result.text;
-                      navigator.clipboard.writeText(textToCopy);
-                      alert('Copied to clipboard!');
-                    }}
-                  >
-                    Copy Page
-                  </Btn>
-                  <Btn 
-                    size="xs" 
-                    onClick={() => {
-                      const element = document.createElement("a");
-                      const file = new Blob([result.text], {type: 'text/plain'});
-                      element.href = URL.createObjectURL(file);
-                      element.download = `ocr_extract_${selectedCase?.case_number || 'export'}.txt`;
-                      document.body.appendChild(element);
-                      element.click();
-                      document.body.removeChild(element);
-                    }}
-                  >
-                    Download Text
-                  </Btn>
-                </div>
-              )}
-            </CardHeader>
+            <CardTitle>Extracted Document Content</CardTitle>
 
             {!result && !running && (
               <div style={{ display: 'flex', flexDirection: 'column', alignItems: 'center', justifyContent: 'center', height: '300px', color: 'var(--text3)', fontSize: '12px' }}>
@@ -704,60 +680,25 @@ export function OCRPage() {
             {running && (
               <div style={{ display: 'flex', flexDirection: 'column', alignItems: 'center', justifyContent: 'center', height: '300px', gap: '12px' }}>
                 <Spinner size={24} />
-                <div style={{ fontSize: '11px', color: 'var(--text3)' }}>Running grayscale binarisation and text extraction...</div>
+                <div style={{ fontSize: '11px', color: 'var(--text3)' }}>Detecting page layout, languages and text...</div>
               </div>
             )}
 
-            {result && (
+            {result && !running && (
               <div>
                 <div style={{ display: 'flex', justifyContent: 'space-between', alignItems: 'center', background: 'var(--bg3)', border: '1px solid var(--border)', borderRadius: '4px', padding: '6px 12px', fontSize: '11px', color: 'var(--text3)', marginBottom: '12px' }}>
                   <span>Language: <span style={{ fontFamily: 'var(--mono)', color: 'var(--blue)' }}>{result.language}</span></span>
                   <span>Confidence: <span style={{ fontWeight: 600, color: 'var(--green)' }}>{Math.round(result.confidence * 100)}%</span></span>
                 </div>
-
-                {result.pages && result.pages.length > 1 && (
-                  <div style={{ display: 'flex', flexWrap: 'wrap', gap: '4px', borderBottom: '1px solid var(--border)', paddingBottom: '10px', marginBottom: '12px' }}>
-                    {result.pages.map((p: any) => (
-                      <button
-                        key={p.page_number}
-                        onClick={() => setActiveOcrPage(p.page_number)}
-                        style={{
-                          border: '1px solid var(--border)',
-                          borderRadius: '4px',
-                          padding: '3px 8px',
-                          fontSize: '10px',
-                          fontFamily: 'var(--mono)',
-                          cursor: 'pointer',
-                          background: activeOcrPage === p.page_number ? 'var(--blue)' : 'var(--bg3)',
-                          color: activeOcrPage === p.page_number ? '#fff' : 'var(--text2)',
-                          fontWeight: activeOcrPage === p.page_number ? 600 : 400
-                        }}
-                      >
-                        Page {p.page_number}
-                      </button>
-                    ))}
-                  </div>
-                )}
-
-                <div 
-                  style={{
-                    fontSize: '12px',
-                    fontFamily: 'var(--mono)',
-                    color: 'var(--text2)',
-                    lineHeight: 1.6,
-                    padding: '12px',
-                    background: 'var(--bg3)',
-                    border: '1px solid var(--border)',
-                    borderRadius: 'var(--r)',
-                    whiteSpace: 'pre-wrap',
-                    maxHeight: '350px',
-                    overflowY: 'auto'
+                <OcrTextViewer
+                  result={result}
+                  downloadName={`ocr_extract_${selectedCase?.case_number || 'export'}`}
+                  onTranslate={async (target) => {
+                    const res = await api.runOCR(result.evidence_id, ocrRunLang, { translate: true, target_language: target })
+                    const ocr = res.data as any
+                    setResult({ ...ocr, text: ocr.text ?? ocr.extracted_text ?? '' })
                   }}
-                >
-                  {result.pages && result.pages.length > 1
-                    ? result.pages.find((p: any) => p.page_number === activeOcrPage)?.text || '(Empty page)'
-                    : result.text || '(No text extracted)'}
-                </div>
+                />
               </div>
             )}
           </Card>

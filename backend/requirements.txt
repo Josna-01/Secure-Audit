@@ -6,7 +6,9 @@ python-dotenv>=1.0
 pydantic
 roboflow
 paddlepaddle==3.1.0
-paddleocr
+paddleocr>=3.7,<4
+pypdfium2>=4.0
+deep-translator>=1.11,<2
 opencv-python
 pillow
 pdf2image

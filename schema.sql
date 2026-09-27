@@ -141,11 +141,15 @@ CREATE TABLE IF NOT EXISTS ocr_results (
     confidence DOUBLE PRECISION,
     page_number INTEGER NOT NULL DEFAULT 1,
     created_at TIMESTAMPTZ DEFAULT now(),
+    detected_languages JSONB,
+    ocr_metadata JSONB,
     CONSTRAINT pk_ocr_results PRIMARY KEY (id),
     CONSTRAINT fk_ocr_results_evidence_id FOREIGN KEY (evidence_id) REFERENCES evidence(id) ON DELETE CASCADE
 );
 
 CREATE INDEX IF NOT EXISTS idx_ocr_results_evidence_id ON ocr_results(evidence_id);
+-- One row per evidence page; re-running OCR replaces rows instead of appending.
+CREATE UNIQUE INDEX IF NOT EXISTS uq_ocr_results_evidence_page ON ocr_results(evidence_id, page_number);
 
 -- ============================================================================
 -- 8. BNS PREDICTIONS TABLE

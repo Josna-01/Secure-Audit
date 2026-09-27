@@ -31,7 +31,10 @@ from sqlalchemy import text
 from sqlalchemy.orm import Session
 from db import get_db, SessionLocal
 from models import User, Case, Evidence, AuditLog, OCRResult, BNSPrediction, OTPToken, EvidenceCustodyRecord, BlockchainLog
-from services.ocr_service import OCRServiceError, ocr_service
+from services.ocr_service import OCRServiceError, build_document_result, ocr_service
+from services.ocr_text import UNKNOWN_LANGUAGE, detect_languages
+from services.translation_service import (TARGET_LANGUAGES, TranslationError,
+                                          resolve_target_language, translation_service)
 from services.blockchain_service import blockchain_service, BlockchainUnavailable, BlockchainTransactionError
 
 load_dotenv()
@@ -232,6 +235,22 @@ def blockchain_event_listener() -> None:
 def start_blockchain_event_listener() -> None:
     threading.Thread(target=blockchain_event_listener, name="blockchain-event-listener", daemon=True).start()
 
+
+@app.on_event("startup")
+def ensure_ocr_result_columns() -> None:
+    """Add the nullable OCR page-metadata columns if an older schema lacks them.
+
+    Purely additive and idempotent. Duplicate clean-up and the unique
+    (evidence_id, page_number) index are left to migrate_ocr_results.py.
+    """
+    try:
+        with SessionLocal() as session:
+            session.execute(text("ALTER TABLE ocr_results ADD COLUMN IF NOT EXISTS detected_languages JSONB"))
+            session.execute(text("ALTER TABLE ocr_results ADD COLUMN IF NOT EXISTS ocr_metadata JSONB"))
+            session.commit()
+    except Exception as exc:
+        print(f"[OCR WARNING] Could not verify ocr_results columns; run migrate_ocr_results.py: {exc}")
+
 BACKEND_DIR = os.path.dirname(os.path.abspath(__file__))
 UPLOADS_DIR = os.path.join(BACKEND_DIR, "uploads")
 os.makedirs(UPLOADS_DIR, exist_ok=True)
@@ -278,6 +297,9 @@ class OCRRequest(BaseModel):
     evidence_id: Optional[str] = None
     language: Optional[str] = "auto"
     force: Optional[bool] = False
+    # Optional translation; the original OCR text is always returned unchanged.
+    translate: Optional[bool] = False
+    target_language: Optional[str] = "en"
 
 
 class LoginRequest(BaseModel):
@@ -2131,187 +2153,42 @@ def get_bns_case(case_id: str, request: Request):
     check_case_access(case_id, user_info)
     return {"data": []}
 
-def process_ai_ocr(evidence_id: str, language: str, request: Request, db: Session):
-    print(f"[OCR DEBUG] Received evidence_id: {evidence_id}")
-    user_info = None
-    try:
-        user_info = get_current_user_info(request)
-    except Exception as e:
-        print(f"[OCR DEBUG] Note: get_current_user_info error or missing auth: {e}")
-
-    evidence_uuid = None
-    case_id = None
-    evidence_obj = None
-
-    if not evidence_id:
-        print("[OCR DEBUG] REASON FOR 400: evidence_id is missing")
-        raise HTTPException(status_code=400, detail="Missing evidence ID")
-
-@app.post("/ai/ocr")
-def run_ai_ocr(req: OCRRequest, request: Request, db: Session = Depends(get_db)):
-    user_info = get_current_user_info(request)
-
-    evidence_id = req.evidence_id
-    evidence_uuid = None
-    case_id = None
-    
-    if evidence_id != "temp":
-        try:
-            evidence_uuid = uuid.UUID(evidence_id)
-        except ValueError:
-            print(f"[OCR DEBUG] REASON FOR 400: Invalid evidence ID format '{evidence_id}'")
-            raise HTTPException(status_code=400, detail="Invalid evidence ID format")
-
-        evidence_obj = db.query(Evidence).filter(Evidence.id == evidence_uuid).first()
-        print(f"[OCR DEBUG] Fetched Evidence object: {evidence_obj}")
-
-        if not evidence_obj:
-            print(f"[OCR DEBUG] REASON FOR 404: Evidence record with ID '{evidence_id}' not found in PostgreSQL")
-            raise HTTPException(status_code=404, detail="Evidence not found")
-
-        case_id = str(evidence_obj.case_id) if evidence_obj.case_id else None
-        if case_id and user_info:
-            try:
-                check_case_access(case_id, user_info, db)
-            except Exception as e:
-                print(f"[OCR DEBUG] Case access check warning: {e}")
-
-    lang = req.language or "auto"
-    print(f"[OCR DEBUG] Requested language: {lang}")
-
-    source_input = None
-    local_path = None
-    file_exists = False
-    file_url = None
-    translated_text = None
-
-    if evidence_obj and evidence_obj.file_url:
-        file_url = evidence_obj.file_url
-        print(f"[OCR DEBUG] Evidence file_url: {file_url}")
-
-        # Check if file_url is a remote URL (e.g. Supabase Storage)
-        if file_url.startswith("http://") or file_url.startswith("https://"):
-            print(f"[OCR DEBUG] Attempting to fetch remote file from URL: {file_url}")
-            try:
-                resp = requests.get(file_url, timeout=30)
-                print(f"[OCR DEBUG] HTTP fetch response status code: {resp.status_code}")
-                if resp.status_code == 200:
-                    source_input = resp.content
-                    file_exists = True
-                    print(f"[OCR DEBUG] Successfully downloaded {len(source_input)} bytes from remote URL.")
-                else:
-                    print(f"[OCR DEBUG] Remote fetch returned non-200 status: {resp.status_code}")
-            except Exception as download_err:
-                print(f"[OCR DEBUG] Failed to download file from remote URL '{file_url}': {download_err}")
-
-        # If not remote or remote fetch failed, check local file system
-        if not source_input:
-            if file_url.startswith("/uploads/"):
-                local_path = os.path.join(".", file_url.lstrip("/"))
-            elif not os.path.isabs(file_url) and not file_url.startswith("http"):
-                local_path = os.path.join("uploads", os.path.basename(file_url))
-            else:
-                local_path = file_url
-
-            file_exists = os.path.exists(local_path) if local_path else False
-            print(f"[OCR DEBUG] Local file path constructed: '{local_path}', file_exists: {file_exists}")
-
-            if file_exists:
-                source_input = local_path
-
-    print(f"[OCR DEBUG] Final check - file_exists: {file_exists}, source_input resolved: {source_input is not None}")
-
-    if not source_input and evidence_id != "temp":
-        reason = f"Evidence file not found locally at '{local_path}' and could not be retrieved from file_url '{file_url}'"
-        print(f"[OCR DEBUG] REASON FOR 404: {reason}")
-        raise HTTPException(status_code=404, detail=reason)
-
-    # Perform OCR using PaddleOCR (ocr_service)
-    try:
-        if source_input:
-            try:
-                pages_result = ocr_service.extract_document(source_input, language=lang)
-                if pages_result:
-                    extracted_text = "\n\n".join(p["text"] for p in pages_result if p.get("text")).strip()
-                    detected_language = pages_result[0].get("language", lang)
-                    confidence = pages_result[0].get("confidence", 0.0)
-                else:
-                    extracted_text = ""
-                    detected_language = lang
-                    confidence = 0.0
-            except OCRServiceError as oe:
-                print(f"[OCR WARNING] PaddleOCR service exception: {oe}. Using fallback text extraction.")
-                extracted_text = "SECURE AUDIT SYSTEM - OCR TEXT EXTRACTION\nStatus: Verified\nIntegrity: OK"
-                detected_language = lang if lang != "auto" else "en"
-                confidence = 0.95
-        else:
-            # Fallback for temp evidence test
-            extracted_text = "SECURE AUDIT SYSTEM - TEXT EXTRACTION\nStatus: Verified"
-            detected_language = "en"
-            confidence = 0.98
-
-        print(f"[OCR DEBUG] OCR extraction completed. Extracted text length: {len(extracted_text)}, confidence: {confidence}")
-    except Exception as e:
-        print(f"[OCR ERROR] Unexpected exception during PaddleOCR extraction: {e}")
-        raise HTTPException(status_code=500, detail=f"OCR extraction failed: {str(e)}")
+# ── OCR ───────────────────────────────────────────────────────────────────────
+# Placeholder text written by earlier OCR versions when extraction failed.
+# Cached rows containing it are treated as missing and re-extracted.
+LEGACY_OCR_PLACEHOLDERS = ("SECURE AUDIT OCR ENGINE", "SECURE AUDIT SYSTEM - OCR TEXT EXTRACTION",
+                           "SECURE AUDIT SYSTEM - TEXT EXTRACTION", "FT DOATION")
+_ocr_evidence_locks: Dict[str, threading.Lock] = {}
+_ocr_evidence_locks_guard = threading.Lock()
 
 
-    db_ocr = OCRResult(
-        id=uuid.uuid4(),
-        evidence_id=evidence_uuid,
-        extracted_text=extracted_text or "",
-        language=detected_language,
-        confidence=confidence,
-        page_number=1
-    )
-    
-    try:
-        db.add(db_ocr)
-        db.commit()
-        db.refresh(db_ocr)
-    except Exception as e:
-        db.rollback()
-        print(f"[OCR ERROR] Failed to save OCR result to database: {e}")
-        raise HTTPException(status_code=500, detail=f"Failed to save OCR result: {str(e)}")
+def _ocr_evidence_lock(evidence_id: str) -> threading.Lock:
+    """Serialize OCR runs per evidence item so concurrent requests reuse one result."""
+    with _ocr_evidence_locks_guard:
+        return _ocr_evidence_locks.setdefault(evidence_id, threading.Lock())
 
-    if user_info and "id" in user_info:
-        write_audit_log(
-            user_id=user_info["id"],
-            action="OCR Extraction",
-            case_id=case_id,
-            metadata={
-                "evidence_id": str(evidence_uuid) if evidence_uuid else "temp",
-                "detected_language": detected_language,
-                "confidence": confidence
-            },
-            db=db
-        )
-
-    return {
-        "data": {
-            "extracted_text": extracted_text,
-            "detected_language": detected_language,
-            "translated_text": translated_text
-        },
-        "success": True
-    }
 
 def resolve_ocr_evidence_source(evidence: Evidence):
     """Return an OCR-ready local path or downloaded bytes for stored evidence."""
     file_url = evidence.file_url
     if not file_url:
         raise HTTPException(status_code=400, detail="Evidence has no file URL")
-    print(f"[OCR] uploaded filename={evidence.file_name or 'unknown'} file_url={file_url}")
+    print(f"[OCR] evidence file={evidence.file_name or 'unknown'} url={file_url}")
 
     # Local-storage uploads are recorded as an application URL. Prefer the
     # original file path instead of making the backend call itself over HTTP.
     is_local_upload_url = USE_LOCAL_STORAGE and "/uploads/" in file_url
     if file_url.startswith(("http://", "https://")) and not is_local_upload_url:
+        max_bytes = int(os.getenv("OCR_MAX_FILE_BYTES", str(50 * 1024 * 1024)))
         try:
-            response = requests.get(file_url, timeout=(10, 60))
-            response.raise_for_status()
-            print(f"[OCR] resolved remote evidence URL; downloaded_bytes={len(response.content)}")
-            return response.content
+            with requests.get(file_url, timeout=(10, 60), stream=True) as response:
+                response.raise_for_status()
+                content = bytearray()
+                for chunk in response.iter_content(chunk_size=1024 * 1024):
+                    content.extend(chunk)
+                    if len(content) > max_bytes:
+                        raise HTTPException(status_code=413, detail="The evidence file exceeds the OCR size limit")
+            return bytes(content)
         except requests.RequestException as exc:
             print(f"[OCR] remote evidence retrieval failed: {exc}")
             raise HTTPException(status_code=502, detail="Unable to retrieve the uploaded evidence file") from exc
@@ -2319,8 +2196,6 @@ def resolve_ocr_evidence_source(evidence: Evidence):
     if "/uploads/" in file_url:
         relative_path = file_url.split("/uploads/", 1)[1].replace("/", os.sep)
         local_path = os.path.abspath(os.path.join("uploads", relative_path))
-    elif file_url.startswith("uploads/") or file_url.startswith("uploads\\"):
-        local_path = os.path.abspath(file_url)
     else:
         local_path = os.path.abspath(file_url)
 
@@ -2330,15 +2205,180 @@ def resolve_ocr_evidence_source(evidence: Evidence):
     if not os.path.isfile(local_path):
         print(f"[OCR] resolved local path does not exist: {local_path}")
         raise HTTPException(status_code=404, detail="Uploaded evidence file was not found")
-    print(f"[OCR] resolved local evidence path={local_path}")
     return local_path
 
 
-def run_stored_evidence_ocr(evidence_id: str, language: str, request: Request, db: Session, force: bool = False):
-    print(f"[OCR] received evidence_id={evidence_id} force={force}")
+def load_cached_ocr_pages(db: Session, evidence_uuid: uuid.UUID) -> List[OCRResult]:
+    """Latest stored row per page (older versions could store duplicates)."""
+    rows = (db.query(OCRResult).filter(OCRResult.evidence_id == evidence_uuid)
+            .order_by(OCRResult.page_number.asc(), OCRResult.created_at.desc()).all())
+    latest: Dict[int, OCRResult] = {}
+    for row in rows:
+        latest.setdefault(row.page_number, row)
+    return [latest[number] for number in sorted(latest)]
+
+
+def cached_ocr_is_usable(rows: List[OCRResult], requested_languages: List[str], requested: str) -> bool:
+    """A cache hit needs complete, clean text produced for the same language request.
+
+    ``auto`` accepts any previous extraction; an explicit language selection
+    that differs from the stored run re-extracts (replacing, not duplicating).
+    """
+    if not rows:
+        return False
+    combined = "\n".join(row.extracted_text or "" for row in rows)
+    if any(marker in combined for marker in LEGACY_OCR_PLACEHOLDERS):
+        return False
+    if any((row.ocr_metadata or {}).get("status") == "failed" for row in rows):
+        return False  # retry pages that failed last time
+    if (requested or "auto").strip().lower() == "auto":
+        return True
+    stored = (rows[0].ocr_metadata or {}).get("requested_languages")
+    if stored is None:  # rows from before metadata existed: compare the language column
+        stored = [code for code in (rows[0].language or "").split("+") if code]
+    return set(stored) == set(requested_languages)
+
+
+def cached_ocr_result(rows: List[OCRResult]) -> Dict[str, Any]:
+    pages = []
+    for row in rows:
+        metadata = row.ocr_metadata or {}
+        page_text = row.extracted_text or ""
+        pages.append({
+            **{key: value for key, value in metadata.items()
+               if key not in ("requested_languages", "document_type", "translations")},
+            "page_number": row.page_number,
+            "text": page_text,
+            "confidence": row.confidence if row.confidence is not None else 0.0,
+            "language": row.language or UNKNOWN_LANGUAGE,
+            "detected_languages": row.detected_languages if row.detected_languages is not None else detect_languages(page_text),
+            "status": metadata.get("status", "success" if page_text else "empty"),
+            "warnings": metadata.get("warnings", []),
+        })
+    metadata = rows[0].ocr_metadata or {}
+    return build_document_result(pages, metadata.get("requested_languages") or [],
+                                 metadata.get("document_type", "unknown"), processing_time_ms=0)
+
+
+def store_ocr_pages(db: Session, evidence_uuid: uuid.UUID, result: Dict[str, Any]) -> None:
+    """Replace the evidence's OCR rows with one row per page, atomically."""
+    try:
+        # Serializes writers for this evidence across worker processes; the
+        # lock is released automatically when the transaction ends.
+        db.execute(text("SELECT pg_advisory_xact_lock(hashtext(:key))"), {"key": f"ocr:{evidence_uuid}"})
+        db.query(OCRResult).filter(OCRResult.evidence_id == evidence_uuid).delete(synchronize_session=False)
+        for page in result["pages"]:
+            metadata = {key: page[key] for key in (
+                "status", "error", "warnings", "tables", "lines", "line_count", "width", "height", "scale",
+                "rotation", "skew_angle", "preprocessing", "processing_time_ms", "raw_text") if key in page}
+            metadata.update(requested_languages=result["requested_languages"], document_type=result["document_type"])
+            db.add(OCRResult(evidence_id=evidence_uuid, extracted_text=page["text"], language=page["language"],
+                             confidence=page["confidence"], page_number=page["page_number"],
+                             detected_languages=page["detected_languages"], ocr_metadata=metadata))
+        db.commit()
+    except Exception as exc:
+        db.rollback()
+        print(f"[OCR] database save failed: {exc}")
+        raise HTTPException(status_code=500, detail="Failed to save OCR results") from exc
+
+
+def _text_digest(value: str) -> str:
+    return hashlib.sha256((value or "").encode("utf-8")).hexdigest()
+
+
+def translate_ocr_result(db: Session, evidence_uuid: uuid.UUID, result: Dict[str, Any], target_language: Optional[str]) -> Dict[str, Any]:
+    """Translate OCR pages, reusing translations stored with the OCR rows.
+
+    Translations live under ``ocr_metadata["translations"][<target>]`` and are
+    keyed to a digest of the page text they were made from; the original
+    ``extracted_text`` column is never modified. Failures are reported in the
+    returned dict and never raised.
+    """
+    try:
+        target = resolve_target_language(target_language)
+    except TranslationError as exc:
+        return {"status": "failed", "error": str(exc), "target_language": target_language,
+                "translated_text": None, "pages": [], "providers": [], "source_languages": []}
+
+    rows = load_cached_ocr_pages(db, evidence_uuid)
+    stored = []
+    for page, row in zip(result["pages"], rows):
+        entry = ((row.ocr_metadata or {}).get("translations") or {}).get(target)
+        if entry and entry.get("source_digest") == _text_digest(page.get("text")):
+            stored.append(entry)
+    if rows and len(stored) == len(result["pages"]):
+        pages = [{"page_number": page["page_number"], "translated_text": entry["text"]}
+                 for page, entry in zip(result["pages"], stored)]
+        return {"status": stored[0].get("status", "success"), "cached": True, "error": None,
+                "message": stored[0].get("message"),
+                "target_language": target, "target_language_name": TARGET_LANGUAGES[target],
+                "providers": stored[0].get("providers", []), "source_languages": stored[0].get("source_languages", []),
+                "pages": pages, "processing_time_ms": 0,
+                "translated_text": "\n\n".join(p["translated_text"] for p in pages if p["translated_text"]).strip()}
+
+    translation = translation_service.translate_pages(result["pages"], target)
+    translation["cached"] = False
+    if translation["status"] in ("success", "skipped") and len(rows) == len(result["pages"]):
+        try:
+            translated_at = datetime.datetime.now(datetime.timezone.utc).isoformat()
+            for row, page, translated in zip(rows, result["pages"], translation["pages"]):
+                metadata = dict(row.ocr_metadata or {})
+                translations = dict(metadata.get("translations") or {})
+                translations[target] = {
+                    "text": translated["translated_text"], "source_digest": _text_digest(page.get("text")),
+                    "providers": translation["providers"], "source_languages": translation["source_languages"],
+                    "status": translation["status"], "translated_at": translated_at,
+                    "message": translation.get("message"),
+                }
+                metadata["translations"] = translations
+                row.ocr_metadata = metadata  # reassign so SQLAlchemy persists the JSONB change
+            db.commit()
+        except Exception as exc:  # caching is best effort; the translation is still returned
+            db.rollback()
+            print(f"[OCR] could not store translation: {exc}")
+    return translation
+
+
+def ocr_response(evidence_id: str, result: Dict[str, Any], cached: bool, processing_time_ms: int,
+                 translation: Optional[Dict[str, Any]] = None) -> Dict[str, Any]:
+    """API payload. ``text``/``language``/``detected_language`` are kept for existing clients.
+
+    ``text``/``extracted_text`` are always the original OCR output; any
+    translation is returned beside it in ``translated_text``.
+    """
+    pages = result["pages"]
+    warnings = list(result["warnings"])
+    if translation:
+        by_page = {page["page_number"]: page["translated_text"] for page in translation.get("pages", [])}
+        pages = [{**page, "translated_text": by_page.get(page["page_number"])} for page in pages]
+        if translation.get("error"):
+            warnings.append(f"Translation: {translation['error']}")
+    return {"success": True, "message": "OCR completed successfully.", "data": {
+        "evidence_id": evidence_id,
+        "text": result["text"],
+        "extracted_text": result["text"],
+        "confidence": result["confidence"],
+        "language": result["language"],
+        "detected_language": result["language"],
+        "detected_languages": result["detected_languages"],
+        "requested_languages": result["requested_languages"],
+        "pages": pages,
+        "total_pages": result["total_pages"],
+        "processing_time_ms": processing_time_ms,
+        "warnings": warnings,
+        "cached": cached,
+        "translated_text": translation.get("translated_text") if translation else None,
+        "translation": {key: value for key, value in translation.items() if key not in ("pages", "translated_text")}
+        if translation else None,
+    }}
+
+
+def run_stored_evidence_ocr(evidence_id: str, language: str, request: Request, db: Session, force: bool = False,
+                            translate: bool = False, target_language: Optional[str] = "en"):
+    started = time.perf_counter()
     user_info = get_current_user_info(request)
     try:
-        evidence_uuid = uuid.UUID(evidence_id)
+        evidence_uuid = uuid.UUID(str(evidence_id))
     except (ValueError, TypeError):
         raise HTTPException(status_code=400, detail="Invalid evidence ID format")
 
@@ -2349,78 +2389,65 @@ def run_stored_evidence_ocr(evidence_id: str, language: str, request: Request, d
     if case_id:
         check_case_access(case_id, user_info, db)
 
-    requested_language = language or "auto"
-
-    # Fast-path: Return cached OCRResult if text was already extracted, unless force re-run is requested
-    # or existing text is corrupted by old adaptive-threshold preprocessor.
-    if not force:
-        existing_ocr = db.query(OCRResult).filter(OCRResult.evidence_id == evidence_uuid).order_by(OCRResult.page_number.asc()).all()
-        if existing_ocr:
-            combined_text = "\n\n".join(p.extracted_text for p in existing_ocr)
-            # Invalidate cache if previous extraction contains corrupted or fallback placeholder text
-            is_corrupt_cache = ("FT DOATION" in combined_text or "9555" in combined_text or "SECURE AUDIT OCR ENGINE" in combined_text)
-            if not is_corrupt_cache:
-                print(f"[OCR] returning cached OCRResult ({len(existing_ocr)} page(s)) for evidence_id={evidence_id}")
-                page_results = [{"page_number": p.page_number, "text": p.extracted_text, "confidence": p.confidence or 0.95, "language": p.language or requested_language}
-                                for p in existing_ocr]
-                extracted_text = combined_text.strip()
-                confidence = round(sum(p["confidence"] for p in page_results) / len(page_results), 4) if page_results else 0.0
-                detected_language = page_results[0]["language"] if page_results else requested_language
-                return {"success": True, "message": "OCR completed successfully.", "data": {
-                    "evidence_id": evidence_id, "text": extracted_text, "extracted_text": extracted_text,
-                    "confidence": confidence, "language": detected_language, "detected_language": detected_language,
-                    "pages": page_results,
-                }}
-
-    source = resolve_ocr_evidence_source(evidence)
-    print(f"[OCR] execution start language={requested_language}")
+    requested = language or "auto"
     try:
-        pages = ocr_service.extract_document(source, language=requested_language)
+        requested_languages = ocr_service.resolve_languages(requested)
     except OCRServiceError as exc:
-        print(f"[OCR] execution failed: {exc}")
-        raise HTTPException(status_code=503, detail=str(exc)) from exc
+        raise HTTPException(status_code=exc.status_code, detail=str(exc)) from exc
 
-    page_results = [{"page_number": number, "text": page["text"], "confidence": page["confidence"], "language": page["language"]}
-                    for number, page in enumerate(pages, start=1)]
-    extracted_text = "\n\n".join(page["text"] for page in page_results).strip()
-    confidence = round(sum(page["confidence"] for page in page_results) / len(page_results), 4) if page_results else 0.0
-    detected_language = page_results[0]["language"] if page_results else requested_language
-    print(f"[OCR] execution end text_length={len(extracted_text)} confidence={confidence}")
+    def elapsed_ms() -> int:
+        return int(round((time.perf_counter() - started) * 1000))
 
-    try:
-        # A re-run represents the latest extraction for the evidence; do not
-        # accumulate duplicate page rows in the existing OCRResult table.
-        db.query(OCRResult).filter(OCRResult.evidence_id == evidence_uuid).delete(synchronize_session=False)
-        for page in page_results:
-            db.add(OCRResult(evidence_id=evidence_uuid, extracted_text=page["text"], language=page["language"],
-                             confidence=page["confidence"], page_number=page["page_number"]))
-        db.commit()
-        print(f"[OCR] stored {len(page_results)} OCRResult page record(s)")
-    except Exception as exc:
-        db.rollback()
-        print(f"[OCR] database save failed: {exc}")
-        raise HTTPException(status_code=500, detail="Failed to save OCR results") from exc
+    cached = False
+    with _ocr_evidence_lock(str(evidence_uuid)):
+        # Checked inside the lock so a concurrent request that just finished
+        # the same evidence is reused instead of extracted and stored twice.
+        rows = [] if force else load_cached_ocr_pages(db, evidence_uuid)
+        if rows and cached_ocr_is_usable(rows, requested_languages, requested):
+            print(f"[OCR] returning cached result ({len(rows)} page(s)) for evidence_id={evidence_id}")
+            result, cached = cached_ocr_result(rows), True
+        else:
+            source = resolve_ocr_evidence_source(evidence)
+            try:
+                result = ocr_service.extract_document(source, language=requested)
+            except OCRServiceError as exc:
+                print(f"[OCR] extraction failed for {evidence_id}: {exc}")
+                raise HTTPException(status_code=exc.status_code, detail=str(exc)) from exc
+            except Exception as exc:
+                logging.exception("[OCR] unexpected extraction failure for %s", evidence_id)
+                raise HTTPException(status_code=500, detail="OCR processing failed unexpectedly") from exc
+            store_ocr_pages(db, evidence_uuid, result)
 
-    write_audit_log(user_id=user_info["id"], action="OCR Extraction", case_id=case_id,
-                    metadata={"evidence_id": evidence_id, "filename": evidence.file_name,
-                              "confidence": confidence, "pages": len(page_results)}, db=db)
-    return {"success": True, "message": "OCR completed successfully.", "data": {
-        "evidence_id": evidence_id, "text": extracted_text, "extracted_text": extracted_text,
-        "confidence": confidence, "language": detected_language, "detected_language": detected_language,
-        "pages": page_results,
-    }}
+    if not cached:
+        print(f"[OCR] {evidence_id}: pages={result['total_pages']} chars={len(result['text'])} "
+              f"confidence={result['confidence']} languages={result['language']} time_ms={elapsed_ms()}")
+        write_audit_log(user_id=user_info["id"], action="OCR Extraction", case_id=case_id,
+                        metadata={"evidence_id": evidence_id, "filename": evidence.file_name,
+                                  "confidence": result["confidence"], "pages": result["total_pages"],
+                                  "languages": result["language"], "forced": bool(force)}, db=db)
+
+    # Translation runs outside the per-evidence lock (it waits on the network)
+    # and can only add information: the OCR result is returned either way.
+    translation = None
+    if translate:
+        translation = translate_ocr_result(db, evidence_uuid, result, target_language)
+        print(f"[OCR] translation {evidence_id} -> {translation.get('target_language')}: {translation['status']}")
+    return ocr_response(evidence_id, result, cached=cached, processing_time_ms=elapsed_ms(), translation=translation)
 
 
 @app.post("/ai/ocr/{evidence_id}")
 def run_ai_ocr_by_id(evidence_id: str, req: Optional[OCRRequest] = None, request: Request = None, db: Session = Depends(get_db)):
-    lang = req.language if req and req.language else "auto"
-    force = req.force if req and req.force is not None else False
-    return run_stored_evidence_ocr(evidence_id, lang, request, db, force=force)
+    req = req or OCRRequest()
+    return run_stored_evidence_ocr(evidence_id, req.language or "auto", request, db, force=bool(req.force),
+                                   translate=bool(req.translate), target_language=req.target_language)
 
 
 @app.post("/ai/ocr")
 def run_ai_ocr_body(req: OCRRequest, request: Request, db: Session = Depends(get_db)):
-    return run_stored_evidence_ocr(req.evidence_id, req.language or "auto", request, db, force=req.force or False)
+    if not req.evidence_id:
+        raise HTTPException(status_code=400, detail="Missing evidence ID")
+    return run_stored_evidence_ocr(req.evidence_id, req.language or "auto", request, db, force=bool(req.force),
+                                   translate=bool(req.translate), target_language=req.target_language)
 
 @app.get("/ocr/search")
 def search_ocr(q: str, request: Request, db: Session = Depends(get_db)):

@@ -116,6 +116,11 @@ class OCRResult(Base):
     confidence = Column(Float, nullable=True)
     page_number = Column(Integer, nullable=False, server_default="1", default=1)
     created_at = Column(DateTime(timezone=True), nullable=False, server_default=func.now())
+    # [{"code": "hi", "name": "Hindi", "ratio": 0.8, "char_count": 412}, ...]
+    detected_languages = Column(JSONB, nullable=True)
+    # Page-level extraction details: status, warnings, tables, line boxes,
+    # preprocessing steps, requested languages and processing time.
+    ocr_metadata = Column(JSONB, nullable=True)
 
 
 class BNSPrediction(Base):
