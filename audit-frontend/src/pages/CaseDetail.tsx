@@ -53,7 +53,7 @@ export default function CaseDetail() {
     setVerifyResult((current) => ({ ...current, [evidenceId]: 'Verifying integrity on Ethereum…' }))
     try {
       const result = await api.verifyHash(evidenceId)
-      setVerifyResult((current) => ({ ...current, [evidenceId]: result.data.isVerified ? '✓ Integrity verified on-chain' : '⚠ Hash mismatch — tampering detected' }))
+      setVerifyResult((current) => ({ ...current, [evidenceId]: result.data.verified ? '✓ Integrity verified on-chain' : '⚠ Hash mismatch — tampering detected' }))
       await loadBlockchain(evidenceId)
       const evRes = await api.getEvidence(id); setEvidence(evRes.data)
     } catch (e: any) { setVerifyResult((current) => ({ ...current, [evidenceId]: e.response?.data?.detail || 'Verification failed' })) }

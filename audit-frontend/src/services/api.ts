@@ -31,7 +31,8 @@ class ApiService {
       (err) => {
         const status = err.response?.status
         const detail = err.response?.data?.detail || ''
-        if (status === 401 || (status === 403 && typeof detail === 'string' && detail.toLowerCase().includes('deactivated'))) {
+        const isAuth = err.config?.url?.includes('/auth/');
+        if (!isAuth && (status === 401 || (status === 403 && typeof detail === 'string' && detail.toLowerCase().includes('deactivated')))) {
           localStorage.removeItem('sa_token')
           window.location.href = '/login'
         }

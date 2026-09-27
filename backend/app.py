@@ -554,9 +554,10 @@ def check_case_access(case_id: str, user_info: dict, db: Session = None) -> bool
 @app.post("/auth/send-otp")
 def send_otp(req: LoginRequest, db: Session = Depends(get_db)):
     """Step 1 — officer enters email, gets OTP sent to their registered email."""
+    clean_email = req.email.strip()
     # Look up officer in users table
     try:
-        user_res = supabase_admin.table("users").select("*").eq("email", req.email).execute()
+        user_res = supabase_admin.table("users").select("*").eq("email", clean_email).execute()
         if not user_res.data:
             raise HTTPException(status_code=404, detail="No active account found for this email.")
         user = user_res.data[0]
@@ -618,9 +619,11 @@ def send_otp(req: LoginRequest, db: Session = Depends(get_db)):
 @app.post("/auth/verify-otp")
 def verify_otp(req: VerifyOTPRequest, db: Session = Depends(get_db)):
     """Step 2 — officer enters password + OTP, gets JWT back."""
+    clean_email = req.email.strip()
+    clean_otp = req.otp.strip()
     # Look up officer
     try:
-        user_res = supabase_admin.table("users").select("*").eq("email", req.email).execute()
+        user_res = supabase_admin.table("users").select("*").eq("email", clean_email).execute()
         if not user_res.data:
             print("[AUTH DEBUG] FAILED: User lookup")
             raise HTTPException(status_code=404, detail="Account not found.")
@@ -637,7 +640,7 @@ def verify_otp(req: VerifyOTPRequest, db: Session = Depends(get_db)):
     # Verify password via Supabase Auth
     try:
         sign_in_res = supabase.auth.sign_in_with_password({
-            "email": req.email,
+            "email": clean_email,
             "password": req.password
         })
         if not sign_in_res.user:
@@ -656,7 +659,7 @@ def verify_otp(req: VerifyOTPRequest, db: Session = Depends(get_db)):
     # Verify OTP — find latest unused, non-expired token in PostgreSQL
     try:
         otp_record = db.query(OTPToken)\
-            .filter(OTPToken.user_id == uuid.UUID(user["id"]), OTPToken.token == req.otp)\
+            .filter(OTPToken.user_id == uuid.UUID(user["id"]), OTPToken.token == clean_otp)\
             .order_by(OTPToken.created_at.desc())\
             .first()
 
