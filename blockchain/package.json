@@ -4,7 +4,8 @@
   "description": "",
   "main": "index.js",
   "scripts": {
-    "test": "echo \"Error: no test specified\" && exit 1"
+    "test": "echo \"Error: no test specified\" && exit 1",
+    "chain": "ganache --server.host 127.0.0.1 --server.port 8545 --chain.chainId 1337 --wallet.deterministic --database.dbPath ./ganache-data"
   },
   "keywords": [],
   "author": "",

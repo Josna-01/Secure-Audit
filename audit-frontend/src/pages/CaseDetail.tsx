@@ -3,7 +3,7 @@ import { useParams, useNavigate } from 'react-router-dom'
 import { AppShell } from '../components/Layout'
 import { Card, CardTitle, CardHeader, Btn, Badge, Tabs, InfoRow, HashChip, AlertBox, Spinner } from '../components/UI'
 import { OcrTextViewer } from '../components/OcrTextViewer'
-import { api } from '../services/api'
+import { api, describeVerification } from '../services/api'
 import type { Case, Evidence, BNSResult, Storyboard, CustodyRecord } from '../types'
 import { format } from 'date-fns'
 import { useAuth } from '../context/AuthContext'
@@ -54,10 +54,13 @@ export default function CaseDetail() {
     setVerifyResult((current) => ({ ...current, [evidenceId]: 'Verifying integrity on Ethereum…' }))
     try {
       const result = await api.verifyHash(evidenceId)
-      setVerifyResult((current) => ({ ...current, [evidenceId]: result.data.verified ? '✓ Integrity verified on-chain' : '⚠ Hash mismatch — tampering detected' }))
+      setVerifyResult((current) => ({ ...current, [evidenceId]: describeVerification(result.data) }))
       await loadBlockchain(evidenceId)
       const evRes = await api.getEvidence(id); setEvidence(evRes.data)
-    } catch (e: any) { setVerifyResult((current) => ({ ...current, [evidenceId]: e.response?.data?.detail || 'Verification failed' })) }
+    } catch (e: any) {
+      setVerifyResult((current) => ({ ...current, [evidenceId]: describeVerification(null, e) }))
+      const evRes = await api.getEvidence(id); setEvidence(evRes.data)  // may now be Missing / Unregistered
+    }
   }
 
   const generateStoryboard = async () => {
@@ -186,7 +189,7 @@ export default function CaseDetail() {
             </Card>
           )}
           {evidence.map((f) => (
-            <div key={f.id} style={{ border: '1px solid var(--border)', borderLeft: `3px solid ${f.status === 'Tampered' ? 'var(--red)' : 'var(--green)'}`, borderRadius: 'var(--r)', padding: '10px 12px', background: 'var(--bg3)', marginBottom: '8px' }}>
+            <div key={f.id} style={{ border: '1px solid var(--border)', borderLeft: `3px solid ${f.status === 'Tampered' || f.status === 'Missing' ? 'var(--red)' : f.status === 'Unregistered' ? 'var(--amber)' : 'var(--green)'}`, borderRadius: 'var(--r)', padding: '10px 12px', background: 'var(--bg3)', marginBottom: '8px' }}>
               <div style={{ display: 'flex', alignItems: 'center', gap: '10px' }}>
                 <div style={{ flex: 1, minWidth: 0 }}>
                   <div style={{ fontSize: '12px', fontWeight: 500, color: 'var(--text)', whiteSpace: 'nowrap', overflow: 'hidden', textOverflow: 'ellipsis' }}>{f.file_name}</div>
@@ -201,6 +204,12 @@ export default function CaseDetail() {
                 <Btn size="xs" onClick={() => loadBlockchain(f.id)}>Blockchain Details</Btn>
                 <Btn size="xs" onClick={() => navigate('/detection')}>Run YOLO</Btn>
               </div>
+              {f.status === 'Missing' && (
+                <div style={{ marginTop: '6px', fontSize: '10px', color: 'var(--red)', padding: '4px 8px', background: 'var(--red-bg)', borderRadius: '4px' }}>Evidence file is missing from storage — integrity cannot be verified</div>
+              )}
+              {f.status === 'Unregistered' && (
+                <div style={{ marginTop: '6px', fontSize: '10px', color: 'var(--amber)', padding: '4px 8px', background: 'var(--amber-bg)', borderRadius: '4px' }}>Not registered on the blockchain — integrity cannot be verified</div>
+              )}
               {f.status === 'Tampered' && (
                 <div style={{ marginTop: '6px', fontSize: '10px', color: 'var(--red)', padding: '4px 8px', background: 'var(--red-bg)', borderRadius: '4px' }}>Hash mismatch — file may have been modified after upload</div>
               )}
@@ -213,7 +222,7 @@ export default function CaseDetail() {
                   <span>Block Number</span><span>{f.blockchain.blockNumber ?? '—'}</span><span>Contract Address</span><span style={{ fontFamily: 'var(--mono)' }}>{f.blockchain.contractAddress || '—'}</span>
                   <span>Gas Used</span><span>{f.blockchain.gasUsed ?? '—'}</span><span>Latest Verification</span><span>{f.blockchain.latestVerificationAt ? new Date(f.blockchain.latestVerificationAt).toLocaleString() : '—'}</span>
                 </div>}
-                {verifyResult[f.id] && <div style={{ marginTop: 7, color: verifyResult[f.id].startsWith('✓') ? 'var(--green)' : verifyResult[f.id].startsWith('⚠') ? 'var(--red)' : 'var(--text2)' }}>{verifyResult[f.id]}</div>}
+                {verifyResult[f.id] && <div style={{ marginTop: 7, color: verifyResult[f.id].startsWith('✓') && !verifyResult[f.id].includes('⚠') ? 'var(--green)' : verifyResult[f.id].startsWith('⚠') ? 'var(--red)' : 'var(--text2)' }}>{verifyResult[f.id]}</div>}
                 {chainData[f.id]?.custodyHistory?.length > 0 && <div style={{ marginTop: 9 }}><div style={{ color: 'var(--text3)', marginBottom: 5 }}>Chain of Custody Timeline</div>{chainData[f.id].custodyHistory.map((record, index) => <div key={`${record.timestamp}-${index}`} style={{ padding: '4px 0', borderLeft: '2px solid var(--blue)', paddingLeft: 8 }}>{record.action} · {record.officerId} · {new Date(record.timestamp).toLocaleString()}</div>)}</div>}
               </div>
             </div>

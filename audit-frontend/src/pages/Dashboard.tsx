@@ -343,12 +343,6 @@ export default function Dashboard() {
             )}
           </Card>
         </div>
-                  </div>
-                ))}
-            </div>
-          )}
-        </Card>
-        </div>
       </div>
 
       {/* Bottom row: Hash Integrity + User Overview (Admin Only) */}

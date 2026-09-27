@@ -81,6 +81,8 @@ const badgeMap: Record<string, { bg: string; color: string }> = {
   Verified:   { bg: 'var(--green-bg)',  color: 'var(--green)'  },
   Tampered:   { bg: 'var(--red-bg)',    color: 'var(--red)'    },
   Processing: { bg: 'var(--amber-bg)',  color: 'var(--amber)'  },
+  Unregistered: { bg: 'var(--amber-bg)', color: 'var(--amber)' },
+  Missing:    { bg: 'var(--red-bg)',    color: 'var(--red)'    },
   Live:       { bg: 'var(--green-bg)',  color: 'var(--green)'  },
   'Planned v2': { bg: 'var(--bg4)',     color: 'var(--text3)'  }
 }

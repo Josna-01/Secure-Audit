@@ -85,7 +85,7 @@ export interface CreateCasePayload {
 }
 
 // ── EVIDENCE ──────────────────────────────────────────────────────────────
-export type EvidenceStatus = 'Verified' | 'Tampered' | 'Processing'
+export type EvidenceStatus = 'Verified' | 'Tampered' | 'Processing' | 'Unregistered' | 'Missing'
 export type EvidenceType = 'Image' | 'Video' | 'Audio' | 'Document' | 'FIR'
 
 export interface Evidence {

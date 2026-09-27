@@ -106,14 +106,22 @@ class EvidenceBlockchainService:
             except Exception:
                 has_code = False
 
-            if not has_code:
+            # Silently deploying a fresh, empty registry would orphan every
+            # existing registration (all evidence would then fail verification),
+            # so automatic redeployment is opt-in. Use the admin redeploy
+            # endpoint deliberately instead.
+            if not has_code and os.getenv("BLOCKCHAIN_AUTO_REDEPLOY", "false").strip().lower() in ("1", "true", "yes"):
                 redeploy_addr = self._redeploy_if_needed(web3, artifact)
                 if redeploy_addr:
                     address = Web3.to_checksum_address(redeploy_addr)
                     has_code = bool(web3.eth.get_code(address))
 
             if not has_code or not address:
-                raise BlockchainUnavailable(f"No EvidenceRegistry contract deployed at {address or 'configured address'}")
+                raise BlockchainUnavailable(
+                    f"No EvidenceRegistry contract found at {address or 'the configured address'}. The blockchain node "
+                    "was probably restarted without persistence, so existing registrations are gone. Automatic "
+                    "redeployment is disabled (BLOCKCHAIN_AUTO_REDEPLOY=false); redeploy deliberately and re-run "
+                    "backfill_blockchain_registration.py.")
             
             self._web3, self._contract = web3, web3.eth.contract(address=address, abi=artifact["abi"])
             logger.info("Connected to Ethereum chain=%s contract=%s", web3.eth.chain_id, address)
@@ -230,9 +238,55 @@ class EvidenceBlockchainService:
             raise
         stored_hash = chain_evidence[3]
         verification = self._transact(contract.functions.verifyEvidence(evidence_id, sha256_hash))
+        # The result is the contract's own verdict: the isMatch field of the
+        # EvidenceVerified event emitted by this transaction.
+        chain_is_match = self._verified_event_result(verification["transactionHash"])
+        if chain_is_match is None:
+            raise BlockchainTransactionError("Verification transaction emitted no EvidenceVerified event")
+        if chain_is_match != (stored_hash == sha256_hash):
+            raise BlockchainTransactionError("On-chain verification result disagrees with the registered hash")
         custody = self._transact(contract.functions.addCustodyRecord(evidence_id, officer_id, "VERIFIED"))
         verification["custodyTransaction"] = custody
-        return stored_hash == sha256_hash, verification
+        verification["onChainHash"] = stored_hash
+        verification["chainIsMatch"] = chain_is_match
+        return chain_is_match, verification
+
+    def _verified_event_result(self, tx_hash: str) -> bool | None:
+        web3, contract = self._ready()
+        receipt = web3.eth.get_transaction_receipt(tx_hash if tx_hash.startswith("0x") else "0x" + tx_hash)
+        from web3.logs import DISCARD
+        events = contract.events.EvidenceVerified().process_receipt(receipt, errors=DISCARD)
+        return bool(events[0]["args"]["isMatch"]) if events else None
+
+    @property
+    def contract_address(self) -> str:
+        _, contract = self._ready()
+        return contract.address
+
+    def get_registration(self, evidence_id: str) -> dict | None:
+        """On-chain registration record, or None when the ID is not registered."""
+        _, contract = self._ready()
+        try:
+            record = contract.functions.getEvidence(evidence_id).call()
+        except (ContractLogicError, Web3RPCError, Web3Exception, ValueError) as e:
+            if "does not exist" in str(e).lower():
+                return None
+            raise
+        return {"evidenceId": record[0], "caseId": record[1], "fileName": record[2], "sha256Hash": record[3],
+                "uploadedBy": record[4], "timestamp": datetime.fromtimestamp(record[5], timezone.utc)}
+
+    def find_registration_receipt(self, evidence_id: str) -> dict | None:
+        """Receipt details of the transaction that registered ``evidence_id`` (read-only)."""
+        web3, contract = self._ready()
+        logs = contract.events.EvidenceRegistered().get_logs(from_block=0, argument_filters={"evidenceId": evidence_id})
+        if not logs:
+            return None
+        log = logs[0]
+        receipt = web3.eth.get_transaction_receipt(log["transactionHash"])
+        block = web3.eth.get_block(log["blockNumber"])
+        return {"transactionHash": log["transactionHash"].hex(), "blockNumber": log["blockNumber"],
+                "gasUsed": receipt.gasUsed, "contractAddress": contract.address,
+                "timestamp": datetime.fromtimestamp(block["timestamp"], timezone.utc)}
 
     def transfer_custody(self, evidence_id: str, officer_id: str) -> dict:
         _, contract = self._ready()

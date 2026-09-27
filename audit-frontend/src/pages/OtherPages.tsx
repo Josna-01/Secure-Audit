@@ -4,7 +4,7 @@ import { useNavigate, useParams } from 'react-router-dom'
 import { AppShell } from '../components/Layout'
 import { Card, CardTitle, CardHeader, Btn, Badge, HashChip, AlertBox, FutureNotice, UploadZone, InfoRow, Spinner, Tabs } from '../components/UI'
 import { OcrTextViewer } from '../components/OcrTextViewer'
-import { api } from '../services/api'
+import { api, describeVerification } from '../services/api'
 import type { Evidence, Case } from '../types'
 import { format } from 'date-fns'
 import { useAuth } from '../context/AuthContext'
@@ -26,6 +26,7 @@ export function EvidencePage() {
   const [uploadDone, setUploadDone] = useState(false)
   const [evidence, setEvidence] = useState<Evidence[]>([])
   const [err, setErr] = useState('')
+  const [verifyResult, setVerifyResult] = useState<Record<string, string>>({})
   const fileRef = useRef<HTMLInputElement>(null)
 
   const searchCases = async (q: string) => {
@@ -44,6 +45,17 @@ export function EvidencePage() {
   }
 
   useEffect(() => { fetchEvidence() }, [selectedCase])
+
+  const verifyHash = async (evidenceId: string) => {
+    setVerifyResult((current) => ({ ...current, [evidenceId]: 'Verifying integrity on Ethereum…' }))
+    try {
+      const res = await api.verifyHash(evidenceId)
+      setVerifyResult((current) => ({ ...current, [evidenceId]: describeVerification(res.data) }))
+    } catch (error: any) {
+      setVerifyResult((current) => ({ ...current, [evidenceId]: describeVerification(null, error) }))
+    }
+    await fetchEvidence()  // status may have changed (Tampered / Missing / Unregistered)
+  }
 
   const handleUpload = async () => {
     if (!selectedCase) { setErr('Please select a case first.'); return }
@@ -148,7 +160,7 @@ export function EvidencePage() {
           </CardHeader>
           {evidence.length === 0 && <div style={{ textAlign: 'center', padding: '40px', color: 'var(--text3)', fontSize: '12px' }}>No evidence uploaded yet</div>}
           {evidence.map((f) => (
-            <div key={f.id} style={{ border: '1px solid var(--border)', borderLeft: `3px solid ${f.status === 'Tampered' ? 'var(--red)' : 'var(--green)'}`, borderRadius: 'var(--r)', padding: '10px 12px', background: 'var(--bg3)', marginBottom: '8px' }}>
+            <div key={f.id} style={{ border: '1px solid var(--border)', borderLeft: `3px solid ${f.status === 'Tampered' || f.status === 'Missing' ? 'var(--red)' : f.status === 'Unregistered' ? 'var(--amber)' : 'var(--green)'}`, borderRadius: 'var(--r)', padding: '10px 12px', background: 'var(--bg3)', marginBottom: '8px' }}>
               <div style={{ display: 'flex', alignItems: 'center', gap: '10px' }}>
                 <div style={{ flex: 1, minWidth: 0 }}>
                   <div style={{ fontSize: '12px', fontWeight: 500, color: 'var(--text)', whiteSpace: 'nowrap', overflow: 'hidden', textOverflow: 'ellipsis' }}>{f.file_name}</div>
@@ -159,9 +171,12 @@ export function EvidencePage() {
               <div style={{ display: 'flex', alignItems: 'center', gap: '8px', marginTop: '8px' }}>
                 <HashChip hash={f.sha256_hash} />
                 <div style={{ flex: 1 }} />
-                <Btn size="xs" onClick={() => api.verifyHash(f.id).then(() => alert('Hash verified'))}>Verify Hash</Btn>
+                <Btn size="xs" onClick={() => verifyHash(f.id)}>Verify Hash</Btn>
               </div>
               {f.status === 'Tampered' && <div style={{ marginTop: '6px', fontSize: '10px', color: 'var(--red)', padding: '4px 8px', background: 'var(--red-bg)', borderRadius: '4px' }}>Hash mismatch detected</div>}
+              {f.status === 'Missing' && <div style={{ marginTop: '6px', fontSize: '10px', color: 'var(--red)', padding: '4px 8px', background: 'var(--red-bg)', borderRadius: '4px' }}>Evidence file is missing from storage</div>}
+              {f.status === 'Unregistered' && <div style={{ marginTop: '6px', fontSize: '10px', color: 'var(--amber)', padding: '4px 8px', background: 'var(--amber-bg)', borderRadius: '4px' }}>Not registered on the blockchain — integrity cannot be verified</div>}
+              {verifyResult[f.id] && <div style={{ marginTop: '6px', fontSize: '11px', color: verifyResult[f.id].startsWith('✓') && !verifyResult[f.id].includes('⚠') ? 'var(--green)' : verifyResult[f.id].startsWith('Verifying') ? 'var(--text2)' : 'var(--red)' }}>{verifyResult[f.id]}</div>}
             </div>
           ))}
         </Card>
@@ -840,12 +855,13 @@ function GLBViewer({ modelUrl, wireframe, resetKey }: { modelUrl: string, wirefr
     }
 
     const loader = new GLTFLoader()
-    loader.load(modelUrl, (gltf) => {
-      model = gltf.scene
-      model.traverse(child => {
+    loader.load(modelUrl, (gltf: any) => {
+      model = gltf?.scene
+      if (!model) return
+      model.traverse((child: any) => {
         if (child instanceof THREE.Mesh) {
           const materials = Array.isArray(child.material) ? child.material : [child.material]
-          materials.forEach(material => { material.wireframe = wireframe })
+          materials.forEach((material: any) => { material.wireframe = wireframe })
         }
       })
       scene.add(model)

@@ -142,7 +142,10 @@ class ApiService {
   }
 
   async verifyHash(evidenceId: string) {
-    const { data } = await this.client.post<ApiResponse<{ verified: boolean; stored_hash: string; computed_hash: string }>>(`/evidence/${evidenceId}/verify`)
+    const { data } = await this.client.post<ApiResponse<{
+      verified: boolean; stored_hash: string; computed_hash: string; status: string;
+      databaseHash?: string | null; blockchainHash?: string; databaseMatchesBlockchain?: boolean; warnings?: string[]
+    }>>(`/evidence/${evidenceId}/verify`)
     return data
   }
 
@@ -345,3 +348,13 @@ class ApiService {
 }
 
 export const api = new ApiService()
+
+/** Human-readable result of POST /evidence/{id}/verify (success or error). */
+export function describeVerification(result: { verified: boolean; databaseMatchesBlockchain?: boolean } | null, error?: any): string {
+  if (error) return error.response?.data?.detail || error.message || 'Verification failed'
+  if (!result) return 'Verification failed'
+  const message = result.verified ? '✓ Integrity verified on-chain' : '⚠ Hash mismatch — tampering detected'
+  return result.databaseMatchesBlockchain === false
+    ? `${message} · ⚠ Database hash differs from the blockchain record`
+    : message
+}

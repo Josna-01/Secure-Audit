@@ -1465,9 +1465,54 @@ def get_evidence(request: Request, case_id: Optional[str] = None, db: Session = 
         return {"data": []}
 
 # ── 5. Hash verification endpoint ────────────────────────────────────────────
+class EvidenceFileMissing(Exception):
+    """The evidence file no longer exists at its recorded location."""
+
+
+def compute_evidence_file_hash(file_url: str) -> str:
+    """SHA-256 of the stored evidence file.
+
+    Raises ``EvidenceFileMissing`` when the file is gone, and HTTPException
+    (502/500) when storage cannot be read for other reasons — an outage is not
+    evidence of tampering, so callers must not change the evidence status then.
+    """
+    def hash_local(path: str) -> str:
+        if not os.path.isfile(path):
+            raise EvidenceFileMissing(f"Evidence file not found on local disk: {path}")
+        sha256 = hashlib.sha256()
+        try:
+            with open(path, "rb") as f:
+                while chunk := f.read(8192):
+                    sha256.update(chunk)
+        except OSError as e:
+            raise HTTPException(status_code=500, detail=f"Failed to read local evidence file: {e}")
+        return sha256.hexdigest()
+
+    if "/uploads/" in file_url:
+        relative_path = file_url.split("/uploads/")[-1]
+        return hash_local(os.path.join(UPLOADS_DIR, relative_path.replace("/", os.sep)))
+    if file_url.startswith(("http://", "https://")):
+        try:
+            response = requests.get(file_url, timeout=30)
+        except requests.RequestException as e:
+            raise HTTPException(status_code=502, detail=f"Could not reach evidence storage: {e}")
+        # Supabase Storage answers 400 {"error": "not_found"} for missing public objects.
+        if response.status_code == 404 or (response.status_code == 400 and "not_found" in response.text.lower()):
+            raise EvidenceFileMissing("Evidence file not found in Supabase Storage")
+        if response.status_code != 200:
+            raise HTTPException(status_code=502, detail=f"Evidence storage returned HTTP {response.status_code}")
+        return hashlib.sha256(response.content).hexdigest()
+    return hash_local(file_url)
+
+
 @app.post("/evidence/{evidence_id}/verify")
 def verify_evidence_hash(evidence_id: str, request: Request, db: Session = Depends(get_db)):
-    """Recomputes SHA-256 from disk or storage and compares against the stored hash."""
+    """Recomputes SHA-256 from disk or storage and verifies it on the blockchain.
+
+    The verdict is the smart contract's own result (EvidenceVerified.isMatch)
+    for the recomputed file hash. The database hash is reported alongside the
+    on-chain hash and any difference between them is flagged.
+    """
     user_info = get_current_user_info(request)
 
     evidence_obj = db.query(Evidence).filter(Evidence.id == evidence_id).first()
@@ -1480,62 +1525,53 @@ def verify_evidence_hash(evidence_id: str, request: Request, db: Session = Depen
 
     stored_hash = evidence.get("file_hash")
     file_path = evidence.get("file_url")
-
-    if not stored_hash:
-        raise HTTPException(status_code=400, detail="No stored hash for this evidence record")
     if not file_path:
         raise HTTPException(status_code=400, detail="No file URL for this evidence record")
 
-    if "/uploads/" in file_path:
-        # Extract the relative path and map it to disk
-        relative_path = file_path.split("/uploads/")[-1]
-        disk_path = os.path.join(UPLOADS_DIR, relative_path.replace("/", os.sep))
-        if not os.path.exists(disk_path):
-            raise HTTPException(status_code=404, detail=f"Evidence file not found on local disk: {disk_path}")
-        
+    def set_status(status: str, audit_action: str, metadata: dict) -> None:
         try:
-            sha256 = hashlib.sha256()
-            with open(disk_path, "rb") as f:
-                while chunk := f.read(8192):
-                    sha256.update(chunk)
-            current_hash = sha256.hexdigest()
+            evidence_obj.status = status
+            evidence_obj.verified_at = datetime.datetime.now(datetime.timezone.utc)
+            evidence_obj.verified_by = uuid.UUID(user_info["id"]) if user_info["id"] else None
+            db.commit()
         except Exception as e:
-            raise HTTPException(status_code=500, detail=f"Failed to read local evidence file: {str(e)}")
-    else:
-        is_remote = file_path.startswith("http://") or file_path.startswith("https://")
-        if is_remote:
-            # Download file in memory from Supabase Storage
-            try:
-                response = requests.get(file_path, timeout=30)
-                if response.status_code != 200:
-                    raise HTTPException(status_code=404, detail="Evidence file not found in Supabase Storage")
-                file_bytes = response.content
-                current_hash = hashlib.sha256(file_bytes).hexdigest()
-            except Exception as e:
-                raise HTTPException(status_code=500, detail=f"Failed to download evidence from Supabase Storage: {str(e)}")
-        else:
-            # Legacy local file on disk
-            if not os.path.exists(file_path):
-                raise HTTPException(status_code=404, detail="Evidence file not found on disk")
-            
-            sha256 = hashlib.sha256()
-            with open(file_path, "rb") as f:
-                while chunk := f.read(8192):
-                    sha256.update(chunk)
-            current_hash = sha256.hexdigest()
+            db.rollback()
+            print(f"[VERIFY STATUS UPDATE FAILED] {e}")
+        write_audit_log(user_id=user_info["id"], action=audit_action, case_id=case_id, file_hash=stored_hash,
+                        metadata={"evidence_id": evidence_id, **metadata}, db=db)
 
     try:
+        current_hash = compute_evidence_file_hash(file_path)
+    except EvidenceFileMissing as e:
+        set_status("Missing", "Evidence File Missing", {"file_url": file_path, "reason": str(e)})
+        raise HTTPException(status_code=404, detail=f"{e}. Integrity cannot be verified; the evidence is now marked Missing.")
+
+    try:
+        registration = blockchain_service.get_registration(evidence_id)
+        if registration is None:
+            set_status("Unregistered", "Evidence Not Registered On-Chain",
+                       {"computed_hash": current_hash, "database_hash": stored_hash})
+            raise HTTPException(status_code=409, detail="Evidence is not registered on the blockchain, so its integrity "
+                                                        "cannot be verified. It is now marked Unregistered.")
         is_verified, chain_result = blockchain_service.verify_evidence(evidence_id, current_hash, user_info["id"])
         on_chain = blockchain_service.custody_history(evidence_id)
     except (BlockchainUnavailable, BlockchainTransactionError) as e:
         logger.exception("Blockchain verification failed for %s", evidence_id)
         raise HTTPException(status_code=503, detail=str(e))
 
+    blockchain_hash = chain_result["onChainHash"]
+    database_matches_blockchain = stored_hash == blockchain_hash
+    status = "Verified" if is_verified else "Tampered"
+    warnings = []
+    if not database_matches_blockchain:
+        warnings.append("The hash stored in the database differs from the hash registered on the blockchain; "
+                        "the database record may have been altered. The blockchain hash is authoritative.")
+
     # Update status and verification metadata
     try:
         evidence_obj.verified_at = datetime.datetime.now(datetime.timezone.utc)
         evidence_obj.verified_by = uuid.UUID(user_info["id"]) if user_info["id"] else None
-        evidence_obj.status = "Verified" if is_verified else "Tampered"
+        evidence_obj.status = status
         evidence_obj.latest_verification_at = chain_result["timestamp"]
         custody = chain_result["custodyTransaction"]
         db.add(EvidenceCustodyRecord(evidence_id=evidence_obj.id, officer_id=user_info["id"], action="VERIFIED", occurred_at=custody["timestamp"], transaction_hash=custody["transactionHash"], block_number=custody["blockNumber"]))
@@ -1546,8 +1582,10 @@ def verify_evidence_hash(evidence_id: str, request: Request, db: Session = Depen
             block_number=chain_result["blockNumber"],
             payload={
                 "isMatch": is_verified,
-                "status": "Verified" if is_verified else "Tampered",
+                "status": status,
                 "calculatedHash": current_hash,
+                "blockchainHash": blockchain_hash,
+                "databaseHash": stored_hash,
                 "contractAddress": chain_result.get("contractAddress"),
                 "gasUsed": chain_result.get("gasUsed")
             }
@@ -1567,11 +1605,17 @@ def verify_evidence_hash(evidence_id: str, request: Request, db: Session = Depen
         metadata={
             "evidence_id": evidence_id,
             "stored_hash": stored_hash,
+            "blockchain_hash": blockchain_hash,
             "computed_hash": current_hash,
-            "match": is_verified
+            "match": is_verified,
+            "transaction_hash": chain_result["transactionHash"]
         },
         db=db
     )
+    if not database_matches_blockchain:
+        write_audit_log(user_id=user_info["id"], action="Database Hash Mismatch", case_id=case_id, file_hash=stored_hash,
+                        metadata={"evidence_id": evidence_id, "database_hash": stored_hash, "blockchain_hash": blockchain_hash},
+                        db=db)
 
     return {
         "data": {
@@ -1581,10 +1625,16 @@ def verify_evidence_hash(evidence_id: str, request: Request, db: Session = Depen
             "stored_hash": stored_hash,
             "calculatedHash": current_hash,
             "computed_hash": current_hash,
+            "databaseHash": stored_hash,
+            "blockchainHash": blockchain_hash,
+            "fileMatchesBlockchain": is_verified,
+            "databaseMatchesBlockchain": database_matches_blockchain,
+            "verificationSource": "blockchain",
+            "warnings": warnings,
             "transactionHash": chain_result["transactionHash"],
             "blockNumber": chain_result["blockNumber"],
             "custodyHistory": on_chain,
-            "status": "Verified" if is_verified else "Tampered"
+            "status": status
         },
         "success": True
     }
@@ -1776,8 +1826,9 @@ def blockchain_verify(body: BlockchainVerifyRequest, request: Request, db: Sessi
             evidence = None
 
         if evidence:
-            evidence.status = "Verified" if is_match else "Tampered"
-            evidence.latest_verification_at = verification["timestamp"]
+            # The hash here is supplied by the caller, not computed from the
+            # stored file, so it must not change the evidence status; only
+            # POST /evidence/{id}/verify (server-side re-hash) does that.
             custody = verification.get("custodyTransaction", {})
             db.add(EvidenceCustodyRecord(
                 evidence_id=evidence.id,
