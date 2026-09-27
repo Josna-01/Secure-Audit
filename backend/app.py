@@ -934,9 +934,15 @@ def reset_password(req: ResetPasswordRequest, db: Session = Depends(get_db)):
         if exp_at < now_utc:
             raise HTTPException(status_code=401, detail="Verification code has expired.")
 
+        auth_user = supabase_admin.auth.admin.get_user_by_id(user["id"])
+        existing_meta = auth_user.user.user_metadata or {}
+
         supabase_admin.auth.admin.update_user_by_id(
             user["id"],
-            attributes={"password": req.new_password}
+            attributes={
+                "password": req.new_password,
+                "user_metadata": {**existing_meta, "must_change_password": False}
+            }
         )
 
         otp_record.used = True

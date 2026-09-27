@@ -20,7 +20,6 @@ from models import PhotogrammetryModel
 # Import local service classes
 from services.frame_extractor import FrameExtractor
 from services.frame_selector import FrameSelector
-from services.roi_processor import ROIProcessor, NormalizedROI
 from services.colmap_runner import ColmapRunner
 from services.open3d_processor import Open3DProcessor
 
@@ -62,16 +61,32 @@ class TriggerRequest(BaseModel):
     file_url: str
     local_path: str | None = None
 
+def _set_step(job_id: str, step: int):
+    """Write the current pipeline step to the DB for live UI progress tracking."""
+    try:
+        db = SessionLocal()
+        try:
+            job = db.query(PhotogrammetryModel).filter(PhotogrammetryModel.id == uuid.UUID(job_id)).first()
+            if job:
+                job.current_step = step
+                db.commit()
+        finally:
+            db.close()
+    except Exception as exc:
+        logger.warning(f"[JOB {job_id}] Could not write step {step} to DB: {exc}")
+
+
 def run_pipeline_background(job_id: str, case_id: str, file_url: str, local_path: str | None = None):
     """
     Executes the full photogrammetry pipeline asynchronously:
     1. Downloads video from remote storage
     2. Extracts raw frames
     3. Selects the highest quality frames
-    4. Runs COLMAP 3D reconstruction
-    5. Refines mesh and measures dimensions in Open3D
-    6. Uploads outputs to Supabase Storage
-    7. Updates job status in Supabase Database
+    4. Runs COLMAP 3D reconstruction (Feature Matching + Sparse Reconstruction)
+    5. Runs COLMAP Dense Reconstruction
+    6. Runs Open3D Mesh Generation
+    7. Uploads outputs to Supabase Storage
+    8. Completed
     """
     logger.info(f"[JOB {job_id}] Starting background processing pipeline.")
     pipeline_started_at = time.monotonic()
@@ -97,6 +112,7 @@ def run_pipeline_background(job_id: str, case_id: str, file_url: str, local_path
             if not job:
                 raise RuntimeError("Photogrammetry job disappeared before processing could begin.")
             job.status = "Processing"
+            job.current_step = 1
             db.commit()
         finally:
             db.close()
@@ -129,6 +145,7 @@ def run_pipeline_background(job_id: str, case_id: str, file_url: str, local_path
 
         # 2. Extract frames from video
         logger.info(f"[JOB {job_id}] Step 2/5: Extracting frames...")
+        _set_step(job_id, 2)
         extractor = FrameExtractor()
         interval = os.getenv("PHOTOGRAMMETRY_OBJECT_INTERVAL_SECONDS", "").strip()
         start_seconds, end_seconds = 0.0, None
@@ -140,12 +157,12 @@ def run_pipeline_background(job_id: str, case_id: str, file_url: str, local_path
 
         # 3. Select best frames
         logger.info(f"[JOB {job_id}] Step 3/5: Selecting best frame candidates...")
-        roi_paths = ROIProcessor().crop(extracted_paths, roi_dir, NormalizedROI.from_environment())
+        _set_step(job_id, 3)
         selector = FrameSelector()
-        selected_paths = selector.select(roi_paths, max_frames=30)
+        selected_paths = selector.select(extracted_paths, max_frames=60)
         source_order = {
             os.path.normcase(os.path.normpath(path)): index
-            for index, path in enumerate(roi_paths)
+            for index, path in enumerate(extracted_paths)
         }
         selected_paths.sort(key=lambda path: source_order[os.path.normcase(os.path.normpath(path))])
         logger.info(
@@ -164,6 +181,7 @@ def run_pipeline_background(job_id: str, case_id: str, file_url: str, local_path
 
         # 4. Execute COLMAP Reconstruction
         logger.info(f"[JOB {job_id}] Step 4/5: Running COLMAP reconstruction (SfM + MVS)...")
+        _set_step(job_id, 4)
         runner = ColmapRunner()
         colmap_res = runner.reconstruct(selected_dir, colmap_dir, minimum_registration_ratio=0.8)
         dense_ply = colmap_res["dense_ply_path"]
@@ -178,6 +196,7 @@ def run_pipeline_background(job_id: str, case_id: str, file_url: str, local_path
 
         # 5. Open3D Post-Processing
         logger.info(f"[JOB {job_id}] Step 5/5: Running Open3D cleaning and mesh reconstruction...")
+        _set_step(job_id, 6)
         processor = Open3DProcessor()
         o3d_res = processor.process(dense_ply, output_dir)
         logger.info(
@@ -226,6 +245,7 @@ def run_pipeline_background(job_id: str, case_id: str, file_url: str, local_path
             glb_url = glb_url[:-1]
 
         # 7. Update Job Status to Completed in Database
+        _set_step(job_id, 7)
         completed_at = datetime.datetime.now(datetime.timezone.utc)
         db = SessionLocal()
         try:
@@ -233,6 +253,7 @@ def run_pipeline_background(job_id: str, case_id: str, file_url: str, local_path
             if not job:
                 raise RuntimeError("Photogrammetry job disappeared before completion could be saved.")
             job.status = "Completed"
+            job.current_step = 8
             job.model_url = glb_url
             job.point_cloud_url = ply_url
             job.frame_count = len(selected_paths)
@@ -250,7 +271,7 @@ def run_pipeline_background(job_id: str, case_id: str, file_url: str, local_path
         finally:
             db.close()
 
-    except Exception as e:
+    except BaseException as e:
         logger.error(f"[JOB {job_id}] Pipeline failed after {time.monotonic() - pipeline_started_at:.2f}s: {e}")
         logger.exception(f"[JOB {job_id}] Pipeline execution failed.")
         db = SessionLocal()
@@ -258,7 +279,7 @@ def run_pipeline_background(job_id: str, case_id: str, file_url: str, local_path
             job = db.query(PhotogrammetryModel).filter(PhotogrammetryModel.id == uuid.UUID(job_id)).first()
             if job:
                 job.status = "Failed"
-                job.error_message = str(e)[:4000]
+                job.error_message = str(e)[:4000] if str(e) else type(e).__name__
                 job.completed_at = datetime.datetime.now(datetime.timezone.utc)
                 db.commit()
             logger.info(f"[JOB {job_id}] Job database record marked as Failed.")
@@ -343,6 +364,7 @@ def get_reconstruction_status(case_id: str, db: Session = Depends(get_db)):
             "case_id": str(row.case_id),
             "evidence_id": str(row.evidence_id) if row.evidence_id else None,
             "status": row.status,
+            "current_step": row.current_step or 0,
             "model_url": row.model_url,
             "point_cloud_url": row.point_cloud_url,
             "frame_count": row.frame_count,
@@ -370,7 +392,8 @@ def get_reconstruction_status_by_job(job_id: str, db: Session = Depends(get_db))
     return {
         "job_id": str(row.id), "case_id": str(row.case_id),
         "evidence_id": str(row.evidence_id) if row.evidence_id else None,
-        "status": row.status, "model_url": row.model_url,
+        "status": row.status, "current_step": row.current_step or 0,
+        "model_url": row.model_url,
         "point_cloud_url": row.point_cloud_url, "frame_count": row.frame_count,
         "created_at": row.created_at.isoformat().replace("+00:00", "Z") if row.created_at else None,
         "completed_at": row.completed_at.isoformat().replace("+00:00", "Z") if row.completed_at else None,

@@ -80,10 +80,12 @@ export default function AuthPage() {
     setResetLoading(true)
     try {
       const res = await api.resetPassword(email, tokenInput, newPasswordInput)
-      setSuccessMsg(res.message || 'Passphrase reset successfully! You can now sign in with your new passphrase.')
+      setSuccessMsg('Passphrase reset successfully! Click "Get Token" to receive a fresh access token for sign-in.')
       setIsResetMode(false)
       setPassword(newPasswordInput)
       setNewPasswordInput('')
+      setTokenSent(false)
+      setTokenInput('')
     } catch (err: any) {
       setError(err.response?.data?.detail || 'Failed to reset passphrase. Check your email and verification token.')
     } finally {

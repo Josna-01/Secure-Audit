@@ -75,6 +75,10 @@ class ColmapRunner:
                     "1",
                     "--FeatureExtraction.gpu_index",
                     "0",
+                    "--FeatureExtraction.num_threads",
+                    "4",
+                    "--FeatureExtraction.max_image_size",
+                    "2400",
                     "--SiftExtraction.max_num_features",
                     "20000",
                     "--SiftExtraction.peak_threshold",
@@ -98,6 +102,8 @@ class ColmapRunner:
                     "1",
                     "--FeatureMatching.gpu_index",
                     "0",
+                    "--FeatureMatching.num_threads",
+                    "1",
                     "--FeatureMatching.guided_matching",
                     "1",
                     "--SequentialMatching.overlap",
@@ -197,7 +203,9 @@ class ColmapRunner:
                     "--input_type",
                     "geometric",
                     "--StereoFusion.min_num_pixels",
-                    "4",
+                    "3",
+                    "--StereoFusion.check_num_images",
+                    "60",
                     "--StereoFusion.max_reproj_error",
                     "1.5",
                 ],
@@ -289,6 +297,7 @@ class ColmapRunner:
                         key=lambda model: (
                             model["stats"]["registered_image_count"],
                             model["stats"]["sparse_point_count"],
+                            -float(model["stats"].get("mean_reprojection_error") or 999.0),
                         ),
                     )
                     selected_sparse_model_dir = selected_model["path"]
@@ -358,6 +367,7 @@ class ColmapRunner:
             "sparse_path": selected_sparse_model_dir.replace(os.sep, "/"),
             "dense_ply_path": fused_ply_path.replace(os.sep, "/"),
             "sparse_stats": sparse_stats,
+        }
 
     def _discover_sparse_models(self, sparse_dir: str) -> list[dict]:
         sparse_models = []
@@ -405,3 +415,4 @@ class ColmapRunner:
             "sparse_point_count": integer_metric("Points"),
             "observation_count": integer_metric("Observations"),
             "mean_reprojection_error": optional_float_metric("Mean reprojection error"),
+        }

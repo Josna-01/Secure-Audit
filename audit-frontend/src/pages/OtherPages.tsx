@@ -827,6 +827,8 @@ function GLBViewer({ modelUrl, wireframe, resetKey }: { modelUrl: string, wirefr
     const renderer = new THREE.WebGLRenderer({ antialias: true })
     renderer.setPixelRatio(Math.min(window.devicePixelRatio || 1, 1.5))
     renderer.outputColorSpace = THREE.SRGBColorSpace
+    renderer.toneMapping = THREE.ACESFilmicToneMapping
+    renderer.toneMappingExposure = 1.0
     renderer.domElement.style.display = 'block'
     renderer.domElement.style.width = '100%'
     renderer.domElement.style.height = '100%'
@@ -834,10 +836,18 @@ function GLBViewer({ modelUrl, wireframe, resetKey }: { modelUrl: string, wirefr
 
     const controls = new OrbitControls(camera, renderer.domElement)
     controls.enableDamping = true
-    scene.add(new THREE.HemisphereLight(0xffffff, 0x243447, 2))
-    const keyLight = new THREE.DirectionalLight(0xffffff, 2)
-    keyLight.position.set(3, 5, 4)
+    
+    // Balanced studio lighting: ambient + key + fill + top
+    scene.add(new THREE.AmbientLight(0xffffff, 1.2))
+    const keyLight = new THREE.DirectionalLight(0xffffff, 1.8)
+    keyLight.position.set(5, 8, 5)
     scene.add(keyLight)
+    const fillLight = new THREE.DirectionalLight(0xffffff, 1.0)
+    fillLight.position.set(-5, -3, -5)
+    scene.add(fillLight)
+    const topLight = new THREE.DirectionalLight(0xffffff, 0.6)
+    topLight.position.set(0, 10, 0)
+    scene.add(topLight)
 
     let model: THREE.Object3D | undefined
     const frameModel = () => {
@@ -861,7 +871,21 @@ function GLBViewer({ modelUrl, wireframe, resetKey }: { modelUrl: string, wirefr
       model.traverse((child: any) => {
         if (child instanceof THREE.Mesh) {
           const materials = Array.isArray(child.material) ? child.material : [child.material]
-          materials.forEach((material: any) => { material.wireframe = wireframe })
+          materials.forEach((material: any) => {
+            material.wireframe = wireframe
+            // Ensure photogrammetry vertex-colored models render with true dielectric diffuse colors
+            if (child.geometry.getAttribute('color')) {
+              material.vertexColors = true
+              if ('metalness' in material) {
+                material.metalness = 0.0
+              }
+              if ('roughness' in material) {
+                material.roughness = 0.8
+              }
+            }
+            material.side = THREE.DoubleSide
+            material.needsUpdate = true
+          })
         }
       })
       scene.add(model)
@@ -965,7 +989,9 @@ export function Photo3DPage() {
         if (res.status === 'Completed') {
           setPipelineStep(8)
         } else if (res.status === 'Processing' || res.status === 'Pending') {
-          setPipelineStep(1)
+          // Advance UI to whatever step the backend is currently on
+          const step = (res as any).current_step
+          if (step && step > 0) setPipelineStep(step)
           startPolling(jobId)
         } else if (res.status === 'Failed') {
           setPipelineStep(1)
@@ -990,16 +1016,17 @@ export function Photo3DPage() {
         const timeStr = new Date().toLocaleTimeString()
 
         if (res.status === 'Processing' || res.status === 'Pending') {
-          // The service currently exposes job-level state, not per-stage state.
-          // Do not fabricate pipeline progress in the UI.
-          setPipelineStep(1)
-          setLogs(prev => [...prev, `[${timeStr}] Pipeline ${res.status.toLowerCase()}...`])
+          // Advance UI to wherever the backend actually is right now
+          const step = (res as any).current_step
+          if (step && step > 0) setPipelineStep(step)
+          setLogs(prev => [...prev, `[${timeStr}] Pipeline ${res.status.toLowerCase()}... (step ${step ?? 1}/8)`])
         } else if (res.status === 'Completed') {
           setPipelineStep(8)
           setLogs(prev => [...prev, `[${timeStr}] Model Generated Successfully. Saved GLB & PLY.`])
           stopPolling()
         } else if (res.status === 'Failed') {
-          setPipelineStep(1)
+          const step = (res as any).current_step || 1
+          setPipelineStep(step)
           const reason = res.error_message ? ` ${res.error_message}` : ''
           setErrorMsg(`Reconstruction failed.${reason}`)
           setLogs(prev => [...prev, `[${timeStr}] Reconstruction failed.${reason}`])
@@ -1040,10 +1067,28 @@ export function Photo3DPage() {
         } else {
           setSelectedEvidenceId('')
         }
-        // Do not adopt an older case-level run here.  A new trigger below owns
-        // its returned job id and is the only job this page polls.
-        setStatus('Waiting')
-        setJobDetails({})
+        
+        // Auto-load latest photogrammetry job for this case if one exists
+        try {
+          const latestJob = await api.getPhotogrammetryStatusByCase(selectedCaseId)
+          if (latestJob && latestJob.status) {
+            setStatus(latestJob.status as any)
+            setJobDetails(latestJob)
+            if (latestJob.status === 'Completed') {
+              setPipelineStep(8)
+            } else if (latestJob.status === 'Processing' || latestJob.status === 'Pending') {
+              const step = latestJob.current_step || 1
+              setPipelineStep(step)
+              startPolling(latestJob.job_id)
+            }
+          } else {
+            setStatus('Waiting')
+            setJobDetails({})
+          }
+        } catch {
+          setStatus('Waiting')
+          setJobDetails({})
+        }
       } catch (err) {
         console.error('Failed to load evidence:', err)
       }

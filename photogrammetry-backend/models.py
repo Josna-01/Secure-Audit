@@ -14,6 +14,7 @@ class PhotogrammetryModel(Base):
     point_cloud_url = Column(String, nullable=True)
     status = Column(String, server_default="Pending", default="Pending")
     frame_count = Column(Integer, nullable=True)
+    current_step = Column(Integer, server_default="0", default=0)
     created_at = Column(DateTime(timezone=True), nullable=False, server_default=func.now())
     completed_at = Column(DateTime(timezone=True), nullable=True)
     error_message = Column(String, nullable=True)

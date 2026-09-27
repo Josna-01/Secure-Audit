@@ -342,7 +342,24 @@ class ApiService {
       error_message?: string
       job_id: string
       evidence_id?: string
+      current_step?: number
     }>(`/photogrammetry/status/job/${jobId}`)
+    return data
+  }
+
+  async getPhotogrammetryStatusByCase(caseId: string) {
+    const { data } = await this.client.get<{
+      status: string
+      model_url?: string
+      point_cloud_url?: string
+      frame_count?: number
+      created_at?: string
+      completed_at?: string
+      error_message?: string
+      job_id: string
+      evidence_id?: string
+      current_step?: number
+    }>(`/photogrammetry/status/${caseId}`)
     return data
   }
 }
