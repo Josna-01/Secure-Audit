@@ -144,12 +144,29 @@ export interface DetectionResult {
 // ── BNS ───────────────────────────────────────────────────────────────────
 export interface BNSSection {
   section_id: string
+  title?: string
   name: string
   meaning: string
+  description?: string
+  confidence?: number
+  confidence_percent?: string
+  score?: number
+  severity?: 'high' | 'medium' | 'low' | string
+  cognizable?: boolean | string
+  bailable?: boolean | string
+  category?: string
+  legal_elements?: string[]
+  punishment?: string | { min?: string; max?: string; fine?: string }
+  explanation?: string
+  trigger_sentences?: string[]
+  matched_keywords?: string[]
 }
 
 export interface BNSResult {
   crime_type: string
+  crime_categories?: string[]
+  total_sections?: number
+  threshold_applied?: number
   bns?: BNSSection[]
   sections?: BNSSection[]
 }

@@ -1591,4 +1591,256 @@ BNS_SECTION_DETAILS = {
         'victim_context': 'Victim of abetted completed crime',
         'perpetrator_context': 'Abettor of completed crime'
     },
+    
+    # Mischief and Property Damage (Sections 324-326)
+    '324': {
+        'crime': 'Mischief',
+        'title': 'Mischief - Causing damage or destruction to property',
+        'description': 'Whoever with intent to cause or knowing that he is likely to cause wrongful loss or damage to public or person causes destruction of property or changes in property diminishing its value or utility',
+        'severity': 'medium',
+        'punishment': {
+            'min': 'Imprisonment up to 6 months',
+            'max': 'Imprisonment up to 2 years or fine or both',
+            'fine': 'Liable to fine'
+        },
+        'legal_elements': ['Intent or knowledge to cause wrongful loss', 'Destruction of property or diminution in value or utility', 'Mischief committed'],
+        'keywords': ['mischief', 'damage to property', 'destruction of property', 'vandalism', 'breaking property', 'damaged vehicle', 'smashed', 'ruined goods', 'property loss', 'vandalized'],
+        'cognizable': False,
+        'bailable': True,
+        'related_sections': ['324(2)', '324(4)', '324(5)', '303(2)'],
+        'victim_context': 'Owner of damaged property',
+        'perpetrator_context': 'Person who maliciously damages or destroys property'
+    },
+    
+    '324(2)': {
+        'crime': 'Mischief',
+        'title': 'Mischief causing damage to property of value',
+        'description': 'Whoever commits mischief and thereby causes loss or damage to property of value of one hundred rupees or upwards',
+        'severity': 'medium',
+        'punishment': {
+            'min': 'Imprisonment up to 1 year',
+            'max': 'Imprisonment up to 2 years and fine',
+            'fine': 'Mandatory fine'
+        },
+        'legal_elements': ['Mischief committed', 'Property damage', 'Value threshold met'],
+        'keywords': ['mischief damage', 'property damage value', 'vandalism loss', 'broken goods', 'smashed windows', 'damaged vehicle'],
+        'cognizable': True,
+        'bailable': True,
+        'related_sections': ['324', '324(5)'],
+        'victim_context': 'Property owner suffering financial loss',
+        'perpetrator_context': 'Vandal or property destroyer'
+    },
+
+    '324(4)': {
+        'crime': 'Mischief',
+        'title': 'Mischief by fire or explosive substance with intent to cause damage',
+        'description': 'Whoever commits mischief by fire or any explosive substance intending to cause or knowing it to be likely that he will cause damage to property',
+        'severity': 'high',
+        'punishment': {
+            'min': 'Imprisonment up to 7 years',
+            'max': 'Imprisonment up to 10 years and fine',
+            'fine': 'Mandatory fine'
+        },
+        'legal_elements': ['Mischief by fire or explosive', 'Intent to cause damage to property', 'Arson or explosion'],
+        'keywords': ['arson', 'fire damage', 'set on fire', 'burnt property', 'petrol bomb', 'explosive damage', 'burning vehicle'],
+        'cognizable': True,
+        'bailable': False,
+        'related_sections': ['324', '324(5)'],
+        'victim_context': 'Owner of property burned or damaged by fire',
+        'perpetrator_context': 'Arsonist or perpetrator using fire/explosives'
+    },
+
+    '324(5)': {
+        'crime': 'Mischief',
+        'title': 'Mischief causing damage to public property or essential infrastructure',
+        'description': 'Whoever commits mischief causing damage to public property, public road, bridge, water supply, electricity, telecommunications or machinery',
+        'severity': 'high',
+        'punishment': {
+            'min': 'Imprisonment up to 1 year',
+            'max': 'Imprisonment up to 5 years and fine',
+            'fine': 'Mandatory fine'
+        },
+        'legal_elements': ['Mischief committed', 'Public property or infrastructure or machinery damaged'],
+        'keywords': ['public property damage', 'infrastructure sabotage', 'machinery damaged', 'bus burnt', 'road blocked', 'vandalism public assets'],
+        'cognizable': True,
+        'bailable': False,
+        'related_sections': ['324', '189(2)'],
+        'victim_context': 'Public / State or utility',
+        'perpetrator_context': 'Person damaging public utilities or machinery'
+    },
+
+    # Unlawful Assembly & Rioting (Sections 189-191)
+    '189(1)': {
+        'crime': 'Rioting',
+        'title': 'Unlawful assembly',
+        'description': 'An assembly of five or more persons is an unlawful assembly if the common object is to overawe by criminal force, resist law, commit mischief, criminal trespass or other offence',
+        'severity': 'medium',
+        'punishment': {
+            'min': 'Imprisonment up to 6 months',
+            'max': 'Imprisonment up to 6 months or fine or both',
+            'fine': 'Liable to fine'
+        },
+        'legal_elements': ['Assembly of five or more persons', 'Common unlawful object', 'Use or display of criminal force'],
+        'keywords': ['unlawful assembly', 'mob', 'group of 5 or more', 'common object', 'illegal gathering', 'crowd violence'],
+        'cognizable': True,
+        'bailable': True,
+        'related_sections': ['189(2)', '190', '191(1)'],
+        'victim_context': 'General public or victim of mob',
+        'perpetrator_context': 'Member of unlawful assembly'
+    },
+
+    '189(2)': {
+        'crime': 'Rioting',
+        'title': 'Punishment for rioting',
+        'description': 'Whenever force or violence is used by an unlawful assembly or by any member thereof in prosecution of the common object of such assembly, every member is guilty of rioting',
+        'severity': 'high',
+        'punishment': {
+            'min': 'Imprisonment up to 2 years',
+            'max': 'Imprisonment up to 2 years or fine or both',
+            'fine': 'Liable to fine'
+        },
+        'legal_elements': ['Unlawful assembly of 5 or more', 'Force or violence used', 'In prosecution of common object'],
+        'keywords': ['rioting', 'riot', 'mob violence', 'violent mob', 'group assault', 'stone pelting', 'clashes', 'vandalizing mob'],
+        'cognizable': True,
+        'bailable': True,
+        'related_sections': ['189(1)', '190', '191(1)', '191(2)'],
+        'victim_context': 'Victim of riot or mob violence',
+        'perpetrator_context': 'Rioter participating in violent mob'
+    },
+
+    '190': {
+        'crime': 'Rioting',
+        'title': 'Every member of unlawful assembly guilty of offence committed in prosecution of common object',
+        'description': 'If an offence is committed by any member of an unlawful assembly in prosecution of common object, every person who at the time is a member of same assembly is guilty of that offence',
+        'severity': 'high',
+        'punishment': {
+            'min': 'As per offence committed',
+            'max': 'As per offence committed',
+            'fine': 'As applicable'
+        },
+        'legal_elements': ['Member of unlawful assembly', 'Offence committed by any member', 'In prosecution of common object or likely to be committed'],
+        'keywords': ['common object', 'mob liability', 'unlawful assembly member liability', 'joint mob action', 'vicarious liability mob'],
+        'cognizable': 'Depends on offence',
+        'bailable': 'Depends on offence',
+        'related_sections': ['189(2)', '3(5)', '191(1)'],
+        'victim_context': 'Victim of mob offence',
+        'perpetrator_context': 'Member of unlawful assembly during offence'
+    },
+
+    '191(1)': {
+        'crime': 'Rioting',
+        'title': 'Rioting, armed with deadly weapon',
+        'description': 'Whoever is guilty of rioting being armed with a deadly weapon or with anything which used as a weapon of offence is likely to cause death',
+        'severity': 'high',
+        'punishment': {
+            'min': 'Imprisonment up to 3 years',
+            'max': 'Imprisonment up to 3 years and fine',
+            'fine': 'Liable to fine'
+        },
+        'legal_elements': ['Rioting committed', 'Armed with deadly weapon or weapon likely to cause death'],
+        'keywords': ['armed rioting', 'deadly weapons mob', 'swords sticks iron rods mob', 'armed riot', 'violent clash with weapons'],
+        'cognizable': True,
+        'bailable': False,
+        'related_sections': ['189(2)', '191(2)', '118(1)'],
+        'victim_context': 'Victim attacked by armed mob',
+        'perpetrator_context': 'Rioter carrying deadly weapon'
+    },
+
+    # Criminal Trespass & House-breaking (Sections 329, 331)
+    '329(1)': {
+        'crime': 'Theft',
+        'title': 'Criminal trespass',
+        'description': 'Whoever enters into or upon property in possession of another with intent to commit an offence or to intimidate, insult or annoy any person in possession of such property',
+        'severity': 'medium',
+        'punishment': {
+            'min': 'Imprisonment up to 3 months',
+            'max': 'Imprisonment up to 3 months or fine up to 5000 rupees or both',
+            'fine': 'Fine up to 5000 rupees'
+        },
+        'legal_elements': ['Entry into or remaining upon property of another', 'Intent to commit offence or intimidate, insult or annoy'],
+        'keywords': ['criminal trespass', 'illegal entry', 'trespassing', 'entered premises without permission', 'encroached property'],
+        'cognizable': True,
+        'bailable': True,
+        'related_sections': ['329(3)', '331(1)', '303(2)'],
+        'victim_context': 'Lawful possessor or occupier of property',
+        'perpetrator_context': 'Trespasser entering illegally'
+    },
+
+    '329(3)': {
+        'crime': 'Theft',
+        'title': 'House-trespass',
+        'description': 'Whoever commits criminal trespass by entering into or remaining in any building, tent or vessel used as human dwelling or place for worship or custody of property',
+        'severity': 'medium',
+        'punishment': {
+            'min': 'Imprisonment up to 1 year',
+            'max': 'Imprisonment up to 1 year or fine or both',
+            'fine': 'Liable to fine'
+        },
+        'legal_elements': ['Criminal trespass in human dwelling, place of worship or custody of property'],
+        'keywords': ['house trespass', 'entered house illegally', 'residential trespass', 'trespassed inside home', 'unauthorized entry into building'],
+        'cognizable': True,
+        'bailable': True,
+        'related_sections': ['329(1)', '331(1)', '305'],
+        'victim_context': 'Resident or occupant of house/building',
+        'perpetrator_context': 'Intruder into house or dwelling'
+    },
+
+    '331(1)': {
+        'crime': 'Theft',
+        'title': 'House-breaking',
+        'description': 'Whoever commits house-trespass by effecting entrance or departure through passage made by himself, escalade, breaking locks, or opening unfastened passage',
+        'severity': 'high',
+        'punishment': {
+            'min': 'Imprisonment up to 2 years',
+            'max': 'Imprisonment up to 2 years and fine',
+            'fine': 'Liable to fine'
+        },
+        'legal_elements': ['House-trespass', 'Entry or exit by force, lock breaking, window forced, wall scaled or passage opened'],
+        'keywords': ['house breaking', 'broke lock', 'broke door', 'burglary entry', 'shattered window to enter', 'forced entry into house', 'night break-in'],
+        'cognizable': True,
+        'bailable': False,
+        'related_sections': ['329(3)', '305', '303(2)'],
+        'victim_context': 'Homeowner or shopkeeper whose premises were broken into',
+        'perpetrator_context': 'Burglar breaking into property'
+    },
+
+    # Rash & Negligent Driving (Section 281)
+    '281': {
+        'crime': 'Other',
+        'title': 'Rash driving or riding on a public way',
+        'description': 'Whoever drives any vehicle or rides on any public way in a manner so rash or negligent as to endanger human life or to be likely to cause hurt or injury to any other person',
+        'severity': 'medium',
+        'punishment': {
+            'min': 'Imprisonment up to 6 months',
+            'max': 'Imprisonment up to 6 months or fine up to 10000 rupees or both',
+            'fine': 'Fine up to 10000 rupees'
+        },
+        'legal_elements': ['Driving vehicle on public way', 'Rash or negligent manner', 'Endangering human life or personal safety of others'],
+        'keywords': ['rash driving', 'reckless driving', 'speeding vehicle', 'hit and run', 'negligent driving', 'over-speeding', 'drunk driving', 'rammed vehicle', 'road accident'],
+        'cognizable': True,
+        'bailable': True,
+        'related_sections': ['106(1)', '125', '115(2)'],
+        'victim_context': 'Pedestrian or passenger endangered on public road',
+        'perpetrator_context': 'Driver driving rashly or negligently'
+    },
+
+    # Enhanced Cheating / Cyber Fraud (Section 318(4))
+    '318(4)': {
+        'crime': 'Fraud',
+        'title': 'Cheating and dishonestly inducing delivery of property (Cyber & Financial Fraud)',
+        'description': 'Whoever cheats and thereby dishonestly induces person deceived to deliver any property, money, valuable security, or alter valuable security, including by electronic means or digital deception',
+        'severity': 'high',
+        'punishment': {
+            'min': 'Imprisonment up to 7 years',
+            'max': 'Imprisonment up to 7 years and fine',
+            'fine': 'Mandatory fine'
+        },
+        'legal_elements': ['Deception/Cheating', 'Dishonest inducement to deliver property or money', 'Financial or property loss caused'],
+        'keywords': ['cheating', 'fraud', 'cyber fraud', 'online scam', 'phishing', 'fake transfer', 'defrauded money', 'dishonest inducement', 'crypto scam', 'investment fraud'],
+        'cognizable': True,
+        'bailable': False,
+        'related_sections': ['318', '319', '316(1)', '336'],
+        'victim_context': 'Victim cheated out of money or property',
+        'perpetrator_context': 'Fraudster, scammer, cyber criminal'
+    }
 }

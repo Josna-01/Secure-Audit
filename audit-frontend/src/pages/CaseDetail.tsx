@@ -102,6 +102,7 @@ export default function CaseDetail() {
           <div style={{ display: 'flex', gap: '8px', flexWrap: 'wrap' }}>
             <Btn size="xs" onClick={() => navigate('/detection')}>Run Detection</Btn>
             <Btn size="xs" onClick={() => navigate('/bns')}>BNS Classify</Btn>
+            <Btn size="xs" onClick={() => navigate('/audio')}>Audio Forensics</Btn>
             <Btn size="xs" onClick={() => navigate('/evidence')}>Add Evidence</Btn>
           </div>
         </div>
@@ -202,7 +203,11 @@ export default function CaseDetail() {
                 <div style={{ flex: 1 }} />
                 <Btn size="xs" onClick={() => verifyIntegrity(f.id)}>Verify Integrity</Btn>
                 <Btn size="xs" onClick={() => loadBlockchain(f.id)}>Blockchain Details</Btn>
-                <Btn size="xs" onClick={() => navigate('/detection')}>Run YOLO</Btn>
+                {f.file_type === 'Audio' ? (
+                  <Btn size="xs" onClick={() => navigate('/audio')}>Analyze Audio</Btn>
+                ) : (
+                  <Btn size="xs" onClick={() => navigate('/detection')}>Run YOLO</Btn>
+                )}
               </div>
               {f.status === 'Missing' && (
                 <div style={{ marginTop: '6px', fontSize: '10px', color: 'var(--red)', padding: '4px 8px', background: 'var(--red-bg)', borderRadius: '4px' }}>Evidence file is missing from storage — integrity cannot be verified</div>
@@ -385,21 +390,54 @@ export default function CaseDetail() {
           ) : (
             <Card>
               <CardHeader>
-                <CardTitle>BNS Section Predictions</CardTitle>
-                <span style={{ fontSize: '10px', color: 'var(--green)' }}>Classification complete</span>
+                <CardTitle>BNS Section Predictions &amp; Legal Dossier</CardTitle>
+                <span style={{ fontSize: '11px', color: 'var(--green)', fontWeight: 500 }}>
+                  {(bnsResult?.bns || bnsResult?.sections)?.length || 0} Applicable Sections
+                </span>
               </CardHeader>
-              <div style={{ padding: '8px 12px', background: 'var(--purple-bg)', border: '1px solid var(--purple)', borderRadius: 'var(--r)', fontSize: '11px', color: 'var(--purple)', marginBottom: '16px' }}>
-                Bharatiya Nyaya Sanhita (BNS) · Crime Type: <span style={{ fontWeight: 600 }}>{bnsResult.crime_type}</span> · {(bnsResult?.bns || bnsResult?.sections)?.length || 0} sections
-              </div>
-              {(bnsResult?.bns || bnsResult?.sections)?.map((s: any) => (
-                <div key={s.section_id} style={{ marginBottom: '12px' }}>
-                  <div style={{ display: 'flex', alignItems: 'baseline', gap: '10px', marginBottom: '4px' }}>
-                    <span style={{ fontFamily: 'var(--mono)', fontSize: '12px', color: 'var(--purple)', fontWeight: 600, minWidth: '80px' }}>{s.section_id}</span>
-                    <span style={{ fontSize: '12px', color: 'var(--text)', fontWeight: 500, flex: 1, whiteSpace: 'normal', wordBreak: 'break-word' }}>{s.name}</span>
-                  </div>
-                  <div style={{ marginLeft: '90px', fontSize: '11px', color: 'var(--text3)', marginTop: '2px', lineHeight: 1.5, whiteSpace: 'normal', wordBreak: 'break-word' }}>{s.meaning}</div>
+              <div style={{ padding: '10px 14px', background: 'var(--purple-bg)', border: '1px solid var(--purple)', borderRadius: 'var(--r)', fontSize: '12px', color: 'var(--purple)', marginBottom: '16px', display: 'flex', justifyContent: 'space-between', alignItems: 'center' }}>
+                <div>
+                  Bharatiya Nyaya Sanhita (BNS) · Crime Type: <span style={{ fontWeight: 700 }}>{bnsResult.crime_type}</span>
                 </div>
-              ))}
+                <Btn size="xs" onClick={() => navigate('/bns')}>Re-Classify</Btn>
+              </div>
+
+              <div style={{ display: 'flex', flexDirection: 'column', gap: '10px' }}>
+                {(bnsResult?.bns || bnsResult?.sections)?.map((s: any) => {
+                  const confVal = s.confidence !== undefined ? s.confidence : (s.score || 0)
+                  const confPct = s.confidence_percent || (confVal > 0 ? `${Math.round(confVal * 100)}%` : '')
+                  
+                  return (
+                    <div key={s.section_id} style={{ border: '1px solid var(--border)', borderRadius: 'var(--r)', padding: '12px', background: 'var(--bg2)' }}>
+                      <div style={{ display: 'flex', justifyContent: 'space-between', alignItems: 'center', marginBottom: '6px' }}>
+                        <div style={{ display: 'flex', alignItems: 'center', gap: '8px' }}>
+                          <span style={{ fontFamily: 'var(--mono)', fontSize: '12px', fontWeight: 700, color: 'var(--purple)', background: 'var(--purple-bg)', padding: '2px 6px', borderRadius: '3px' }}>
+                            BNS {s.section_id}
+                          </span>
+                          <span style={{ fontSize: '13px', color: 'var(--text)', fontWeight: 600 }}>
+                            {s.title || s.name}
+                          </span>
+                        </div>
+                        {confPct && (
+                          <span style={{ fontFamily: 'var(--mono)', fontSize: '11px', fontWeight: 700, color: confVal >= 0.8 ? 'var(--green)' : 'var(--blue)', background: 'var(--bg3)', padding: '2px 6px', borderRadius: '3px' }}>
+                            {confPct}
+                          </span>
+                        )}
+                      </div>
+
+                      {s.explanation && (
+                        <div style={{ fontSize: '12px', color: 'var(--text)', background: 'rgba(99, 102, 241, 0.08)', padding: '6px 10px', borderRadius: 'var(--r)', marginBottom: '6px', borderLeft: '3px solid var(--purple)' }}>
+                          {s.explanation}
+                        </div>
+                      )}
+
+                      <div style={{ fontSize: '11px', color: 'var(--text3)', lineHeight: 1.5 }}>
+                        {s.description || s.meaning}
+                      </div>
+                    </div>
+                  )
+                })}
+              </div>
             </Card>
           )}
         </div>

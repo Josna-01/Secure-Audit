@@ -2812,6 +2812,8 @@ def update_note(note_id: str, note_data: dict):
 # ====== BNS PROXY ENDPOINTS ======
 class BNSRequest(BaseModel):
     fir_text: str
+    threshold: Optional[float] = 0.35
+    top_k: Optional[int] = 15
 
 class BNSStore(BaseModel):
     case_id: str
@@ -2822,29 +2824,53 @@ class BNSStore(BaseModel):
 @app.post("/bns/predict")
 def bns_predict(payload: BNSRequest):
     try:
-        # Proxy request to teammate's server on port 8001
-        res = requests.post("http://localhost:8001/predict", json={"facts": payload.fir_text}, timeout=30)
+        # Proxy request to BNS server on port 8001
+        res = requests.post(
+            "http://localhost:8001/predict",
+            json={
+                "facts": payload.fir_text,
+                "threshold": payload.threshold if payload.threshold is not None else 0.35,
+                "top_k": payload.top_k if payload.top_k is not None else 15
+            },
+            timeout=30
+        )
         res.raise_for_status()
         raw_data = res.json()
         
         bns_list = []
         for sec in raw_data.get("bns", []):
-            sid = sec.get("section_id", "Unknown")
-            raw_meaning = sec.get("meaning", "")
-            
-            # Clean up the string by splitting on |
-            parts = raw_meaning.split(" | ")
-            name = parts[0].strip() if len(parts) > 0 else "Unknown Section"
-            meaning = parts[1].strip() if len(parts) > 1 else raw_meaning
+            sid = str(sec.get("section_id", "Unknown"))
+            title = sec.get("title") or sec.get("name") or f"BNS Section {sid}"
+            raw_meaning = sec.get("description") or sec.get("meaning", "")
             
             bns_list.append({
                 "section_id": sid,
-                "name": name,
-                "meaning": meaning,
-                "score": sec.get("score", 0.0)
+                "title": title,
+                "name": title,
+                "meaning": raw_meaning,
+                "description": raw_meaning,
+                "score": float(sec.get("confidence") or sec.get("score", 0.0)),
+                "confidence": float(sec.get("confidence") or sec.get("score", 0.0)),
+                "confidence_percent": sec.get("confidence_percent", f"{round(float(sec.get('confidence', 0.0)) * 100)}%"),
+                "severity": sec.get("severity", "medium"),
+                "cognizable": sec.get("cognizable", True),
+                "bailable": sec.get("bailable", True),
+                "category": sec.get("category", "General Offence"),
+                "legal_elements": sec.get("legal_elements", []),
+                "punishment": sec.get("punishment", ""),
+                "explanation": sec.get("explanation", ""),
+                "trigger_sentences": sec.get("trigger_sentences", []),
+                "matched_keywords": sec.get("matched_keywords", [])
             })
             
-        return {"bns": bns_list, "crime_type": raw_data.get("crime_type", "Unknown")}
+        return {
+            "bns": bns_list,
+            "sections": bns_list,
+            "crime_type": raw_data.get("crime_type", "Multi-Offence Incident"),
+            "crime_categories": raw_data.get("crime_categories", []),
+            "total_sections": len(bns_list),
+            "threshold_applied": raw_data.get("threshold_applied", payload.threshold or 0.35)
+        }
     except requests.RequestException as e:
         raise HTTPException(status_code=502, detail=f"Failed to communicate with BNS server: {str(e)}")
 

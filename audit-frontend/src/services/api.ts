@@ -217,8 +217,8 @@ class ApiService {
   }
 
   // ── BNS ─────────────────────────────────────────────────────────────────
-  async predictBNS(firText: string) {
-    const { data } = await this.client.post<any>('/bns/predict', { fir_text: firText })
+  async predictBNS(firText: string, threshold: number = 0.35) {
+    const { data } = await this.client.post<any>('/bns/predict', { fir_text: firText, threshold })
     return data
   }
 
@@ -226,7 +226,7 @@ class ApiService {
     const { data } = await this.client.post<any>('/bns/store', { 
       case_id: caseId, 
       crime_type: result.crime_type, 
-      sections: result.bns,
+      sections: result.bns || result.sections,
       fir_text: firText
     })
     return data
@@ -235,6 +235,31 @@ class ApiService {
   async getBNSResults(caseId: string) {
     const { data } = await this.client.get<any>(`/bns/case/${caseId}`)
     return data
+  }
+
+  // ── AUDIO FORENSICS ──────────────────────────────────────────────────────
+  async analyzeAudio(file: File) {
+    const AUDIO_BASE_URL = import.meta.env.VITE_AUDIO_API_BASE_URL || 'http://localhost:8002'
+    const formData = new FormData()
+    formData.append('audio', file)
+    formData.append('file', file)
+    try {
+      const res = await axios.post(`${AUDIO_BASE_URL}/audio/analyze`, formData, {
+        headers: { 'Content-Type': 'multipart/form-data' },
+        timeout: 180000
+      })
+      return res.data
+    } catch (err: any) {
+      if (err.response && err.response.status !== 404) {
+        throw err
+      }
+      // Fallback if backend uses legacy /transcribe route
+      const res = await axios.post(`${AUDIO_BASE_URL}/transcribe`, formData, {
+        headers: { 'Content-Type': 'multipart/form-data' },
+        timeout: 180000
+      })
+      return res.data
+    }
   }
 
   // ── STORYBOARD ──────────────────────────────────────────────────────────
