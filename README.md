@@ -1,1081 +1,632 @@
-# Secure Audits — Digital Evidence & Investigation Support System
+# Secure Audit — Digital Evidence and Investigation Support System
 
-**Secure Audits** is a multi-service digital forensics and case management platform built for law enforcement and forensic investigation teams. It provides secure case tracking, OTP/JWT-based authentication, tamper-evident file integrity verification (SHA-256), blockchain-anchored chain-of-custody, AI-driven crime detection, multilingual OCR, BNS legal classification, audio forensics, and photogrammetric 3D crime scene reconstruction.
+[![React](https://img.shields.io/badge/Frontend-React%2018%20%7C%20Vite-blue?logo=react)](audit-frontend/)
+[![FastAPI](https://img.shields.io/badge/Backend-FastAPI%20%7C%20Python%203.10-009688?logo=fastapi)](backend/)
+[![Blockchain](https://img.shields.io/badge/Blockchain-Ethereum%20%7C%20Solidity%200.8.28-3C3C3D?logo=ethereum)](blockchain/)
+[![PostgreSQL](https://img.shields.io/badge/Database-PostgreSQL%2015-336791?logo=postgresql)](docs/)
+[![AI-Vision](https://img.shields.io/badge/AI-YOLOv8%20%7C%20COLMAP%203D-FF6F00)](crime-detection/)
+[![AI-NLP](https://img.shields.io/badge/NLP-Legal--BERT%20%7C%20HGAT%20%7C%20BNS-8E24AA)](bns-backend/)
+[![License](https://img.shields.io/badge/License-MIT-green.svg)](LICENSE)
 
-> Detailed blockchain setup, smart contract deployment, and custody tracking are documented in [docs/BLOCKCHAIN_INTEGRATION.md](docs/BLOCKCHAIN_INTEGRATION.md).
+An enterprise-grade, multi-service digital forensics and investigation management platform for law enforcement agencies, cyber cells, and forensic examiners. Provides end-to-end evidence chain-of-custody tracking, tamper-evident cryptographic verification, Ethereum-anchored blockchain logging, multilingual document OCR, AI crime object detection, 3D crime scene photogrammetry, audio deepfake & speech forensics, and automated legal classification under the **Bharatiya Nyaya Sanhita (BNS)**.
 
 ---
 
 ## Table of Contents
 
-1. [Problem Statement](#1-problem-statement)
-2. [Objectives](#2-objectives)
-3. [Key Features](#3-key-features)
+1. [Project Title](#1-project-title)
+2. [Overview](#2-overview)
+3. [Features](#3-features)
 4. [System Architecture](#4-system-architecture)
-5. [Technology Stack](#5-technology-stack)
-6. [Project Structure](#6-project-structure)
-7. [Database Design](#7-database-design)
-8. [Workflows](#8-workflows)
+5. [Project Structure](#5-project-structure)
+6. [Technology Stack](#6-technology-stack)
+7. [System Workflow](#7-system-workflow)
+8. [Module Descriptions](#8-module-descriptions)
 9. [API Overview](#9-api-overview)
-10. [Installation Guide](#10-installation-guide)
-11. [Environment Variables](#11-environment-variables)
-12. [Running the System](#12-running-the-system)
-13. [Future Work](#13-future-work)
-14. [Team Members](#14-team-members)
+10. [Database Design](#10-database-design)
+11. [Blockchain Integration](#11-blockchain-integration)
+12. [AI Components](#12-ai-components)
+13. [Security Features](#13-security-features)
+14. [Installation](#14-installation)
+15. [Running the Project](#15-running-the-project)
+16. [Environment Variables](#16-environment-variables)
+17. [Screenshots](#17-screenshots)
+18. [Future Scope](#18-future-scope)
+19. [Contributors](#19-contributors)
+20. [License](#20-license)
 
 ---
 
-## 1. Problem Statement
+## 1. Project Title
 
-Traditional law enforcement and forensic investigations rely on fragmented, offline workflows that make it difficult to maintain a reliable chain of custody for digital evidence. Insecure logging allows potential data tampering to go undetected, and investigators lack centralized, AI-assisted tools for rapid object detection, OCR analysis, and semantic legal search. Secure Audits addresses these challenges by providing a unified, audit-logged environment that safeguards evidence integrity, automates media analysis, supports semantic legal retrieval under the Bharatiya Nyaya Sanhita (BNS) framework, and anchors evidence records permanently to a blockchain.
-
----
-
-## 2. Objectives
-
-- **Secure Case Management:** Centralized case indexing with automatic sequential case number generation (`SA-YYYY-XXXX`).
-- **Digital Evidence Storage:** Secure storage of forensic evidence files with SHA-256 integrity tracking and local file storage (`uploads/`).
-- **Blockchain Chain-of-Custody:** Immutable on-chain registration and custody audit trail for every evidence item via the `EvidenceRegistry` smart contract.
-- **AI-Assisted Analysis:** YOLOv8-based object/crime detection to scan evidence images for weapons, firearms, and contraband.
-- **Multilingual OCR:** Automated text extraction from images and documents using PaddleOCR (PP-OCRv5) with Tesseract fallback for Kannada and Malayalam.
-- **BNS Legal Classification:** Multi-label Bharatiya Nyaya Sanhita section prediction using a Hierarchical Graph Attention Network (HGAT) and Legal-BERT embeddings.
-- **Audio Forensics:** Speech-to-text transcription, speaker diarization, and entity extraction from audio evidence using WhisperX.
-- **3D Scene Reconstruction:** Photogrammetric 3D point cloud and mesh generation from crime scene video using COLMAP and Open3D.
-- **Audit Trail Maintenance:** Append-only database logs capturing all system operations — logins, uploads, analysis, and blockchain events.
-- **POLE Graph Visualization:** Interactive Person-Object-Location-Event (POLE) graphs mapping case entities and relationships.
+**Secure Audit** — *Digital Evidence and Investigation Support System*
 
 ---
 
-## 3. Key Features
+## 2. Overview
+
+### Purpose
+Modern criminal investigations generate vast quantities of digital evidence (CCTV footage, intercepted audio, weapon imagery, scanned FIR documents, and mobile forensics). Traditional evidence handling relies on fragmented storage and manual logs, leaving evidence vulnerable to physical tampering, digital alterations, and procedural chain-of-custody challenges in court.
+
+### Problem Statement
+1. **Chain of Custody Vulnerability:** Lack of tamper-evident, decentralized verification makes proving evidence integrity difficult under legal scrutiny.
+2. **Analysis Bottlenecks:** Manual examination of hours of surveillance video, multilingual FIRs, and forensic audio logs slows down charge-sheet filing.
+3. **Legal Classification Complexity:** Mapping intricate incident narratives to newly enacted criminal codes (**Bharatiya Nyaya Sanhita, 2023**) requires specialized legal cross-referencing.
+4. **Spatial Evidence Loss:** 2D crime scene photographs fail to preserve critical spatial geometry, distances, and 3D weapon trajectories.
+
+### Objectives
+- **Cryptographic Evidence Anchoring:** Compute SHA-256 digests on ingest and anchor them to an Ethereum smart contract ledger for mathematically verifiable integrity.
+- **Automated AI Triage:** Detect weapons and illicit objects (YOLOv8), transcribe and analyze forensic audio (WhisperX & pyannote), and reconstruct 3D spatial scenes (COLMAP & Open3D).
+- **Multilingual Legal Extraction:** Extract text from regional FIRs and legal documents with multilingual OCR (PaddleOCR/Tesseract) and classify applicable BNS penal sections with Explainable AI (Legal-BERT + HGAT).
+- **Strict Role-Based Governance:** Enforce granular access control (Admin, Investigator, Forensic Examiner) backed by append-only audit trails.
+
+### Real-World Use Case
+A police department registers a multi-jurisdiction armed robbery. The investigation team uploads CCTV video, recovered weapon images, scanned regional FIRs, and recorded witness interviews. Secure Audit hashes each artifact onto the blockchain, extracts regional text from the FIR, predicts applicable BNS sections (e.g., robbery, armed assembly), runs weapon detection across footage, transcribes audio, builds a navigable 3D point cloud of the crime scene, and exports a tamper-proof court-admissible forensic report.
+
+---
+
+## 3. Features
+
+### Authentication & Authorization
+- **Supabase & JWT Authentication:** Secure login with session tokens and role-based payload validation.
+- **Role-Based Access Control (RBAC):** Strict operational permissions for `Admin`, `Investigator`, and `Forensic Examiner`.
+- **Session Security:** Automatic token validation and revocation handling.
 
 ### Case Management
-- Create cases with full FIR details: offence type, complainant, incident date/time/location, victims, and suspects (stored as JSONB).
-- Automatic case number generation (`SA-YYYY-XXXX`) on the backend.
-- Investigator assignment with role-based access control (`Admin` / `Investigator`).
+- **Centralized Case Registry:** Unique, standardized case numbers (`SA-YYYY-XXXX`).
+- **FIR Incident Details:** Structured metadata capture (offence category, incident timestamp, geographic location, complainant, victims, and suspects).
+- **Investigator Assignment:** Link case responsibility to authorized officers and forensic teams.
+- **POLE Entity Graphs:** Interactive Person-Object-Location-Event entity relationship mapping.
 
 ### Evidence Management
-- Upload photos, documents, videos, and audio files linked to a specific case.
-- SHA-256 hash computed on upload and stored in the database.
-- Local file storage under the `uploads/` directory.
-- Per-evidence blockchain registration (transaction hash, block number, contract address stored in the `evidence` table).
-- Chain-of-custody status tracking (`Collected`, `Verified`, `Transferred`).
-- Duplicate detection by comparing file hashes before storage.
+- **Multi-Format Ingestion:** Support for images (`.jpg`, `.png`, `.webp`), videos (`.mp4`, `.mov`, `.avi`), audio (`.mp3`, `.wav`, `.m4a`), and documents (`.pdf`).
+- **Cryptographic Hashing:** Automated SHA-256 fingerprint generated at the exact millisecond of upload.
+- **Structured Case Partitioning:** Secure local storage partitioned by case UUIDs (`backend/uploads/cases/{case_id}/`).
+- **Duplicate Detection:** Automatic pre-upload hash comparison against historical records to prevent redundant storage.
 
-### Blockchain Chain-of-Custody
-- Ethereum-compatible `EvidenceRegistry.sol` smart contract (Solidity 0.8.28) deployed on a local Ganache chain.
-- On-chain registration of evidence metadata: `evidenceId`, `caseId`, `fileName`, `sha256Hash`, `uploadedBy`, `uploadTimestamp`.
-- On-chain verification: `verifyEvidence()` compares stored hash against a newly computed hash.
-- Ordered chain-of-custody log: `addCustodyRecord()` appends `REGISTERED`, `VERIFIED`, or `TRANSFERRED` events.
-- Blockchain events: `EvidenceRegistered`, `EvidenceVerified`, `CustodyTransferred`.
-- Blockchain interaction managed via `web3.py` in `backend/services/blockchain_service.py`.
+### Blockchain Verification
+- **Smart Contract Registry:** `EvidenceRegistry.sol` (Solidity 0.8.28) deployed on Ethereum/Ganache.
+- **Immutable State Logs:** On-chain storage of `evidenceId`, `caseId`, `sha256Hash`, `uploader`, and `timestamp`.
+- **One-Click Integrity Verification:** Live re-hashing of stored binary files compared against on-chain smart contract state with instant status badge (`Verified` / `Tampered`).
+- **Custody Transfer Auditing:** Smart-contract-enforced custody change logs (`REGISTERED`, `VERIFIED`, `TRANSFERRED`).
 
-### OCR Analysis
-- Extracts text from images (JPEG, PNG) and multi-page PDFs using PaddleOCR (PP-OCRv5 mobile detection model).
-- Tesseract 5 fallback for Kannada (`kn`) and Malayalam (`ml`) lines.
-- Automatic language detection across English, Hindi, Kannada, Telugu, Tamil, and Malayalam.
-- Document orientation correction and deskewing.
-- Per-page results stored in `ocr_results` with confidence scores and `detected_languages` JSONB.
-- Optional translation of extracted text via Google Translate / MyMemory APIs.
+### Optical Character Recognition (OCR)
+- **High-Accuracy Multilingual Engine:** PaddleOCR (PP-OCRv5) for primary document and print parsing.
+- **Regional Script Support:** Tesseract 5 fallback for regional Indic scripts (Kannada, Malayalam, Hindi, Tamil, Telugu).
+- **Preprocessing & Normalization:** Automatic document deskewing, binarization, and orientation correction.
+- **PDF Extraction:** Automatic multi-page PDF rasterization and page-by-page text mapping.
 
-### Crime Object Detection
-- YOLOv8-based object detection service (`crime-detection/`) running on port `8003`.
-- Detects weapons (guns, knives), contraband, and other criminal objects from evidence images.
-- Returns bounding box coordinates, class labels, and confidence scores stored in the `detections` table.
+### Translation
+- **Multilingual Legal Translation:** Translate regional FIR and witness text into English/standard format using integrated translation pipelines.
+- **Preserved Entity Context:** Retains legal terminology and named entities during translation passes.
 
-### BNS Legal Classification
-- Multi-label Bharatiya Nyaya Sanhita (BNS) section classifier (`bns-backend/`) running on port `8001`.
-- Model pipeline: Legal-BERT text embeddings → HGAT (`hgat_model.py`) → multi-label sigmoid classifier.
-- Accepts FIR narrative text and optional metadata: `victim_age`, `victim_gender`, `num_offenders`, `weapon_used`.
-- Returns ranked BNS sections with confidence scores, triggering sentences, natural-language XAI explanations, severity, and cognizability/bail status.
-- FAISS-based semantic retrieval across BNS statutory definitions (`faiss-cpu`).
-- Predictions stored in the `bns_predictions` table.
+### BNS Legal Prediction
+- **Bharatiya Nyaya Sanhita (BNS) Classification:** Multi-label neural classification predicting applicable criminal sections from FIR narratives.
+- **Hybrid AI Architecture:** Legal-BERT sentence embeddings + Hierarchical Graph Attention Network (HGAT).
+- **Explainable AI (XAI):** Sentence-level highlighting of narrative triggers justifying each predicted section.
+- **Semantic Vector Search:** FAISS vector indexing over statutory definitions with penalty duration and cognizability metadata.
+
+### 3D Photogrammetry & Scene Reconstruction
+- **Automated Video-to-3D Pipeline:** Extract keyframes from crime scene video walkthroughs.
+- **Structure-from-Motion (SfM):** COLMAP sparse and dense point cloud estimation.
+- **Point Cloud & Mesh Post-Processing:** Open3D noise filtering, surface Poisson reconstruction, and GLB asset export.
+- **Interactive Three.js Viewer:** Orbit, pan, zoom, and take spatial measurements directly inside the browser dashboard.
 
 ### Audio Forensics
-- Audio analysis service (`audio-backend/`) running on port `8002`.
-- WhisperX-based automatic speech recognition for transcribing voice notes, recorded interrogations, and phone taps.
-- Speaker diarization via `pyannote.audio`.
-- Entity extraction (names, dates, times, locations, keywords) from transcripts using spaCy (`en_core_web_sm`).
-- Supports common audio formats via `pydub` and `soundfile`.
+- **Speech-to-Text Transcription:** WhisperX automatic speech recognition for recorded calls and interrogation tapes.
+- **Speaker Diarization:** pyannote.audio speaker separation and voice turn timestamps.
+- **Deepfake Audio Detection:** Acoustic frequency spectrum analysis and synthetic voice artifact scoring.
+- **Forensic Entity Extraction:** Automatic extraction of named entities (names, times, locations) from transcripts via spaCy.
 
-### Photogrammetry & 3D Reconstruction
-- Photogrammetry service (`photogrammetry-backend/`) running on port `8004`.
-- Accepts crime scene video uploads and extracts keyframes using `frame_extractor.py` and `frame_selector.py`.
-- Runs COLMAP Structure-from-Motion (SfM) pipeline via `colmap_runner.py` to reconstruct sparse point clouds.
-- Converts sparse reconstruction to dense point clouds and exports GLB/PLY meshes using Open3D (`open3d_processor.py`).
-- Job status tracking (`Pending` → `Processing` → `Completed` / `Failed`) persisted in the `photogrammetry_models` table.
-- Output model URLs stored in the database for frontend 3D rendering with Three.js.
+### Crime & Weapon Detection
+- **Computer Vision Inference:** YOLOv8 neural network trained on forensic object datasets.
+- **Threat Detection:** Real-time localization and bounding-box annotation for firearms, knives, and contraband.
+- **Evidence Cross-Referencing:** Detected weapon classes automatically linked to case storyboard and BNS charge recommendations.
 
-### POLE Graph
-- Interactive Person-Object-Location-Event relationship graph built with `@xyflow/react` (React Flow).
-- Maps suspects, victims, locations, evidence items, and events within a case into a visual network graph.
+### Audit Logs & Governance
+- **Append-Only Action Logs:** Every login, upload, verification, AI execution, and status change recorded with user ID, IP address, and timestamp.
+- **Tamper-Evident History:** Unalterable chronological audit logs exportable for departmental compliance.
 
-### Audit Logging
-- Append-only `audit_logs` table captures all system events: logins, logouts, uploads, analysis runs, blockchain actions, and integrity verifications.
-- `user_id` stored as TEXT to decouple from user deletions.
-- Metadata stored as JSONB for extensible event payloads.
+### User Management
+- **Officer & Specialist Directory:** Manage registered investigators, department badges, and assigned roles.
+- **Activity Monitoring:** Track officer active cases and forensic review history.
 
-### User & Role Management
-- `Admin` role: full system access, user creation, and case management.
-- `Investigator` role: case access governed by the `can_create_case` flag.
-- `clearance_level` (1–5) for graduated data access.
-- Forced password change flow for newly provisioned accounts (`ForcedPasswordPage`).
+### Case Notes & Collaboration
+- **Time-Stamped Case Annotations:** Add categorized forensic remarks, investigator notes, and forensic hypotheses directly to case files.
 
 ---
 
 ## 4. System Architecture
 
-```
-+--------------------------------------------------------------+
-|             Frontend -- React + Vite + TypeScript            |
-|                      http://localhost:5173                    |
-+------+----------------------------+---------------------------+
-       | REST (Axios)              | Supabase JS Client (Auth)
-       v                           v
-+-----------------+      +------------------------+
-| FastAPI Backend |      | Supabase Auth (OTP)    |
-| :8000 (py 3.10) |      | JWT issuance           |
-+--------+--------+      +------------------------+
-         | SQLAlchemy / psycopg2
-         v
-+------------------------------+
-|   PostgreSQL Database        |
-|   (schema.sql)               |
-+------------------------------+
-         | web3.py
-         v
-+------------------------------+
-|  Ganache Local Chain :8545   |
-|  EvidenceRegistry.sol        |
-|  (Hardhat + Solidity 0.8.28) |
-+------------------------------+
-
-Microservices (called by FastAPI backend or directly by frontend):
-
-  +--------------------+   +--------------------+
-  | BNS Backend :8001  |   | Audio Backend :8002 |
-  | HGAT + Legal-BERT  |   | WhisperX + pyannote |
-  +--------------------+   +--------------------+
-
-  +--------------------+   +--------------------------+
-  | Crime Detection    |   | Photogrammetry Backend   |
-  | :8003 -- YOLOv8    |   | :8004 -- COLMAP + Open3D |
-  +--------------------+   +--------------------------+
-
-Evidence Files -> Local Storage: uploads/
-```
-
----
-
-## 5. Technology Stack
-
-### Frontend
-
-| Library / Tool           | Version  | Purpose                                      |
-|--------------------------|----------|----------------------------------------------|
-| React                    | 18.x     | UI component framework                       |
-| TypeScript               | 5.x      | Static typing                                |
-| Vite                     | 5.x      | Build tool and dev server                    |
-| React Router DOM         | 6.x      | Client-side routing                          |
-| `@xyflow/react`          | 12.x     | POLE graph visualizations (React Flow)       |
-| Three.js                 | 0.185+   | 3D model viewer for photogrammetry output    |
-| Recharts                 | 2.x      | Dashboard analytics charts                   |
-| `@supabase/supabase-js`  | 2.x      | Supabase Auth client (OTP / JWT)             |
-| Axios                    | 1.x      | HTTP client for backend API calls            |
-| `@excalidraw/excalidraw` | 0.18+    | Freehand sketch canvas                       |
-
-### Backend (Core -- `backend/`)
-
-| Library / Tool    | Version   | Purpose                                     |
-|-------------------|-----------|---------------------------------------------|
-| FastAPI           | latest    | REST API framework                          |
-| Uvicorn           | latest    | ASGI server                                 |
-| SQLAlchemy        | >= 2.0    | ORM for PostgreSQL                          |
-| psycopg2-binary   | >= 2.9    | PostgreSQL driver                           |
-| Alembic           | >= 1.13   | Database migrations                         |
-| PaddleOCR         | >= 3.7    | OCR engine (PP-OCRv5)                       |
-| PaddlePaddle      | 3.1.0     | Deep learning runtime for PaddleOCR         |
-| pypdfium2         | >= 4.0    | PDF rendering for OCR                       |
-| deep-translator   | >= 1.11   | OCR result translation                      |
-| OpenCV            | latest    | Image preprocessing                         |
-| Pillow            | latest    | Image I/O                                   |
-| web3              | >= 7.0    | Blockchain interaction (EvidenceRegistry)   |
-| PyJWT             | >= 2.10   | JWT auth token validation                   |
-| bcrypt            | >= 4.2    | Password hashing                            |
-| supabase          | < 2.5     | Supabase Python client (Auth integration)   |
-| python-dotenv     | >= 1.0    | Environment variable loading                |
-
-### BNS Classification Backend (`bns-backend/`)
-
-| Library / Tool                | Purpose                                    |
-|-------------------------------|--------------------------------------------|
-| FastAPI + Uvicorn             | API framework and ASGI server              |
-| PyTorch                       | Deep learning runtime                      |
-| Transformers (HuggingFace)    | Legal-BERT embeddings                      |
-| torch-geometric               | Hierarchical Graph Attention Network (HGAT)|
-| sentence-transformers         | Semantic embedding (all-MiniLM-L6-v2)     |
-| faiss-cpu                     | Vector index for BNS statutory retrieval  |
-| spaCy (`en_core_web_sm`)      | Named entity recognition                  |
-| scikit-learn                  | Classifier calibration utilities          |
-| prometheus-client             | Metrics endpoint (`/metrics`)             |
-
-### Audio Backend (`audio-backend/`)
-
-| Library / Tool    | Purpose                                       |
-|-------------------|-----------------------------------------------|
-| WhisperX          | Speech-to-text transcription                  |
-| pyannote.audio    | Speaker diarization                           |
-| torchaudio        | Audio processing                              |
-| pydub / soundfile | Audio format conversion and I/O               |
-| SpeechRecognition | Fallback ASR integration                      |
-| FastAPI + Uvicorn | API framework                                 |
-
-### Crime Detection Backend (`crime-detection/`)
-
-| Library / Tool       | Purpose                                       |
-|----------------------|-----------------------------------------------|
-| Ultralytics YOLOv8   | Object/weapon detection                       |
-| OpenCV               | Image preprocessing                           |
-| FastAPI + Uvicorn    | API framework                                 |
-
-### Photogrammetry Backend (`photogrammetry-backend/`)
-
-| Library / Tool        | Purpose                                                   |
-|-----------------------|-----------------------------------------------------------|
-| COLMAP (system binary)| Structure-from-Motion 3D reconstruction                   |
-| Open3D >= 0.19        | Point cloud processing and mesh export (GLB/PLY)          |
-| OpenCV < 4.11         | Frame extraction from video                               |
-| FastAPI + Uvicorn     | API framework                                             |
-| supabase              | Optional cloud upload of output files                     |
-
-### Blockchain (`blockchain/`)
-
-| Tool                   | Purpose                                         |
-|------------------------|-------------------------------------------------|
-| Solidity 0.8.28        | `EvidenceRegistry.sol` smart contract           |
-| Hardhat                | Smart contract compilation and deployment       |
-| Ganache (npx ganache)  | Local Ethereum chain at `localhost:8545`        |
-| web3.py (backend)      | On-chain interactions from FastAPI              |
-
-### Database
-
-| Technology   | Role                                        |
-|--------------|---------------------------------------------|
-| PostgreSQL   | Primary relational database (via Supabase)  |
-| Supabase     | Auth (OTP email login + JWT), hosted PostgreSQL |
-
----
-
-## 6. Project Structure
+Secure Audit is built as a modular, distributed microservices architecture communicating via REST APIs and Web3 JSON-RPC protocols:
 
 ```
-secure-audit/
-+-- audit-frontend/              # React + Vite + TypeScript client
-|   +-- src/
-|   |   +-- pages/               # Route-level page components
-|   |   |   +-- AuthPage.tsx         # OTP login + Supabase Auth
-|   |   |   +-- Dashboard.tsx        # Case and system overview
-|   |   |   +-- Cases.tsx            # Case list
-|   |   |   +-- CaseDetail.tsx       # Evidence, OCR, BNS, detection tabs
-|   |   |   +-- CreateCase.tsx       # Case creation wizard
-|   |   |   +-- AudioForensicsPage.tsx
-|   |   |   +-- BlockchainDashboard.tsx
-|   |   |   +-- UsersPage.tsx
-|   |   |   +-- ProfilePage.tsx
-|   |   |   +-- ForcedPasswordPage.tsx
-|   |   |   +-- OtherPages.tsx       # OCR, POLE graph, photogrammetry, etc.
-|   |   +-- components/          # Reusable UI components
-|   |   +-- context/             # React context providers (Auth, etc.)
-|   |   +-- services/            # Axios API service wrappers
-|   |   +-- types/               # TypeScript type definitions
-|   |   +-- styles/              # Global CSS
-|   +-- package.json
-|   +-- vite.config.ts
-|
-+-- backend/                     # FastAPI core backend -- port 8000
-|   +-- app.py                   # Main FastAPI application (all routes)
-|   +-- models.py                # SQLAlchemy ORM models
-|   +-- db.py                    # Database connection and session
-|   +-- services/
-|   |   +-- blockchain_service.py    # web3.py EvidenceRegistry integration
-|   |   +-- ocr_service.py           # PaddleOCR pipeline orchestration
-|   |   +-- ocr_text.py              # OCR text post-processing
-|   |   +-- tesseract_engine.py      # Tesseract fallback engine
-|   |   +-- translation_service.py  # OCR result translation
-|   +-- requirements.txt
-|   +-- .env.example
-|
-+-- bns-backend/                 # BNS classification service -- port 8001
-|   +-- app/
-|   |   +-- main.py              # FastAPI app: /predict, /retrieve, /health
-|   |   +-- multilabel_classifier.py  # Multi-label BNS pipeline
-|   |   +-- hgat_model.py        # Hierarchical Graph Attention Network
-|   |   +-- model_wrapper.py     # Model loading and inference wrapper
-|   |   +-- bns.py               # Full BNS section definitions
-|   |   +-- postprocess.py       # Score calibration and XAI generation
-|   +-- requirements.txt
-|
-+-- audio-backend/               # Audio forensics service -- port 8002
-|   +-- app.py                   # FastAPI app: transcription, diarization, entities
-|   +-- requirements.txt
-|
-+-- crime-detection/             # Object/crime detection service -- port 8003
-|   +-- objectdetection.py       # YOLOv8 inference + FastAPI routes
-|   +-- main.py                  # Uvicorn entry point (port 8003)
-|   +-- requirements.txt
-|
-+-- photogrammetry-backend/      # 3D reconstruction service -- port 8004
-|   +-- app.py                   # FastAPI app: job submission and status
-|   +-- db.py                    # Database session for job tracking
-|   +-- models.py                # Photogrammetry job model
-|   +-- services/
-|   |   +-- frame_extractor.py   # Video -> keyframes
-|   |   +-- frame_selector.py    # Keyframe quality filtering
-|   |   +-- colmap_runner.py     # COLMAP SfM pipeline runner
-|   |   +-- open3d_processor.py  # Point cloud -> GLB/PLY export
-|   +-- requirements.txt
-|
-+-- blockchain/                  # Smart contracts and Ganache node
-|   +-- contracts/
-|   |   +-- EvidenceRegistry.sol # On-chain evidence & custody registry
-|   +-- scripts/                 # Hardhat deployment scripts
-|   +-- hardhat.config.ts        # Solidity 0.8.28, localhost network
-|   +-- deployments/             # Deployed contract addresses (JSON)
-|   +-- start-ganache.ps1        # Persistent Ganache launcher (port 8545)
-|
-+-- uploads/                     # Local evidence file storage
-+-- schema.sql                   # Full PostgreSQL schema (source of truth)
-+-- start_all.ps1                # One-command launcher for all 7 services
-+-- docs/
-|   +-- BLOCKCHAIN_INTEGRATION.md
-+-- README.md
+                                  +--------------------------------------------------+
+                                  |            React 18 Frontend Dashboard           |
+                                  |         (Vite + TailwindCSS + Lucide Icons)      |
+                                  +------------------------+-------------------------+
+                                                           |
+                                                REST API / JWT Session
+                                                           |
+                                                           v
+                                  +--------------------------------------------------+
+                                  |            Core Backend Gateway (8000)           |
+                                  |           FastAPI + SQLAlchemy + Pydantic        |
+                                  +---+------------+------------+---------------+----+
+                                      |            |            |               |
+             +------------------------+            |            |               +-----------------------+
+             |                                     |            |                                       |
+             v                                     v            v                                       v
++------------------------+             +--------------+  +--------------+                   +------------------------+
+|   PostgreSQL Database  |             |  Blockchain  |  | Supabase Auth|                   | Local Evidence Storage |
+|  (Cases, Evidence,     |             |  (Ethereum / |  | (User Session|                   | (backend/uploads/      |
+|   Detections, Audits)  |             |   Ganache)   |  |   & JWTs)    |                   |  cases/{case_id}/)     |
++------------------------+             +--------------+  +--------------+                   +------------------------+
+             ^
+             |
+             +--------------------------------------------------------------------------------------------------+
+             |                                              |                                                   |
+             v                                              v                                                   v
++------------------------+                    +---------------------------+               +-----------------------------------+
+|  Crime Detection (8003)|                    |    BNS Backend (8001)     |               |   Photogrammetry Backend (8002)   |
+|   YOLOv8 Computer      |                    | Legal-BERT + HGAT Network |               |   COLMAP SfM + Open3D Meshing     |
+|   Vision Service       |                    | + FAISS Statutory Search  |               |   Jobs: input_video -> GLB model  |
++------------------------+                    +---------------------------+               +-----------------------------------+
+             |
+             v
++------------------------+
+|  Audio Backend (8004)  |
+|  WhisperX + pyannote   |
+|  Speech & Deepfake AI  |
++------------------------+
 ```
 
 ---
 
-## 7. Database Design
+## 5. Project Structure
 
-The schema is defined in [`schema.sql`](schema.sql) and managed via SQLAlchemy ORM models in [`backend/models.py`](backend/models.py).
-
-### `users`
-Stores investigator and admin accounts. UUIDs are issued by Supabase Auth.
-
-| Column            | Type        | Notes                              |
-|-------------------|-------------|------------------------------------|
-| `id`              | UUID PK     | Matches Supabase Auth UID          |
-| `email`           | TEXT UNIQUE |                                    |
-| `full_name`       | TEXT        |                                    |
-| `role`            | TEXT        | `Admin` or `Investigator`          |
-| `department`      | TEXT        |                                    |
-| `badge_number`    | TEXT        |                                    |
-| `clearance_level` | INTEGER     | Default `1`                        |
-| `is_active`       | BOOLEAN     | Default `true`                     |
-| `can_create_case` | BOOLEAN     | Default `true`                     |
-| `last_login`      | TIMESTAMPTZ |                                    |
-| `created_at`      | TIMESTAMPTZ |                                    |
-
-### `cases`
-
-| Column               | Type        | Notes                              |
-|----------------------|-------------|------------------------------------|
-| `id`                 | UUID PK     |                                    |
-| `case_number`        | TEXT UNIQUE | Auto-generated `SA-YYYY-XXXX`      |
-| `title`              | TEXT        |                                    |
-| `offence_type`       | TEXT        |                                    |
-| `fir_description`    | TEXT        |                                    |
-| `fir_language`       | TEXT        | Default `en`                       |
-| `complainant_name`   | TEXT        |                                    |
-| `complainant_contact`| TEXT        |                                    |
-| `victims`            | JSONB       | Array of victim objects            |
-| `suspects`           | JSONB       | Array of suspect objects           |
-| `incident_date`      | DATE        |                                    |
-| `incident_time`      | TIME        |                                    |
-| `incident_location`  | TEXT        |                                    |
-| `created_by`         | UUID FK     | -> `users.id`                      |
-| `created_by_name`    | TEXT        | Denormalized for display           |
-| `created_at`         | TIMESTAMPTZ |                                    |
-
-### `evidence`
-
-| Column                       | Type        | Notes                                    |
-|------------------------------|-------------|------------------------------------------|
-| `id`                         | UUID PK     |                                          |
-| `case_id`                    | UUID FK     | -> `cases.id` ON DELETE CASCADE          |
-| `evidence_type`              | TEXT        |                                          |
-| `description`                | TEXT        |                                          |
-| `file_url`                   | TEXT        | Local path or URL                        |
-| `file_hash`                  | TEXT        | SHA-256 digest                           |
-| `file_name`                  | TEXT        |                                          |
-| `file_size`                  | BIGINT      | Bytes                                    |
-| `mime_type`                  | TEXT        |                                          |
-| `uploaded_by`                | UUID FK     | -> `users.id`                            |
-| `uploaded_by_name`           | TEXT        |                                          |
-| `verified_at`                | TIMESTAMPTZ |                                          |
-| `verified_by`                | UUID FK     | -> `users.id`                            |
-| `chain_of_custody_status`    | TEXT        | `Collected`, `Verified`, `Transferred`   |
-| `status`                     | TEXT        | `Verified` or `Tampered`                 |
-| `blockchain_tx_hash`         | TEXT UNIQUE | Transaction hash of on-chain registration|
-| `blockchain_block_number`    | BIGINT      |                                          |
-| `blockchain_contract_address`| TEXT        |                                          |
-| `blockchain_gas_used`        | BIGINT      |                                          |
-| `blockchain_registered_at`   | TIMESTAMPTZ |                                          |
-| `latest_verification_at`     | TIMESTAMPTZ |                                          |
-| `created_at`                 | TIMESTAMPTZ |                                          |
-
-### `evidence_custody_records`
-Mirrors on-chain `CustodyRecord` events in the off-chain database.
-
-| Column             | Type        | Notes                                        |
-|--------------------|-------------|----------------------------------------------|
-| `id`               | UUID PK     |                                              |
-| `evidence_id`      | UUID FK     | -> `evidence.id` CASCADE                     |
-| `officer_id`       | TEXT        |                                              |
-| `action`           | TEXT        | `REGISTERED`, `VERIFIED`, `TRANSFERRED`      |
-| `occurred_at`      | TIMESTAMPTZ |                                              |
-| `transaction_hash` | TEXT UNIQUE |                                              |
-| `block_number`     | BIGINT      |                                              |
-| `created_at`       | TIMESTAMPTZ |                                              |
-
-### `blockchain_logs`
-Stores raw blockchain event payloads.
-
-| Column             | Type        | Notes                     |
-|--------------------|-------------|---------------------------|
-| `id`               | UUID PK     |                           |
-| `evidence_id`      | UUID FK     | -> `evidence.id` CASCADE  |
-| `event_name`       | TEXT        |                           |
-| `transaction_hash` | TEXT        |                           |
-| `block_number`     | BIGINT      |                           |
-| `payload`          | JSONB       | Full event data           |
-| `created_at`       | TIMESTAMPTZ |                           |
-
-### `audit_logs`
-
-| Column       | Type        | Notes                                               |
-|--------------|-------------|-----------------------------------------------------|
-| `id`         | UUID PK     |                                                     |
-| `user_id`    | TEXT        | TEXT (not FK) to survive user deletion              |
-| `action`     | TEXT        |                                                     |
-| `case_id`    | UUID FK     | -> `cases.id` CASCADE                               |
-| `file_hash`  | TEXT        |                                                     |
-| `metadata`   | JSONB       |                                                     |
-| `created_at` | TIMESTAMPTZ |                                                     |
-
-### `otp_tokens`
-
-| Column       | Type        | Notes                   |
-|--------------|-------------|-------------------------|
-| `id`         | UUID PK     |                         |
-| `user_id`    | UUID FK     | -> `users.id` CASCADE   |
-| `token`      | TEXT        |                         |
-| `expires_at` | TIMESTAMPTZ |                         |
-| `used`       | BOOLEAN     | Default `false`         |
-| `created_at` | TIMESTAMPTZ |                         |
-
-### `detections`
-Stores YOLOv8 object/crime detection results.
-
-| Column        | Type        | Notes                                              |
-|---------------|-------------|----------------------------------------------------|
-| `id`          | UUID PK     |                                                    |
-| `case_id`     | UUID FK     | -> `cases.id` CASCADE                              |
-| `evidence_id` | UUID FK     | -> `evidence.id` CASCADE                           |
-| `image_url`   | TEXT        |                                                    |
-| `predictions` | JSONB       | Bounding boxes, class labels, confidence scores    |
-| `created_at`  | TIMESTAMPTZ |                                                    |
-
-### `ocr_results`
-One row per evidence page; re-running OCR replaces existing rows.
-
-| Column               | Type        | Notes                               |
-|----------------------|-------------|-------------------------------------|
-| `id`                 | UUID PK     |                                     |
-| `evidence_id`        | UUID FK     | -> `evidence.id` CASCADE            |
-| `extracted_text`     | TEXT        |                                     |
-| `language`           | TEXT        |                                     |
-| `confidence`         | FLOAT       |                                     |
-| `page_number`        | INTEGER     | Default `1`                         |
-| `detected_languages` | JSONB       | Per-language ratios and char counts |
-| `ocr_metadata`       | JSONB       | Preprocessing steps, warnings, etc. |
-| `created_at`         | TIMESTAMPTZ |                                     |
-
-### `bns_predictions`
-
-| Column       | Type        | Notes                                          |
-|--------------|-------------|------------------------------------------------|
-| `id`         | UUID PK     |                                                |
-| `case_id`    | UUID FK     | -> `cases.id` CASCADE                          |
-| `crime_type` | TEXT        | Top-level predicted crime category             |
-| `sections`   | JSONB       | Array of section predictions with scores/XAI  |
-| `fir_text`   | TEXT        | FIR input used for prediction                  |
-| `created_at` | TIMESTAMPTZ |                                                |
-
-### `photogrammetry_models`
-
-| Column            | Type        | Notes                                               |
-|-------------------|-------------|-----------------------------------------------------|
-| `id`              | UUID PK     |                                                     |
-| `case_id`         | UUID FK     | -> `cases.id` CASCADE                               |
-| `evidence_id`     | UUID FK     | -> `evidence.id` CASCADE                            |
-| `model_url`       | TEXT        | Path to exported GLB mesh                           |
-| `point_cloud_url` | TEXT        | Path to PLY point cloud                             |
-| `status`          | TEXT        | `Pending`, `Processing`, `Completed`, `Failed`      |
-| `frame_count`     | INTEGER     |                                                     |
-| `created_at`      | TIMESTAMPTZ |                                                     |
-| `completed_at`    | TIMESTAMPTZ |                                                     |
-| `error_message`   | TEXT        |                                                     |
+```
+Secure Audit/
+├── audit-frontend/             # React 18 frontend (Vite, TailwindCSS, Three.js)
+│   ├── src/
+│   │   ├── components/         # Reusable UI widgets, navigation, 3D viewers
+│   │   ├── pages/              # Dashboard, Cases, Evidence, BNS, Photogrammetry
+│   │   ├── context/            # Authentication & application state providers
+│   │   └── services/           # Axios HTTP API client integration
+│   ├── package.json            # Node.js dependencies
+│   └── vite.config.js          # Vite build configuration
+│
+├── backend/                    # Core API Gateway (FastAPI, Port 8000)
+│   ├── services/               # Blockchain, OCR, Translation, AI orchestration
+│   ├── uploads/                # Local evidence storage (partitioned by case UUID)
+│   │   └── cases/              # Active case evidence files
+│   ├── app.py                  # Main FastAPI application router and endpoints
+│   ├── models.py               # SQLAlchemy database models
+│   ├── schemas.py              # Pydantic validation schemas
+│   └── database.py             # PostgreSQL connection lifecycle
+│
+├── bns-backend/                # Bharatiya Nyaya Sanhita NLP Service (Port 8001)
+│   ├── app/                    # FastAPI routes, HGAT inference engine, FAISS search
+│   ├── Model_Data/             # HGAT weights, FAISS embeddings, metadata
+│   ├── hgat_model.py           # Hierarchical Graph Attention Network definition
+│   └── main.py                 # Microservice entrypoint
+│
+├── photogrammetry-backend/     # 3D Reconstruction Microservice (Port 8002)
+│   ├── services/               # FrameExtractor, FrameSelector, ColmapRunner, Open3DProcessor
+│   ├── jobs/                   # Isolated 3D job workspaces (frames, COLMAP, GLB)
+│   ├── app.py                  # Job queue and execution lifecycle API
+│   └── models.py               # 3D job database models
+│
+├── crime-detection/            # YOLOv8 Weapon & Crime Vision Service (Port 8003)
+│   ├── model/                  # YOLOv8 weights (crime_best.pt, yolov8n.pt)
+│   └── main.py                 # Real-time frame & image inference endpoint
+│
+├── audio-backend/              # Speech & Audio Forensics Service (Port 8004)
+│   ├── services/               # WhisperX transcriber, pyannote diarizer, deepfake scorer
+│   └── app.py                  # Audio analysis endpoints
+│
+├── blockchain/                 # Ethereum Smart Contracts & Migrations
+│   ├── contracts/              # EvidenceRegistry.sol
+│   ├── migrations/             # Truffle deployment scripts
+│   └── truffle-config.js       # Ganache / EVM network settings
+│
+├── docs/                       # Architectural documentation & technical papers
+└── README.md                   # Project documentation
+```
 
 ---
 
-## 8. Workflows
+## 6. Technology Stack
 
-### Authentication Flow
-```
-User enters email
-      |
-      v
-Supabase Auth sends OTP to email
-      |
-      v
-User submits OTP -> Supabase validates -> Issues JWT
-      |
-      v
-Frontend stores JWT -> Sent as Authorization header on all API requests
-      |
-      v
-FastAPI backend validates JWT -> Looks up user record in PostgreSQL users table
-```
+| Domain | Technologies |
+| :--- | :--- |
+| **Frontend** | React 18, Vite, TailwindCSS, Lucide Icons, Three.js, Axios, React Router 6 |
+| **Core Backend** | Python 3.10, FastAPI, Uvicorn, SQLAlchemy, Pydantic, Web3.py |
+| **Database** | PostgreSQL 15, Supabase Database |
+| **Authentication** | Supabase Auth, JWT Tokens, PBKDF2 Hashing |
+| **Blockchain** | Ethereum, Solidity 0.8.28, Truffle Suite, Ganache CLI / Local Node |
+| **Computer Vision** | YOLOv8 (Ultralytics), OpenCV, Pillow |
+| **3D Reconstruction** | COLMAP (Structure-from-Motion & Multi-View Stereo), Open3D, NumPy |
+| **NLP & Legal AI** | Legal-BERT, PyTorch, PyTorch Geometric (HGAT), FAISS, Hugging Face Transformers |
+| **Speech & Audio** | WhisperX (Faster-Whisper), pyannote.audio, Librosa, SoundFile, spaCy |
+| **OCR & Text** | PaddleOCR (PP-OCRv5), Tesseract 5, PyMuPDF, pdf2image |
 
-### Case Creation
-```
-Investigator fills Case Wizard (FIR details, suspects, victims, location)
-      |
-      v
-POST /cases -> FastAPI backend
-      |
-      v
-Backend generates case_number (SA-YYYY-XXXX) -> Inserts into cases table
-      |
-      v
-Audit log entry written (action: "case_created")
-```
+---
 
-### Evidence Upload & Blockchain Registration
+## 7. System Workflow
+
 ```
-User selects evidence file
-      |
-      v
-Backend computes SHA-256 hash
-      |
-      v
-Checks hash against existing evidence (duplicate detection)
-      |
-      v
-Saves file to uploads/ directory
-      |
-      v
-Inserts evidence record in PostgreSQL (status: "Verified")
-      |
-      v
-blockchain_service.py calls EvidenceRegistry.registerEvidence()
-      |
-      v
-Stores tx_hash, block_number, contract_address in evidence table
-      |
-      v
-Appends custody record (action: "REGISTERED") to evidence_custody_records
-      |
-      v
-Audit log entry written (action: "evidence_uploaded")
+[ Investigator Login ]
+          │
+          ▼
+[ Create Forensic Case ] ──► (Generates SA-YYYY-XXXX & DB Record)
+          │
+          ▼
+[ Upload Evidence File ]
+          │
+          ├──────────────────────────────────────────────────────┐
+          ▼                                                      ▼
+[ Compute SHA-256 Digest ]                               [ Save Binary File ]
+          │                                            (backend/uploads/cases/{id}/)
+          ▼
+[ Register on Blockchain ]
+(EvidenceRegistry.sol on Ganache)
+          │
+          ├──────────────────────────┬──────────────────────────┬──────────────────────────┐
+          ▼                          ▼                          ▼                          ▼
+  [ Document / Image ]        [ Crime Image ]             [ Scene Video ]           [ Audio Tape ]
+          │                          │                          │                          │
+          ▼                          ▼                          ▼                          ▼
+  [ Multilingual OCR ]     [ YOLOv8 Detection ]     [ Frame Selection & SfM ]    [ WhisperX Diarization ]
+          │                          │                          │                          │
+          ▼                          ▼                          ▼                          ▼
+  [ Regional Translate ]   [ Weapon Bounding Boxes]   [ COLMAP + Open3D Meshing ] [ Deepfake Detection ]
+          │                          │                          │                          │
+          ▼                          │                          ▼                          │
+  [ Legal-BERT + HGAT ]              │                 [ Three.js 3D View ]                │
+  [ BNS Code Prediction]             │                          │                          │
+          │                          │                          │                          │
+          └──────────────────────────┴──────────────────────────┴──────────────────────────┘
+                                     │
+                                     ▼
+                        [ Append-Only Audit Log ]
+                                     │
+                                     ▼
+                     [ Live Hash Verification in UI ]
+                     (Local SHA-256 vs. Blockchain Ledger)
 ```
 
-### Evidence Integrity Verification
-```
-User triggers verification on an evidence item
-      |
-      v
-Backend re-fetches file and recomputes SHA-256
-      |
-      +-- (Match) --> blockchain_service.py calls verifyEvidence()
-      |                |
-      |                v
-      |             On-chain EvidenceVerified event emitted
-      |                |
-      |                v
-      |             evidence.status = "Verified" | latest_verification_at updated
-      |
-      +-- (Mismatch) --> evidence.status = "Tampered"
-                         |
-                         v
-                      Audit log: action = "evidence_tampered"
-```
+---
 
-### OCR Analysis
-```
-User submits OCR request on an evidence image/PDF
-      |
-      v
-backend/services/ocr_service.py fetches file from uploads/
-      |
-      v
-PaddleOCR (PP-OCRv5) detects text regions per page
-      |
-      +-- Lines in kn/ml -> re-read by Tesseract 5 (tesseract_engine.py)
-      |
-      v
-Language detection, confidence scoring, deskew/orientation correction
-      |
-      v
-Upsert results into ocr_results (one row per page)
-      |
-      v
-Optional: translation via translation_service.py (Google / MyMemory)
-```
+## 8. Module Descriptions
 
-### BNS Legal Classification
-```
-User submits FIR text from a case
-      |
-      v
-POST /predict -> bns-backend:8001
-      |
-      v
-Legal-BERT encodes FIR text -> HGAT processes legal knowledge graph
-      |
-      v
-Multi-label sigmoid classifier returns section scores
-      |
-      v
-FAISS retrieval ranks BNS sections by semantic similarity
-      |
-      v
-postprocess.py: calibrate scores, extract trigger sentences, generate XAI explanations
-      |
-      v
-Results saved to bns_predictions table (via main backend)
-```
+### Core API Gateway (`backend/`)
+The central orchestrator of Secure Audit. Exposes RESTful endpoints for case lifecycles, user administration, evidence ingestion, SHA-256 computation, Web3 smart contract calls, and dispatches asynchronous tasks to downstream AI microservices.
 
-### Crime Object Detection
-```
-User submits evidence image for detection
-      |
-      v
-POST /detect -> crime-detection:8003
-      |
-      v
-YOLOv8 model runs inference -> returns bounding boxes, labels, confidence scores
-      |
-      v
-Results stored in detections table (via main backend)
-      |
-      v
-Frontend renders annotated bounding boxes over evidence image
-```
+### BNS Legal Prediction Service (`bns-backend/`)
+Consumes FIR narratives, incident facts, and metadata (victim demographics, weapons used). Utilizes a fine-tuned Legal-BERT model coupled with a Hierarchical Graph Attention Network (HGAT) to classify applicable sections of the **Bharatiya Nyaya Sanhita, 2023** and provide sentence-level XAI explanations.
 
-### Audio Forensics
-```
-User uploads audio evidence file
-      |
-      v
-POST /transcribe -> audio-backend:8002
-      |
-      v
-WhisperX: ASR transcription with word-level timestamps
-      |
-      v
-pyannote.audio: speaker diarization (who spoke when)
-      |
-      v
-spaCy: named entity extraction (persons, dates, locations, keywords)
-      |
-      v
-Transcript + entities returned to frontend
-```
+### Photogrammetry & 3D Reconstruction (`photogrammetry-backend/`)
+Processes crime scene walkthrough videos into high-density 3D spatial models. Operates an end-to-end pipeline: video frame extraction $
+ightarrow$ sharpness-based keyframe selection $
+ightarrow$ COLMAP Structure-from-Motion (SfM) $
+ightarrow$ Open3D Poisson surface reconstruction $
+ightarrow$ web-optimized `.glb` export.
 
-### 3D Photogrammetry
-```
-User uploads crime scene video
-      |
-      v
-POST /reconstruct -> photogrammetry-backend:8004
-      |
-      v
-frame_extractor.py extracts frames at configured interval
-      |
-      v
-frame_selector.py filters for sharpness and coverage quality
-      |
-      v
-colmap_runner.py: COLMAP feature extraction -> matching -> SfM -> sparse point cloud
-      |
-      v
-open3d_processor.py: dense reconstruction -> mesh -> export as GLB + PLY
-      |
-      v
-photogrammetry_models table updated (status: "Completed", model_url, point_cloud_url)
-      |
-      v
-Frontend loads GLB via Three.js for interactive 3D viewing
-```
+### Crime Object Detection (`crime-detection/`)
+A high-throughput computer vision service utilizing YOLOv8. Scans uploaded crime scene photos and CCTV stills to locate, classify, and score confidence for lethal weapons (firearms, knives), contraband, and forensic artifacts.
+
+### Audio Forensics Service (`audio-backend/`)
+Dedicated speech processing engine. Performs GPU-accelerated WhisperX transcription, pyannote speaker diarization, named entity recognition (NER), and spectral analysis to calculate synthetic voice (deepfake) probability.
+
+### Blockchain Evidence Registry (`blockchain/`)
+Contains the Solidity smart contract `EvidenceRegistry.sol`. Serves as the immutable root of trust, recording cryptographic hashes, case mappings, and chronological custody transfers across Ganache or any EVM-compatible network.
 
 ---
 
 ## 9. API Overview
 
-All core API routes are served by the FastAPI backend on `http://localhost:8000`.
+The platform exposes structured REST APIs across all running microservices:
 
-### Authentication
-| Method | Endpoint          | Description                               |
-|--------|-------------------|-------------------------------------------|
-| POST   | `/auth/login`     | Verify OTP + JWT, create session          |
-| POST   | `/auth/logout`    | Invalidate session, write audit log       |
-| POST   | `/auth/register`  | Admin-provisioned user registration       |
-
-### Cases
-| Method | Endpoint       | Description                               |
-|--------|----------------|-------------------------------------------|
-| GET    | `/cases`       | List all cases accessible to the user     |
-| POST   | `/cases`       | Create new case (generates case number)   |
-| GET    | `/cases/{id}`  | Retrieve case detail                      |
-| PUT    | `/cases/{id}`  | Update case metadata                      |
-| DELETE | `/cases/{id}`  | Delete case (Admin only)                  |
-
-### Evidence
-| Method | Endpoint                  | Description                                    |
-|--------|---------------------------|------------------------------------------------|
-| GET    | `/cases/{id}/evidence`    | List evidence for a case                       |
-| POST   | `/cases/{id}/evidence`    | Upload and register new evidence               |
-| GET    | `/evidence/{id}`          | Get evidence detail                            |
-| POST   | `/evidence/{id}/verify`   | Recompute hash + blockchain verification       |
-| DELETE | `/evidence/{id}`          | Delete evidence item                           |
-
-### Blockchain
-| Method | Endpoint                                | Description                                   |
-|--------|-----------------------------------------|-----------------------------------------------|
-| GET    | `/evidence/{id}/blockchain`             | Get on-chain registration and custody history |
-| POST   | `/evidence/{id}/blockchain/register`    | Manually trigger on-chain registration        |
-| POST   | `/evidence/{id}/custody`               | Append custody record (VERIFIED/TRANSFERRED)  |
-
-### OCR
-| Method | Endpoint              | Description                              |
-|--------|-----------------------|------------------------------------------|
-| POST   | `/evidence/{id}/ocr`  | Run OCR on image/PDF evidence            |
-| GET    | `/evidence/{id}/ocr`  | Retrieve stored OCR results              |
-
-### Crime Detection
-| Method | Endpoint                    | Description                              |
-|--------|-----------------------------|------------------------------------------|
-| POST   | `/evidence/{id}/detect`     | Run YOLOv8 object detection              |
-| GET    | `/evidence/{id}/detections` | Retrieve stored detection results        |
-
-### BNS Classification (`bns-backend` -- port 8001)
-| Method | Endpoint       | Description                                       |
-|--------|----------------|---------------------------------------------------|
-| POST   | `/predict`     | Multi-label BNS section prediction from FIR text  |
-| POST   | `/retrieve`    | Semantic BNS retrieval (FAISS)                    |
-| GET    | `/health`      | Service health check                              |
-| GET    | `/metrics`     | Prometheus metrics                                |
-
-### Audio Forensics (`audio-backend` -- port 8002)
-| Method | Endpoint        | Description                                        |
-|--------|-----------------|---------------------------------------------------|
-| POST   | `/transcribe`   | Transcribe audio file (WhisperX + diarization)    |
-| GET    | `/health`       | Service health check                               |
-
-### Photogrammetry (`photogrammetry-backend` -- port 8004)
-| Method | Endpoint          | Description                                 |
-|--------|-------------------|---------------------------------------------|
-| POST   | `/reconstruct`    | Submit video for 3D reconstruction job      |
-| GET    | `/jobs/{id}`      | Get job status and output URLs              |
-
-### Users & Roles
-| Method | Endpoint       | Description                               |
-|--------|----------------|-------------------------------------------|
-| GET    | `/users`       | List all users (Admin only)               |
-| POST   | `/users`       | Create new user (Admin only)              |
-| PUT    | `/users/{id}`  | Update user role, clearance, active status|
-| DELETE | `/users/{id}`  | Deactivate user (Admin only)              |
-
-### Audit Logs
-| Method | Endpoint       | Description                        |
-|--------|----------------|------------------------------------|
-| GET    | `/audit-logs`  | Retrieve system audit logs         |
+| Group | Base Route | Description |
+| :--- | :--- | :--- |
+| **Authentication** | `POST /auth/login`, `POST /auth/register` | User authentication, token issuance, password management |
+| **Cases** | `GET/POST /cases/`, `GET /cases/{id}` | Case creation, FIR details, investigator assignment, POLE data |
+| **Evidence** | `POST /evidence/upload`, `GET /evidence/{id}` | File ingestion, SHA-256 calculation, metadata retrieval |
+| **Blockchain** | `POST /blockchain/verify`, `GET /blockchain/custody/{id}` | On-chain hash verification, block info, custody logs |
+| **OCR & Text** | `POST /ocr/extract`, `POST /ocr/translate` | PaddleOCR/Tesseract parsing and multilingual translation |
+| **BNS AI** | `POST http://localhost:8001/predict` | BNS section prediction, XAI rationale, penalty lookup |
+| **Photogrammetry** | `POST http://localhost:8002/reconstruct` | Trigger 3D scene reconstruction job, status polling, GLB output |
+| **Crime Vision** | `POST http://localhost:8003/detect` | YOLOv8 object and weapon bounding box detection |
+| **Audio Forensics**| `POST http://localhost:8004/analyze` | WhisperX transcription, diarization, and deepfake scoring |
+| **Audit Logs** | `GET /audit/logs`, `GET /audit/case/{id}` | Immutable system activity logs and compliance history |
+| **Users** | `GET/POST /users/`, `PATCH /users/{id}/role` | Officer administration, RBAC roles, profile management |
 
 ---
 
-## 10. Installation Guide
+## 10. Database Design
+
+Secure Audit uses a relational PostgreSQL database schema managed through SQLAlchemy ORM:
+
+```mermaid
+erDiagram
+    USERS ||--o{ CASES : "assigned_to"
+    CASES ||--o{ EVIDENCE : "contains"
+    CASES ||--o{ AUDIT_LOGS : "tracks"
+    CASES ||--o{ BNS_PREDICTIONS : "evaluates"
+    EVIDENCE ||--o{ DETECTIONS : "detects"
+    EVIDENCE ||--o{ OCR_RESULTS : "extracts"
+    EVIDENCE ||--o{ PHOTOGRAMMETRY_JOBS : "reconstructs"
+
+    USERS {
+        uuid id PK
+        string email
+        string full_name
+        string role
+        string badge_number
+        timestamp created_at
+    }
+
+    CASES {
+        uuid id PK
+        string case_number
+        string title
+        string status
+        jsonb fir_details
+        uuid assigned_investigator_id FK
+        timestamp created_at
+    }
+
+    EVIDENCE {
+        uuid id PK
+        uuid case_id FK
+        string file_name
+        string file_url
+        string file_hash
+        string mime_type
+        bigint file_size
+        string blockchain_tx_hash
+        timestamp created_at
+    }
+
+    AUDIT_LOGS {
+        uuid id PK
+        uuid case_id FK
+        uuid user_id FK
+        string action
+        jsonb details
+        string ip_address
+        timestamp timestamp
+    }
+
+    BNS_PREDICTIONS {
+        uuid id PK
+        uuid case_id FK
+        jsonb predicted_sections
+        jsonb xai_highlights
+        timestamp created_at
+    }
+
+    DETECTIONS {
+        uuid id PK
+        uuid evidence_id FK
+        string detected_class
+        float confidence
+        jsonb bounding_box
+    }
+
+    PHOTOGRAMMETRY_JOBS {
+        uuid id PK
+        uuid evidence_id FK
+        string status
+        int current_step
+        string model_glb_url
+        int vertex_count
+    }
+```
+
+---
+
+## 11. Blockchain Integration
+
+### Cryptographic Evidence Integrity
+1. **Hashing on Ingestion:** When an evidence file reaches the backend, its binary stream is processed through SHA-256:
+   $$	ext{Evidence Hash} = 	ext{SHA-256}(	ext{Raw Binary Data})$$
+2. **Smart Contract Storage:** The hash is anchored permanently into the Ethereum smart contract via `EvidenceRegistry.sol`:
+   ```solidity
+   function registerEvidence(
+       string memory _evidenceId,
+       string memory _caseId,
+       string memory _fileName,
+       string memory _sha256Hash
+   ) public returns (bool);
+   ```
+3. **Chain of Custody Tracking:** Any transfer of evidence between investigators or forensic labs appends an on-chain event (`CustodyTransferred`).
+4. **Verification Workflow:** During court presentation or audit review, the system reads the stored file, re-computes its SHA-256 hash in real-time, queries the smart contract, and evaluates:
+   $$	ext{Status} = egin{cases} \mathbf{VERIFIED} & 	ext{if } 	ext{SHA-256}(	ext{File}) == 	ext{Hash}_{	ext{Blockchain}} \ \mathbf{TAMPERED} & 	ext{if } 	ext{SHA-256}(	ext{File}) 
+eq 	ext{Hash}_{	ext{Blockchain}} \end{cases}$$
+
+---
+
+## 12. AI Components
+
+| AI Engine | Model / Architecture | Primary Function | Input $
+ightarrow$ Output |
+| :--- | :--- | :--- | :--- |
+| **Crime Detection** | YOLOv8 (`crime_best.pt`) | Detect weapons, firearms, knives | Image/Video $
+ightarrow$ Annotated Bounding Boxes + Confidence |
+| **BNS Classifier** | Legal-BERT + HGAT Network | Multi-label penal section prediction | FIR Narrative $
+ightarrow$ Top BNS Sections + XAI Triggers |
+| **Semantic Search** | FAISS + SentenceTransformers | Fast statutory law retrieval | Legal Query $
+ightarrow$ Relevant Statutory Articles & Penalties |
+| **Multilingual OCR**| PaddleOCR (PP-OCRv5) + Tesseract 5 | Text extraction from regional documents | Scanned FIR Image/PDF $
+ightarrow$ Extracted Unicode Text |
+| **3D Photogrammetry**| COLMAP (SfM) + Open3D | 3D crime scene reconstruction | Walkthrough Video $
+ightarrow$ Dense Point Cloud + 3D Mesh (GLB) |
+| **Audio Forensics** | WhisperX + pyannote.audio | Speech-to-text & deepfake scoring | Audio Recording $
+ightarrow$ Diarized Transcript + Fake Score |
+
+---
+
+## 13. Security Features
+
+- **Decentralized Integrity:** Immutable SHA-256 anchoring guarantees cryptographic proof against server-side data tampering.
+- **Role-Based Access Control (RBAC):** Strict separation of privileges between administrators, forensic analysts, and field investigators.
+- **JWT & Supabase Session Security:** Cryptographically signed tokens with automatic expiry and authenticated route guards.
+- **Isolated Evidence Storage:** Evidence binaries stored in UUID-isolated case directories with restricted static access.
+- **Comprehensive Audit Trail:** Append-only operational logging capturing IP addresses, user IDs, timestamps, and state transitions.
+
+---
+
+## 14. Installation
 
 ### Prerequisites
-
-- **Python 3.10** (required for all backend services)
-- **Node.js 18+** and **npm**
-- **PostgreSQL** (via Supabase hosted instance or local)
-- **COLMAP** (system binary, added to `PATH`) -- required for photogrammetry
-- **Tesseract OCR** (optional, for Kannada/Malayalam OCR fallback)
-- **Git**
-
----
+- **Node.js:** v18.0 or higher
+- **Python:** v3.10
+- **PostgreSQL:** v15 or higher (or Supabase PostgreSQL instance)
+- **Ganache / Truffle:** `npm install -g ganache truffle`
+- **COLMAP:** Installed and available on system `PATH` (for 3D photogrammetry)
 
 ### 1. Clone the Repository
-
 ```bash
-git clone <repository-url>
+git clone https://github.com/Josna-01/Secure-Audit.git
 cd "Secure Audit"
 ```
 
----
-
-### 2. Database Setup
-
-Apply the schema to your PostgreSQL database (Supabase or local):
-
-```bash
-psql -U <your_user> -d <your_database> -f schema.sql
-```
-
----
-
-### 3. Core Backend (`backend/` -- port 8000)
-
-```bash
-cd backend
-python -m venv venv
-.\venv\Scripts\activate        # Windows
-# source venv/bin/activate     # macOS/Linux
-pip install -r requirements.txt
-
-# Copy and configure environment variables
-copy .env.example .env
-# Edit .env with your values (see Environment Variables section)
-
-py -3.10 app.py
-```
-
----
-
-### 4. BNS Classification Backend (`bns-backend/` -- port 8001)
-
-```bash
-cd bns-backend
-python -m venv venv
-.\venv\Scripts\activate
-pip install -r requirements.txt
-
-.\venv\Scripts\python.exe -m uvicorn app.main:app --port 8001 --reload
-```
-
----
-
-### 5. Audio Forensics Backend (`audio-backend/` -- port 8002)
-
-```bash
-cd audio-backend
-python -m venv venv
-.\venv\Scripts\activate
-pip install -r requirements.txt
-
-.\venv\Scripts\python.exe app.py
-```
-
-> **Note:** WhisperX and pyannote.audio models are downloaded automatically on first run. Ensure sufficient disk space (~2-5 GB) and a HuggingFace access token if pyannote model gating requires one.
-
----
-
-### 6. Crime Detection Backend (`crime-detection/` -- port 8003)
-
-```bash
-cd crime-detection
-python -m venv venv
-.\venv\Scripts\activate
-pip install -r requirements.txt
-
-.\venv\Scripts\python.exe main.py
-```
-
----
-
-### 7. Photogrammetry Backend (`photogrammetry-backend/` -- port 8004)
-
-> **Prerequisite:** Install COLMAP as a system binary and ensure it is on your system `PATH`. See [COLMAP installation guide](https://colmap.github.io/install.html).
-
-```bash
-cd photogrammetry-backend
-python -m venv venv
-.\venv\Scripts\activate
-pip install -r requirements.txt
-
-.\venv\Scripts\python.exe app.py
-```
-
----
-
-### 8. Blockchain Node (`blockchain/`)
-
+### 2. Blockchain Setup
 ```bash
 cd blockchain
 npm install
-
-# Start persistent Ganache chain (port 8545, chain ID 1337)
-.\start-ganache.ps1
-
-# In a separate terminal: compile and deploy the EvidenceRegistry contract
-npx hardhat compile
-npx hardhat run scripts/deploy.ts --network localhost
+npx ganache --server.host 127.0.0.1 --server.port 8545 --chain.chainId 1337
+truffle migrate --network development
+cd ..
 ```
 
-> The deployed contract address is saved to `blockchain/deployments/`. The backend reads it automatically.
+### 3. Backend Setup
+```bash
+cd backend
+python -m venv venv
+# Windows:
+.\venv\Scripts\activate
+# Linux/macOS:
+# source venv/bin/activate
+pip install -r requirements.txt
+cd ..
+```
 
----
+### 4. AI Services Setup
+```bash
+# BNS Backend:
+cd bns-backend && pip install -r requirements.txt && cd ..
 
-### 9. Frontend (`audit-frontend/` -- port 5173)
+# Crime Detection:
+cd crime-detection && pip install -r requirements.txt && cd ..
 
+# Photogrammetry Backend:
+cd photogrammetry-backend && pip install -r requirements.txt && cd ..
+
+# Audio Backend:
+cd audio-backend && pip install -r requirements.txt && cd ..
+```
+
+### 5. Frontend Setup
 ```bash
 cd audit-frontend
 npm install
-
-# Copy and configure environment variables
-copy .env.example .env
-# Edit .env with your Supabase URL and anon key
-
-npm run dev
+cd ..
 ```
 
 ---
 
-### 10. Quick Launch (All Services)
+## 15. Running the Project
 
-To start all 7 services simultaneously in separate terminal windows:
+Start all microservices in separate terminal windows:
 
-```powershell
-.\start_all.ps1 -NewWindows
-```
-
-This launches:
-1. Ganache blockchain node (`:8545`)
-2. FastAPI core backend (`:8000`)
-3. BNS classification backend (`:8001`)
-4. Audio forensics backend (`:8002`)
-5. Crime detection backend (`:8003`)
-6. Photogrammetry backend (`:8004`)
-7. React frontend dev server (`:5173`)
+| Service | Command | URL / Port |
+| :--- | :--- | :--- |
+| **Ganache Blockchain** | `npx ganache --server.host 127.0.0.1 --server.port 8545 --chain.chainId 1337` | `http://127.0.0.1:8545` |
+| **Core Backend Gateway** | `cd backend && python app.py` | `http://127.0.0.1:8000` |
+| **BNS Legal Backend** | `cd bns-backend && python -m uvicorn app.main:app --port 8001 --reload` | `http://127.0.0.1:8001` |
+| **Photogrammetry 3D** | `cd photogrammetry-backend && python app.py` | `http://127.0.0.1:8002` |
+| **Crime Detection** | `cd crime-detection && python main.py` | `http://127.0.0.1:8003` |
+| **Audio Forensics** | `cd audio-backend && python app.py` | `http://127.0.0.1:8004` |
+| **React Frontend** | `cd audit-frontend && npm run dev` | `http://localhost:5173` |
 
 ---
 
-## 11. Environment Variables
+## 16. Environment Variables
+
+Create `.env` files in each service directory based on the following templates:
 
 ### `backend/.env`
-
-```env
-# Supabase
+```ini
+DATABASE_URL=postgresql://postgres:password@localhost:5432/secure_audit
 SUPABASE_URL=https://your-project.supabase.co
-SUPABASE_KEY=your-supabase-anon-key
 SUPABASE_SERVICE_ROLE_KEY=your-supabase-service-role-key
-
-# Auth
-JWT_SECRET=your-jwt-auth-secret
-
-# Email (OTP dispatch)
-EMAIL_USER=your-smtp-email
-EMAIL_PASSWORD=your-smtp-app-password
-
-# Roboflow (used by crime-detection service)
-ROBOFLOW_API_KEY=your-roboflow-api-key
-
-# Storage: True = save files locally in uploads/, False = Supabase Storage
 USE_LOCAL_STORAGE=True
-
-# OCR configuration (PaddleOCR)
-OCR_DET_MODEL=PP-OCRv5_mobile_det
-OCR_AUTO_LANGUAGES=en,hi,kn,te,ta,ml
-OCR_TESSERACT_LANGUAGES=kn,ml
-OCR_LANGUAGE_RECHECK_THRESHOLD=0.93
-OCR_MIN_LINE_CONFIDENCE=0.35
-OCR_DOC_ORIENTATION=true
-OCR_DESKEW=true
-OCR_MIN_IMAGE_DIM=1600
-OCR_MAX_IMAGE_DIM=2560
-OCR_PDF_DPI=300
-OCR_MAX_FILE_BYTES=52428800
-OCR_MAX_PDF_PAGES=50
-POPPLER_PATH=C:\Program Files\poppler\bin
-
-# OCR Translation
-TRANSLATION_PROVIDERS=google,mymemory
-TRANSLATION_TIMEOUT_SECONDS=20
-TRANSLATION_MAX_CHARS=30000
-MYMEMORY_EMAIL=
-
-# Blockchain
-BLOCKCHAIN_AUTO_REDEPLOY=false
-```
-
-### `audit-frontend/.env`
-
-```env
-VITE_SUPABASE_URL=https://your-project.supabase.co
-VITE_SUPABASE_ANON_KEY=your-supabase-anon-key
-VITE_API_BASE_URL=http://localhost:8000
+WEB3_PROVIDER_URI=http://127.0.0.1:8545
+CONTRACT_ADDRESS=0xYourDeployedEvidenceRegistryAddress
+CONTRACT_ABI_PATH=../blockchain/build/contracts/EvidenceRegistry.json
 ```
 
 ### `bns-backend/.env`
-
-```env
-FRONTEND_ORIGIN=http://localhost:5173
-MODEL_DIR=model_data
+```ini
 PORT=8001
-LEGAL_BERT_NAME=nlpaueb/legal-bert-base-uncased
-SENT_MODEL=sentence-transformers/all-MiniLM-L6-v2
-```
-
-### `audio-backend/.env`
-
-```env
-PORT=8002
+DEVICE=cpu
+MODEL_PATH=./Model_Data
 ```
 
 ### `photogrammetry-backend/.env`
-
-```env
-SUPABASE_URL=your-supabase-project-url
+```ini
+PORT=8002
+SUPABASE_URL=https://your-project.supabase.co
 SUPABASE_SERVICE_ROLE_KEY=your-supabase-service-role-key
-UPLOAD_DIR=./uploads
-OUTPUT_DIR=./outputs
-COLMAP_BINARY=colmap
-PORT=8004
+COLMAP_PATH=colmap
+```
+
+### `audit-frontend/.env`
+```ini
+VITE_API_URL=http://127.0.0.1:8000
+VITE_SUPABASE_URL=https://your-project.supabase.co
+VITE_SUPABASE_ANON_KEY=your-supabase-anon-key
 ```
 
 ---
 
-## 12. Running the System
+## 17. Screenshots
 
-| Service                    | Command                                                                   | Port |
-|----------------------------|---------------------------------------------------------------------------|------|
-| Ganache blockchain node    | `npx ganache --server.host 127.0.0.1 --server.port 8545 --chain.chainId 1337 --wallet.deterministic --database.dbPath ./ganache-data` | 8545 |
-| FastAPI core backend       | `py -3.10 app.py`                                                         | 8000 |
-| BNS classification backend | `py -3.10 -m uvicorn app.main:app --port 8001 --reload`                   | 8001 |
-| Audio forensics backend    | `py -3.10 app.py`                                                         | 8002 |
-| Crime detection backend    | `py -3.10 main.py`                                                        | 8003 |
-| Photogrammetry backend     | `py -3.10 app.py`                                                         | 8004 |
-| React frontend             | `npm run dev`                                                             | 5173 |
+| Case Management & Evidence Hub | 3D Crime Scene Reconstruction |
+| :---: | :---: |
+| *Dashboard showing verified case evidence and blockchain status* | *Interactive 3D point cloud reconstructed from scene video* |
+| *(Screenshot Placeholder)* | *(Screenshot Placeholder)* |
 
-Access the application at: **http://localhost:5173**
+| BNS Legal Prediction & XAI | YOLOv8 Weapon Detection |
+| :---: | :---: |
+| *Ranked BNS sections with highlighted narrative triggers* | *Real-time weapon and firearm bounding boxes* |
+| *(Screenshot Placeholder)* | *(Screenshot Placeholder)* |
 
 ---
 
-## 13. Future Work
+## 18. Future Scope
 
-- **Investigator AI Assistant (RAG):** Local generative LLM agent to query case notes, evidence text, OCR extracts, and BNS sections using Retrieval-Augmented Generation.
-- **Real-Time Collaboration:** WebSocket-based collaborative case workspaces for joint remote audits.
-- **Advanced Audio Diarization:** Real-time speaker identification during live interrogation sessions.
-- **Government Deployment Infrastructure:** Docker Compose containerization templates for sovereign cloud or on-premise deployment.
-- **Automated Case Timeline:** AI-generated storyboard compiling evidence tags, entity timelines, and incident sequences.
+- **Edge Deployment for Patrol Units:** Lightweight mobile edge inference for on-scene evidence hashing and instant weapon scanning.
+- **Zero-Knowledge Proofs (ZKP):** Implement zk-SNARKs for selective evidence disclosure without revealing sensitive case details.
+- **Multimodal Video Diarization:** Synchronized facial recognition and voice diarization across multi-camera interrogation rooms.
+- **National Crime Records Integration:** Automated interoperability with national criminal databases and CCTNS frameworks.
 
 ---
 
-## 14. Team Members
+## 19. Contributors
 
-| Name    | Roll Number  |
-|---------|--------------|
-| Ancilla | 4SO23CS026   |
-| Amisha  | 4SO23CS019   |
-| Apeksha | 4SO23CS031   |
-| Alisha  | 4SO23CS017   |
+| Name | USN | Module Ownership & Key Responsibilities |
+| :--- | :--- | :--- |
+| **Ancilla Josna** | `4SO23CS026` | **Project Lead**, BNS Legal Classification Backend (HGAT), Multilingual OCR Extraction & Blockchain Backend |
+| **Amisha** | `4SO23CS019` | React Frontend Architecture, Core FastAPI Gateway, 3D Photogrammetry Scene Reconstruction |
+| **Apeksha** | `4SO23CS031` | Audio Forensics (WhisperX / Deepfake Detection) & Audio Frontend Module |
+| **Alisha** | `4SO23CS017` | Crime & Weapon Detection (YOLOv8 Computer Vision Service) |
+
+---
+
+## 20. License
+
+This project is licensed under the **MIT License** — see the [LICENSE](LICENSE) file for details.
