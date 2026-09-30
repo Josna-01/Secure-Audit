@@ -387,6 +387,16 @@ class ApiService {
     }>(`/photogrammetry/status/${caseId}`)
     return data
   }
+
+  async getPhotogrammetryEvaluation(jobId: string) {
+    const { data } = await this.client.get<any>(`/photogrammetry/evaluation/${jobId}`)
+    return data
+  }
+
+  async getPhotogrammetryComparison() {
+    const { data } = await this.client.get<any>(`/photogrammetry/comparison`)
+    return data
+  }
 }
 
 export const api = new ApiService()

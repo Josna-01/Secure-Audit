@@ -1290,6 +1290,7 @@ export function Photo3DPage() {
 
   const [status, setStatus] = useState<'Waiting' | 'Pending' | 'Processing' | 'Completed' | 'Failed'>('Waiting')
   const [jobDetails, setJobDetails] = useState<{
+    job_id?: string
     model_url?: string
     point_cloud_url?: string
     frame_count?: number
@@ -1297,6 +1298,8 @@ export function Photo3DPage() {
     completed_at?: string
     error_message?: string
   }>({})
+  const [evaluationData, setEvaluationData] = useState<any>(null)
+  const [loadingEvaluation, setLoadingEvaluation] = useState(false)
 
   const [pipelineStep, setPipelineStep] = useState<number>(1)
   const [isLogOpen, setIsLogOpen] = useState(false) // Default state: Collapsed
@@ -1452,6 +1455,19 @@ export function Photo3DPage() {
     }
     loadEvidence()
   }, [selectedCaseId])
+
+  // Fetch evaluation metrics when a job completes or is loaded
+  useEffect(() => {
+    if (jobDetails.job_id && status === 'Completed') {
+      setLoadingEvaluation(true)
+      api.getPhotogrammetryEvaluation(jobDetails.job_id)
+        .then(data => setEvaluationData(data))
+        .catch(() => setEvaluationData(null))
+        .finally(() => setLoadingEvaluation(false))
+    } else {
+      setEvaluationData(null)
+    }
+  }, [jobDetails.job_id, status])
 
   // Currently selected evidence item object
   const currentEvidence = evidenceList.find(e => e.id === selectedEvidenceId)
@@ -1855,6 +1871,78 @@ export function Photo3DPage() {
           </div>
         </Card>
       </div>
+
+      {/* SECTION 5.5 — RESEARCH EVALUATION & RECONSTRUCTION METRICS */}
+      {status === 'Completed' && (
+        <Card style={{ marginBottom: '24px' }}>
+          <CardHeader>
+            <CardTitle>Research Evaluation &amp; Accuracy Metrics</CardTitle>
+            <span style={{ fontSize: '11px', color: 'var(--text3)' }}>
+              {evaluationData ? 'Empirical Reconstruction Audit' : loadingEvaluation ? 'Evaluating artifacts...' : 'Available on completed jobs'}
+            </span>
+          </CardHeader>
+          
+          {evaluationData ? (
+            <div>
+              <div style={{ display: 'grid', gridTemplateColumns: 'repeat(auto-fit, minmax(200px, 1fr))', gap: '12px', marginBottom: '16px' }}>
+                <div style={{ background: 'var(--bg3)', padding: '12px', borderRadius: 'var(--r)', border: '1px solid var(--border)' }}>
+                  <div style={{ fontSize: '10px', color: 'var(--text3)', textTransform: 'uppercase', marginBottom: '4px' }}>Registration Rate</div>
+                  <div style={{ fontSize: '16px', fontWeight: 700, color: 'var(--blue)' }}>
+                    {evaluationData.colmap_sfm?.registered_images ?? evaluationData.registered_images ?? 'N/A'} / {evaluationData.frame_processing?.selected_frames_count ?? evaluationData.selected_frames ?? 'N/A'}
+                    <span style={{ fontSize: '12px', fontWeight: 500, color: 'var(--text3)', marginLeft: '6px' }}>
+                      ({evaluationData.colmap_sfm?.registration_percentage ?? evaluationData.registration_percent ?? 0}%)
+                    </span>
+                  </div>
+                </div>
+
+                <div style={{ background: 'var(--bg3)', padding: '12px', borderRadius: 'var(--r)', border: '1px solid var(--border)' }}>
+                  <div style={{ fontSize: '10px', color: 'var(--text3)', textTransform: 'uppercase', marginBottom: '4px' }}>Mean Reprojection Error</div>
+                  <div style={{ fontSize: '16px', fontWeight: 700, color: 'var(--green)' }}>
+                    {evaluationData.colmap_sfm?.mean_reprojection_error_px ?? evaluationData.reprojection_error_px ?? 'N/A'}
+                    <span style={{ fontSize: '12px', fontWeight: 500, color: 'var(--text3)', marginLeft: '4px' }}>px</span>
+                  </div>
+                </div>
+
+                <div style={{ background: 'var(--bg3)', padding: '12px', borderRadius: 'var(--r)', border: '1px solid var(--border)' }}>
+                  <div style={{ fontSize: '10px', color: 'var(--text3)', textTransform: 'uppercase', marginBottom: '4px' }}>Dense Points (Cleaned)</div>
+                  <div style={{ fontSize: '16px', fontWeight: 700, color: 'var(--text)' }}>
+                    {(evaluationData.geometry_and_mesh?.cleaned_point_count ?? evaluationData.cleaned_points ?? 0).toLocaleString()}
+                    <span style={{ fontSize: '11px', color: 'var(--text3)', marginLeft: '6px' }}>
+                      (-{evaluationData.geometry_and_mesh?.points_removed_percent ?? evaluationData.points_removed_percent ?? 0}% outliers)
+                    </span>
+                  </div>
+                </div>
+
+                <div style={{ background: 'var(--bg3)', padding: '12px', borderRadius: 'var(--r)', border: '1px solid var(--border)' }}>
+                  <div style={{ fontSize: '10px', color: 'var(--text3)', textTransform: 'uppercase', marginBottom: '4px' }}>Mesh Triangles / Vertices</div>
+                  <div style={{ fontSize: '16px', fontWeight: 700, color: 'var(--text)' }}>
+                    {(evaluationData.geometry_and_mesh?.mesh_triangle_count ?? evaluationData.mesh_triangles ?? 0).toLocaleString()}
+                    <span style={{ fontSize: '11px', color: 'var(--text3)', marginLeft: '6px' }}>
+                      ({(evaluationData.geometry_and_mesh?.mesh_vertex_count ?? evaluationData.mesh_vertices ?? 0).toLocaleString()} vtx)
+                    </span>
+                  </div>
+                </div>
+              </div>
+
+              {evaluationData.physical_dimension_accuracy && evaluationData.physical_dimension_accuracy.status === 'evaluated' && (
+                <div style={{ background: 'var(--bg3)', padding: '12px 14px', borderRadius: 'var(--r)', border: '1px solid var(--blue)', marginBottom: '14px' }}>
+                  <div style={{ fontSize: '12px', fontWeight: 600, color: 'var(--blue)', marginBottom: '6px' }}>
+                    Physical Dimension Accuracy Evaluation
+                  </div>
+                  <div style={{ display: 'grid', gridTemplateColumns: '1fr 1fr', gap: '8px', fontSize: '12px' }}>
+                    <div>Mean Absolute Error (MAE): <strong>{evaluationData.physical_dimension_accuracy.mean_absolute_error} {evaluationData.physical_dimension_accuracy.unit}</strong></div>
+                    <div>Mean Absolute Percentage Error (MAPE): <strong>{evaluationData.physical_dimension_accuracy.mean_absolute_percentage_error}%</strong></div>
+                  </div>
+                </div>
+              )}
+            </div>
+          ) : (
+            <div style={{ padding: '12px', fontSize: '12px', color: 'var(--text3)', textAlign: 'center' }}>
+              {loadingEvaluation ? 'Analyzing reconstruction logs and point cloud geometry...' : 'No evaluation data loaded for this reconstruction.'}
+            </div>
+          )}
+        </Card>
+      )}
 
       {/* SECTION 6 — PROCESSING LOG (Collapsible, Default: Collapsed) */}
       <Card>

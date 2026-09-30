@@ -1,0 +1,50 @@
+[
+  {
+    "Job ID": "c199a911-ac5...",
+    "Full Job ID": "c199a911-ac53-422e-b3a9-87444a5b766b",
+    "Video Resolution": "848x478",
+    "Video FPS": 30.0,
+    "Extracted Frames": 130,
+    "Selected Frames": 30,
+    "Registered Images": 27,
+    "Registration %": 90.0,
+    "Sparse Points": 3886,
+    "Reprojection Error (px)": 0.7555,
+    "Dense Points": 251725,
+    "Mesh Vertices": 0,
+    "Mesh Triangles": 0,
+    "GLB Size (MB)": 16.36
+  },
+  {
+    "Job ID": "54f0cecd-0b1...",
+    "Full Job ID": "54f0cecd-0b11-4bb8-91ac-1046ddf89b3a",
+    "Video Resolution": "478x850",
+    "Video FPS": 30.0,
+    "Extracted Frames": 134,
+    "Selected Frames": 60,
+    "Registered Images": 60,
+    "Registration %": 100.0,
+    "Sparse Points": 35115,
+    "Reprojection Error (px)": 0.8837,
+    "Dense Points": 240574,
+    "Mesh Vertices": 175126,
+    "Mesh Triangles": 349999,
+    "GLB Size (MB)": 13.36
+  },
+  {
+    "Job ID": "max_quality_...",
+    "Full Job ID": "max_quality_60f_experiment",
+    "Video Resolution": "N/A",
+    "Video FPS": "N/A",
+    "Extracted Frames": 60,
+    "Selected Frames": 60,
+    "Registered Images": 60,
+    "Registration %": 100.0,
+    "Sparse Points": 63021,
+    "Reprojection Error (px)": 0.5628,
+    "Dense Points": 4889173,
+    "Mesh Vertices": 88917,
+    "Mesh Triangles": 177403,
+    "GLB Size (MB)": 6.78
+  }
+]
