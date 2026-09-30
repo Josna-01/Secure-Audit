@@ -110,17 +110,96 @@ export interface Evidence {
 
 export interface BlockchainEvidence {
   transactionHash?: string
+  transactionHashHex?: string | null
   blockNumber?: number
+  blockHash?: string | null
+  walletAddress?: string | null
+  chainId?: number | null
+  network?: string | null
   contractAddress?: string
   gasUsed?: number
+  transactionStatus?: string | null
   registeredAt?: string
   latestVerificationAt?: string
+  lastVerificationResult?: string | null
+  lastVerificationReason?: string | null
+  registered?: boolean
 }
 
 export interface CustodyRecord {
   officerId: string
   action: string
   timestamp: string
+}
+
+/** One entry of the merged on-chain + database chain of custody. */
+export interface CustodyTimelineEntry {
+  action: string
+  label: string
+  officerId: string
+  officerName?: string
+  timestamp: string | null
+  source: 'blockchain' | 'database'
+  transactionHash?: string | null
+  blockNumber?: number | null
+  details?: Record<string, unknown> | null
+}
+
+export interface IntegrityCheck {
+  code: string
+  ok: boolean
+  severity: 'info' | 'warning' | 'critical'
+  message: string
+}
+
+/** Row of GET /blockchain/ledger. */
+export interface LedgerRow extends BlockchainEvidence {
+  id: string
+  caseId: string | null
+  fileName: string | null
+  evidenceType: string
+  sha256: string | null
+  status: string
+  uploadedBy?: string | null
+  createdAt?: string | null
+  blockchainStatus: string
+  verificationStatus: string
+  verificationReason?: string | null
+  verifiedAt?: string | null
+}
+
+export interface LedgerEvidenceDetail {
+  evidence: LedgerRow
+  blockchain: BlockchainEvidence
+  onChain: { evidenceId: string; caseId: string; fileName: string; sha256Hash: string; uploadedBy: string; timestamp: string } | null
+  chainAvailable: boolean
+  transactionState: 'found' | 'missing' | 'unknown' | 'none'
+  integrityChecks: IntegrityCheck[]
+  integrity: 'Consistent' | 'Warning' | 'Inconsistent' | 'Unknown'
+  duplicateEvidenceIds: string[]
+  timeline: CustodyTimelineEntry[]
+}
+
+export interface BlockchainTransaction {
+  transactionHash: string
+  status: 'SUCCESS' | 'FAILED' | 'PENDING'
+  blockNumber: number | null
+  blockHash: string | null
+  timestamp: string | null
+  confirmations: number
+  from: string
+  to: string | null
+  nonce: number
+  gasLimit: number
+  gasUsed: number | null
+  gasPriceWei: number | null
+  effectiveGasPriceWei: number | null
+  chainId: number
+  contractAddress: string
+  function: string | null
+  arguments: Record<string, string>
+  events: { name: string; args: Record<string, unknown> }[]
+  evidenceId: string | null
 }
 
 // ── DETECTION ─────────────────────────────────────────────────────────────

@@ -70,10 +70,14 @@ def store_registration(db, evidence: Evidence, receipt: dict, adopted: bool) -> 
     evidence.blockchain_contract_address = receipt["contractAddress"]
     evidence.blockchain_gas_used = receipt["gasUsed"]
     evidence.blockchain_registered_at = receipt["timestamp"]
+    evidence.blockchain_block_hash = receipt.get("blockHash")
+    evidence.blockchain_wallet_address = receipt.get("from")
+    evidence.blockchain_chain_id = receipt.get("chainId")
+    evidence.blockchain_tx_status = receipt.get("status", "SUCCESS")
     if not adopted:
         db.add(EvidenceCustodyRecord(evidence_id=evidence.id, officer_id=SYSTEM_OFFICER, action="REGISTERED",
                                      occurred_at=receipt["timestamp"], transaction_hash=receipt["transactionHash"],
-                                     block_number=receipt["blockNumber"]))
+                                     block_number=receipt["blockNumber"], source="blockchain"))
     if not db.query(BlockchainLog.id).filter(BlockchainLog.transaction_hash == receipt["transactionHash"],
                                              BlockchainLog.event_name == "EvidenceRegistered").first():
         db.add(BlockchainLog(evidence_id=evidence.id, event_name="EvidenceRegistered",
