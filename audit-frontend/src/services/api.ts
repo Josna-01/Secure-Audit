@@ -159,6 +159,37 @@ class ApiService {
     return data
   }
 
+  async getBlockchainLedger(params: { search?: string; status?: string; limit?: number; offset?: number } = {}) {
+    const { data } = await this.client.get<{ data: import('../types').LedgerRow[]; total: number; limit: number; offset: number }>('/blockchain/ledger', { params })
+    return data
+  }
+
+  async getBlockchainEvidence(evidenceId: string) {
+    const { data } = await this.client.get<ApiResponse<import('../types').LedgerEvidenceDetail>>(`/blockchain/evidence/${evidenceId}`)
+    return data
+  }
+
+  async getBlockchainTransaction(txHash: string) {
+    const { data } = await this.client.get<ApiResponse<import('../types').BlockchainTransaction>>(`/blockchain/transaction/${txHash}`)
+    return data
+  }
+
+  async getBlockchainNetwork() {
+    const { data } = await this.client.get<ApiResponse<any>>('/blockchain/network')
+    return data
+  }
+
+  async runIntegrityScan() {
+    const { data } = await this.client.post<ApiResponse<{ summary: Record<string, number>; items: any[] }>>('/blockchain/integrity-scan')
+    return data
+  }
+
+  /** Authenticated, audited download; returns the file plus the server's integrity headers. */
+  async downloadEvidence(evidenceId: string) {
+    const res = await this.client.get<Blob>(`/evidence/${evidenceId}/download`, { responseType: 'blob' })
+    return { blob: res.data, sha256: res.headers['x-evidence-sha256'] as string | undefined, integrity: res.headers['x-evidence-integrity'] as string | undefined }
+  }
+
   async redeployEvidenceRegistry() {
     const { data } = await this.client.post<ApiResponse<any>>('/admin/blockchain/redeploy')
     return data
@@ -403,7 +434,12 @@ export const api = new ApiService()
 
 /** Human-readable result of POST /evidence/{id}/verify (success or error). */
 export function describeVerification(result: { verified: boolean; databaseMatchesBlockchain?: boolean } | null, error?: any): string {
-  if (error) return error.response?.data?.detail || error.message || 'Verification failed'
+  if (error) {
+    const body = error.response?.data
+    const detail = typeof body?.detail === 'string' ? body.detail : (error.message || 'Verification failed')
+    // Structured failures carry status + reason (e.g. "Verification Failed · BLOCKCHAIN_UNAVAILABLE").
+    return body?.status && body?.reason ? `${body.status}: ${detail}` : detail
+  }
   if (!result) return 'Verification failed'
   const message = result.verified ? '✓ Integrity verified on-chain' : '⚠ Hash mismatch — tampering detected'
   return result.databaseMatchesBlockchain === false

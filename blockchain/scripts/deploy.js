@@ -99,10 +99,26 @@ async function main() {
   console.log(`Transaction Hash: ${txHash}`);
   console.log(`Deployer Account: ${deployer}`);
   console.log(`Block Number:     ${parseInt(receipt.blockNumber, 16)}`);
+
+  // 6. The deployer becomes owner and the first registrar. When the backend signs
+  //    with a different account, authorise it too: REGISTRAR_ADDRESSES=0xabc...,0xdef...
+  const extraRegistrars = (process.env.REGISTRAR_ADDRESSES || process.env.ETHEREUM_SENDER_ADDRESS || "")
+    .split(",")
+    .map((value) => value.trim().toLowerCase())
+    .filter((value) => /^0x[0-9a-f]{40}$/.test(value) && value !== deployer.toLowerCase());
+  const SET_REGISTRAR_SELECTOR = "0xc1bf1dcf"; // keccak256("setRegistrar(address,bool)")[0:4]
+  for (const registrar of extraRegistrars) {
+    const data = SET_REGISTRAR_SELECTOR + registrar.slice(2).padStart(64, "0") + "1".padStart(64, "0");
+    const authTx = await jsonRpcCall("eth_sendTransaction", [{ from: deployer, to: receipt.contractAddress, data }]);
+    console.log(`Authorised registrar ${registrar} (tx ${authTx})`);
+  }
+
   const deploymentDir = path.join(__dirname, "../deployments");
   fs.mkdirSync(deploymentDir, { recursive: true });
   fs.writeFileSync(path.join(deploymentDir, "localhost.json"), JSON.stringify({
-    address: receipt.contractAddress, transactionHash: txHash, chainId: parseInt(await jsonRpcCall("eth_chainId"), 16), deployedAt: new Date().toISOString()
+    address: receipt.contractAddress, transactionHash: txHash, chainId: parseInt(await jsonRpcCall("eth_chainId"), 16),
+    blockNumber: parseInt(receipt.blockNumber, 16), deployer, registrars: [deployer.toLowerCase(), ...extraRegistrars],
+    deployedAt: new Date().toISOString()
   }, null, 2));
   console.log("==================================================\n");
 }

@@ -67,6 +67,15 @@ class Evidence(Base):
     blockchain_gas_used = Column(BigInteger, nullable=True)
     blockchain_registered_at = Column(DateTime(timezone=True), nullable=True)
     latest_verification_at = Column(DateTime(timezone=True), nullable=True)
+    # Receipt metadata captured at registration (added by migrate_blockchain.py).
+    blockchain_block_hash = Column(String, nullable=True)
+    blockchain_wallet_address = Column(String, nullable=True)
+    blockchain_chain_id = Column(BigInteger, nullable=True)
+    blockchain_tx_status = Column(String, nullable=True)
+    # Outcome of the most recent verification attempt. Unlike ``status`` this may be
+    # "Verification Failed" (an outage), which says nothing about the evidence itself.
+    last_verification_result = Column(String, nullable=True)
+    last_verification_reason = Column(String, nullable=True)
 
 
 class EvidenceCustodyRecord(Base):
@@ -80,6 +89,10 @@ class EvidenceCustodyRecord(Base):
     transaction_hash = Column(String, nullable=True, unique=True)
     block_number = Column(BigInteger, nullable=True)
     created_at = Column(DateTime(timezone=True), nullable=False, server_default=func.now())
+    # "blockchain" for entries mirrored from the contract, "database" for off-chain
+    # custody events (created, viewed, downloaded, metadata modified).
+    source = Column(String, nullable=True, server_default="blockchain", default="blockchain")
+    details = Column(JSONB, nullable=True)
 
 
 class BlockchainLog(Base):
