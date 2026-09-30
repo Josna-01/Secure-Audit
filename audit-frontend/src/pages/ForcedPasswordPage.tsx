@@ -7,7 +7,7 @@ import { Btn, AlertBox } from '../components/UI'
 export default function ForcedPasswordPage() {
   const navigate = useNavigate()
   const { user, updateUser, logout } = useAuth()
-  
+
   const [password, setPassword] = useState('')
   const [confirmPassword, setConfirmPassword] = useState('')
   const [loading, setLoading] = useState(false)
@@ -150,7 +150,7 @@ export default function ForcedPasswordPage() {
             marginBottom: '6px',
             letterSpacing: '-0.2px'
           }}>Update Temporary Password</h2>
-          
+
           <p style={{
             fontSize: '13px',
             color: 'var(--text2)',

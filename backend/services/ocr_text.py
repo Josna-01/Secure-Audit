@@ -230,6 +230,120 @@ def _is_noise_char(char: str) -> bool:
     return category in ("Cc", "Co", "Cn", "Cf") or char == "�"
 
 
+
+_EXCLUDED_ACRONYMS = {
+    "BNS", "FIR", "IPC", "OCR", "API", "URL", "JSON", "YOLO", "PDF", "DPI",
+    "PNG", "JPG", "JPEG", "WEBP", "TIFF", "BMP", "GIF", "SHA", "UUID", "ID",
+    "FPS", "CPU", "GPU", "CCTV", "SQL", "HTML", "CSS", "JS", "TS", "REST",
+    "HTTP", "HTTPS", "EXIF", "COLMAP", "WEBGL", "BERT", "FAISS", "OTP",
+}
+
+COMMON_OCR_TYPOS: Dict[str, str] = {
+    "eaily": "easily",
+    "earily": "easily",
+    "ured": "used",
+    "dectronic": "electronic",
+    "duris": "does",
+    "properedy": "properly",
+    "properdy": "properly",
+    "phaced": "placed",
+    "phced": "placed",
+    "skey": "skew",
+    "akey": "skew",
+    "degra": "degree",
+    "perfonmance": "performance",
+    "increate": "increase",
+    "detect1": "detected",
+    "datect1": "detected",
+    "datect": "detected",
+    "nomnally": "normally",
+    "maln": "main",
+    "wotk": "work",
+    "ske": "skew",
+    "ae": "are",
+    "vaious": "various",
+    "mecthods": "methods",
+    "transtorm": "transform",
+    "uansforn": "transform",
+    "neighber": "neighbor",
+    "moerphology": "morphology",
+    "rescuchers": "researchers",
+    "haves": "have",
+    "problens": "problems",
+    "hintogram": "histogram",
+    "whare": "where",
+    "cout": "cost",
+    "infomation": "information",
+    "secion": "section",
+    "documnt": "document",
+    "evidense": "evidence",
+    "investigaton": "investigation",
+    "complainint": "complainant",
+    "subnitted": "submitted",
+    "signiture": "signature",
+    "recieved": "received",
+    "accusedd": "accused",
+    "statment": "statement",
+    "procedings": "proceedings",
+    "authenitcation": "authentication",
+    "verificaton": "verification",
+    "performace": "performance",
+    "computd": "computed",
+    "securty": "security",
+    "integrty": "integrity",
+    "analysys": "analysis",
+    "reconstrution": "reconstruction",
+}
+
+
+def correct_english_word(token: str) -> str:
+    """Correct common OCR typos in English words while preserving numbers, dates, IDs, and uppercase codes."""
+    if not token:
+        return token
+    prefix_match = re.match(r"^[^\w]+", token)
+    prefix_str = prefix_match.group(0) if prefix_match else ""
+    suffix_match = re.search(r"[^\w]+$", token)
+    suffix_str = suffix_match.group(0) if suffix_match else ""
+
+    core = token[len(prefix_str): len(token) - len(suffix_str)]
+    if not core:
+        return token
+
+    if core.isupper() and (len(core) <= 4 or core in _EXCLUDED_ACRONYMS):
+        return token
+    if re.search(r"\d", core) and not (core.casefold() in COMMON_OCR_TYPOS):
+        return token
+    if re.search(r"[-_/#:\\]", core):  # SA-2026-0001, SHA-256, dates, paths
+        return token
+
+    lower_core = core.lower()
+    if lower_core in COMMON_OCR_TYPOS:
+        replacement = COMMON_OCR_TYPOS[lower_core]
+        if core.isupper():
+            corrected = replacement.upper()
+        elif core.istitle():
+            corrected = replacement.capitalize()
+        else:
+            corrected = replacement
+        return f"{prefix_str}{corrected}{suffix_str}"
+
+    return token
+
+
+def postprocess_ocr_text(text: str) -> str:
+    """Apply dictionary- and rule-based post-processing to clean up OCR text."""
+    if not text:
+        return text
+
+    # Standardize space around punctuation
+    text = re.sub(r"\s+([,.!?:;])", r"\1", text)
+    text = re.sub(r"(?<=[a-zA-Z])([,.!?:;])(?=[a-zA-Z])", r"\1 ", text)
+
+    words = text.split(" ")
+    corrected_words = [correct_english_word(w) for w in words]
+    return " ".join(corrected_words)
+
+
 def clean_segment(text: str, collapse_duplicates: bool = True) -> str:
     """Clean a single recognized text segment without rewriting its content."""
     text = unicodedata.normalize("NFC", text or "")
@@ -250,6 +364,7 @@ def clean_segment(text: str, collapse_duplicates: bool = True) -> str:
     text = re.sub(r"\s+", " ", text)
     if collapse_duplicates:
         text = collapse_repeated_words(text)
+    text = postprocess_ocr_text(text)
     return text
 
 
@@ -266,6 +381,7 @@ def collapse_repeated_words(text: str) -> str:
             continue
         result.append(word)
     return " ".join(result)
+
 
 
 def _letter_count(word: str) -> int:
@@ -535,7 +651,30 @@ def reconstruct_layout(lines: Sequence[Dict[str, Any]]) -> Tuple[str, List[Dict[
             text = "  " * max(0, min(indent, 4)) + text
         output.append(text)
 
-    text = re.sub(r"\n{3,}", "\n\n", "\n".join(output)).strip()
+    # Merge hyphenated words broken across line breaks (e.g. "docu-" + "ment" -> "document")
+    merged_output: List[str] = []
+    idx = 0
+    while idx < len(output):
+        current_line = output[idx]
+        if (idx + 1 < len(output) and current_line.endswith("-")
+                and len(current_line) > 2 and output[idx + 1]
+                and output[idx + 1][0].islower() and not output[idx + 1].startswith("•")):
+            next_word = output[idx + 1].split(" ")[0]
+            rest_of_next = " ".join(output[idx + 1].split(" ")[1:])
+            merged_line = current_line[:-1] + next_word
+            if rest_of_next:
+                output[idx + 1] = rest_of_next
+                merged_output.append(merged_line)
+                idx += 1
+            else:
+                merged_output.append(merged_line)
+                idx += 2
+        else:
+            merged_output.append(current_line)
+            idx += 1
+
+    text = re.sub(r"\n{3,}", "\n\n", "\n".join(merged_output)).strip()
+    text = postprocess_ocr_text(text)
     return text, tables
 
 

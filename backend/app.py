@@ -30,7 +30,7 @@ import requests
 from sqlalchemy import text
 from sqlalchemy.orm import Session
 from db import get_db, SessionLocal
-from models import User, Case, Evidence, AuditLog, OCRResult, BNSPrediction, OTPToken, EvidenceCustodyRecord, BlockchainLog
+from models import User, Case, Evidence, AuditLog, OCRResult, BNSPrediction, OTPToken, EvidenceCustodyRecord, BlockchainLog, Detection
 from services.ocr_service import OCRServiceError, build_document_result, ocr_service
 from services.ocr_text import UNKNOWN_LANGUAGE, detect_languages
 from services.translation_service import (TARGET_LANGUAGES, TranslationError,
@@ -266,14 +266,20 @@ app.add_middleware(
 
 app.mount("/uploads", StaticFiles(directory=UPLOADS_DIR), name="uploads")
 
-# Load model
-try:
-    rf = Roboflow(api_key=ROBOFLOW_API_KEY)
-    project = rf.workspace().project("weapon-detection-using-yolov8")
-    model = project.version(1).model
-except Exception as e:
-    print(f"Warning: Failed to load Roboflow model. Provide a valid key. Error: {e}")
-    model = None
+# ---------------------------------------------------------
+# Original Code (Alisha) - Roboflow Model Setup:
+# try:
+#     rf = Roboflow(api_key=ROBOFLOW_API_KEY)
+#     project = rf.workspace().project("weapon-detection-using-yolov8")
+#     model = project.version(1).model
+# except Exception as e:
+#     print(f"Warning: Failed to load Roboflow model. Provide a valid key. Error: {e}")
+#     model = None
+# ---------------------------------------------------------
+# Updated: Local YOLOv8 Crime Detection Microservice (Port 8003)
+CRIME_DETECTION_SERVICE_URL = os.getenv("CRIME_DETECTION_SERVICE_URL", "http://127.0.0.1:8003/detect/image")
+model = None  # Kept for backward compatibility
+
 
 # ====== Pydantic Models ======
 class CaseCreate(BaseModel):
@@ -2021,13 +2027,32 @@ def redeploy_evidence_registry(request: Request):
 # ====== DETECTION ENDPOINTS ======
 @app.post("/detect")
 async def detect_direct(image: UploadFile = File(...)):
-    if not model:
-        raise HTTPException(status_code=500, detail="Model not loaded")
-    file_path = "temp.jpg"
-    with open(file_path, "wb") as buffer:
-        shutil.copyfileobj(image.file, buffer)
-    prediction = model.predict(file_path).json()
-    return JSONResponse(content=prediction)
+    # ---------------------------------------------------------
+    # Original Code (Alisha) - Direct Roboflow Prediction:
+    # if not model:
+    #     raise HTTPException(status_code=500, detail="Model not loaded")
+    # file_path = "temp.jpg"
+    # with open(file_path, "wb") as buffer:
+    #     shutil.copyfileobj(image.file, buffer)
+    # prediction = model.predict(file_path).json()
+    # return JSONResponse(content=prediction)
+    # ---------------------------------------------------------
+    # Updated: Forward to local YOLOv8 crime detection microservice (Port 8003)
+    try:
+        contents = await image.read()
+        resp = requests.post(
+            CRIME_DETECTION_SERVICE_URL,
+            files={"image": (image.filename or "image.jpg", contents, image.content_type or "image/jpeg")},
+            data={"confidence": 0.25},
+            timeout=30
+        )
+        if resp.status_code != 200:
+            raise HTTPException(status_code=resp.status_code, detail=f"Detection error: {resp.text}")
+        return JSONResponse(content=resp.json())
+    except HTTPException:
+        raise
+    except Exception as e:
+        raise HTTPException(status_code=500, detail=f"Crime detection service (port 8003) unreachable: {e}")
 
 @app.post("/ai/detect")
 def run_ai_detect(req: DetectionRequest, request: Request, db: Session = Depends(get_db)):
@@ -2036,9 +2061,12 @@ def run_ai_detect(req: DetectionRequest, request: Request, db: Session = Depends
     user_info = get_current_user_info(request)
     check_case_access(req.case_id, user_info, db)
 
-    if not model:
-        print("[DEBUG] Roboflow model is None")
-        raise HTTPException(status_code=500, detail="Roboflow model not loaded")
+    # ---------------------------------------------------------
+    # Original Code (Alisha) - Roboflow Model Check:
+    # if not model:
+    #     print("[DEBUG] Roboflow model is None")
+    #     raise HTTPException(status_code=500, detail="Roboflow model not loaded")
+    # ---------------------------------------------------------
 
     evidence_obj = db.query(Evidence).filter(Evidence.id == req.evidence_id).first()
     if not evidence_obj:
@@ -2088,7 +2116,7 @@ def run_ai_detect(req: DetectionRequest, request: Request, db: Session = Depends
             file_bytes = response.content
             current_hash = hashlib.sha256(file_bytes).hexdigest()
 
-            # Save to temporary local file for Roboflow prediction
+            # Save to temporary local file for prediction
             file_id = str(uuid.uuid4())
             ext = file_path.split(".")[-1].split("?")[0]
             local_temp_file = os.path.join(UPLOADS_DIR, f"temp_{file_id}.{ext}")
@@ -2138,14 +2166,36 @@ def run_ai_detect(req: DetectionRequest, request: Request, db: Session = Depends
                 detail=f"Evidence integrity check failed — file may have been tampered. Detection blocked. Stored: {stored_hash[:16]}... Current: {current_hash[:16]}..."
             )
 
-        # Run prediction
-        prediction = model.predict(local_temp_file).json()
-        print(f"[DEBUG] Prediction response: {str(prediction)[:200]}...")
+        # ---------------------------------------------------------
+        # Original Code (Alisha) - Roboflow Prediction:
+        # prediction = model.predict(local_temp_file).json()
+        # print(f"[DEBUG] Prediction response: {str(prediction)[:200]}...")
+        # ---------------------------------------------------------
+        
+        # Updated: Call local YOLOv8 Crime Detection Service (Port 8003)
+        try:
+            with open(local_temp_file, "rb") as img_f:
+                fname = os.path.basename(local_temp_file)
+                resp = requests.post(
+                    CRIME_DETECTION_SERVICE_URL,
+                    files={"image": (fname, img_f, "image/jpeg")},
+                    data={"confidence": 0.25},
+                    timeout=30
+                )
+            if resp.status_code != 200:
+                raise HTTPException(status_code=resp.status_code, detail=f"Crime detection service error: {resp.text}")
+            prediction = resp.json()
+            print(f"[DEBUG] Local YOLO prediction response: {prediction}")
+        except HTTPException:
+            raise
+        except Exception as e:
+            print(f"[DEBUG] Crime detection service error: {e}")
+            raise HTTPException(status_code=500, detail=f"Crime detection service (port 8003) unreachable: {e}")
     except HTTPException:
         raise
     except Exception as e:
-        print(f"[DEBUG] Roboflow prediction threw error: {e}")
-        raise HTTPException(status_code=500, detail=f"Roboflow prediction failed: {e}")
+        print(f"[DEBUG] Detection threw error: {e}")
+        raise HTTPException(status_code=500, detail=f"Detection failed: {e}")
     finally:
         # Always clean up temporary file if it was downloaded from storage
         if is_remote and is_remote_download and local_temp_file and os.path.exists(local_temp_file):
@@ -2154,37 +2204,84 @@ def run_ai_detect(req: DetectionRequest, request: Request, db: Session = Depends
             except Exception as e:
                 print(f"[DEBUG] Failed to delete temporary file {local_temp_file}: {e}")
 
-    image_width = float(prediction.get("image", {}).get("width", 1))
-    image_height = float(prediction.get("image", {}).get("height", 1))
+    # Calculate image dimensions for percentages
+    try:
+        from PIL import Image
+        with Image.open(local_temp_file) as im:
+            image_width, image_height = float(im.width), float(im.height)
+    except Exception:
+        image_width, image_height = 800.0, 600.0
 
     objects = []
-    for pred in prediction.get("predictions", []):
-        pred_x = float(pred.get("x", 0))
-        pred_y = float(pred.get("y", 0))
-        pred_w = float(pred.get("width", 0))
-        pred_h = float(pred.get("height", 0))
+    
+    # ---------------------------------------------------------
+    # Original Code (Alisha) - Roboflow Prediction Parsing:
+    # image_width = float(prediction.get("image", {}).get("width", 1))
+    # image_height = float(prediction.get("image", {}).get("height", 1))
+    # for pred in prediction.get("predictions", []):
+    #     pred_x = float(pred.get("x", 0))
+    #     pred_y = float(pred.get("y", 0))
+    #     pred_w = float(pred.get("width", 0))
+    #     pred_h = float(pred.get("height", 0))
+    #     left_pct = ((pred_x - pred_w/2) / image_width) * 100
+    #     top_pct = ((pred_y - pred_h/2) / image_height) * 100
+    #     w_pct = (pred_w / image_width) * 100
+    #     h_pct = (pred_h / image_height) * 100
+    #     objects.append({
+    #         "label": pred["class"],
+    #         "confidence": pred["confidence"],
+    #         "bbox": [f"{left_pct:.2f}%", f"{top_pct:.2f}%", f"{w_pct:.2f}%", f"{h_pct:.2f}%"]
+    #     })
+    # ---------------------------------------------------------
 
-        left_pct = ((pred_x - pred_w/2) / image_width) * 100
-        top_pct = ((pred_y - pred_h/2) / image_height) * 100
-        w_pct = (pred_w / image_width) * 100
-        h_pct = (pred_h / image_height) * 100
-
-        objects.append({
-            "label": pred["class"],
-            "confidence": pred["confidence"],
-            "bbox": [f"{left_pct:.2f}%", f"{top_pct:.2f}%", f"{w_pct:.2f}%", f"{h_pct:.2f}%"]
-        })
+    # Updated: Parse local YOLOv8 detections format from port 8003
+    for det in prediction.get("detections", []):
+        bbox = det.get("bbox", {})
+        if isinstance(bbox, dict):
+            x1 = float(bbox.get("x1", 0))
+            y1 = float(bbox.get("y1", 0))
+            x2 = float(bbox.get("x2", 0))
+            y2 = float(bbox.get("y2", 0))
+            w = max(0.0, x2 - x1)
+            h = max(0.0, y2 - y1)
+            left_pct = (x1 / image_width) * 100
+            top_pct = (y1 / image_height) * 100
+            w_pct = (w / image_width) * 100
+            h_pct = (h / image_height) * 100
+            objects.append({
+                "label": det.get("label", "suspicious_object"),
+                "confidence": float(det.get("confidence") or 0.85),
+                "bbox": [f"{left_pct:.2f}%", f"{top_pct:.2f}%", f"{w_pct:.2f}%", f"{h_pct:.2f}%"]
+            })
 
     image_url_full = file_path if is_remote else f"http://localhost:8000/{file_path}"
     result_data = {"objects": objects, "image_url": image_url_full}
 
-    det_record = {
-        "case_id": req.case_id,
-        "evidence_id": req.evidence_id,
-        "image_url": image_url_full,
-        "predictions": {"objects": objects}
-    }
-    supabase_admin.table("detections").insert(det_record).execute()
+    # ---------------------------------------------------------
+    # Original Code (Alisha) - Cloud Supabase Storage:
+    # det_record = {
+    #     "case_id": req.case_id,
+    #     "evidence_id": req.evidence_id,
+    #     "image_url": image_url_full,
+    #     "predictions": {"objects": objects}
+    # }
+    # supabase_admin.table("detections").insert(det_record).execute()
+    # ---------------------------------------------------------
+    # Updated: Save to local PostgreSQL database
+    try:
+        cid = uuid.UUID(req.case_id) if isinstance(req.case_id, str) else req.case_id
+        eid = uuid.UUID(req.evidence_id) if isinstance(req.evidence_id, str) else req.evidence_id
+        det_obj = Detection(
+            case_id=cid,
+            evidence_id=eid,
+            image_url=image_url_full,
+            predictions={"objects": objects}
+        )
+        db.add(det_obj)
+        db.commit()
+    except Exception as e:
+        db.rollback()
+        print(f"[WARN] Failed to save detection record to local DB: {e}")
 
     # Audit log for successful detection
     write_audit_log(
@@ -2198,11 +2295,22 @@ def run_ai_detect(req: DetectionRequest, request: Request, db: Session = Depends
     return {"data": result_data}
 
 @app.get("/ai/detect/case/{case_id}")
-def get_case_detections(case_id: str, request: Request):
+def get_case_detections(case_id: str, request: Request, db: Session = Depends(get_db)):
     user_info = get_current_user_info(request)
-    check_case_access(case_id, user_info)
-    res = supabase_admin.table("detections").select("*").eq("case_id", case_id).execute()
-    return {"data": res.data}
+    check_case_access(case_id, user_info, db)
+    # ---------------------------------------------------------
+    # Original Code (Alisha) - Supabase Query:
+    # res = supabase_admin.table("detections").select("*").eq("case_id", case_id).execute()
+    # return {"data": res.data}
+    # ---------------------------------------------------------
+    # Updated: Query from local PostgreSQL database
+    try:
+        cid = uuid.UUID(case_id) if isinstance(case_id, str) else case_id
+        records = db.query(Detection).filter(Detection.case_id == cid).all()
+        return {"data": [{"id": str(r.id), "case_id": str(r.case_id), "evidence_id": str(r.evidence_id), "image_url": r.image_url, "predictions": r.predictions, "created_at": str(r.created_at)} for r in records]}
+    except Exception as e:
+        print(f"[WARN] Failed to fetch detections from DB: {e}")
+        return {"data": []}
 
 @app.get("/ai/bns/case/{case_id}")
 def get_bns_case(case_id: str, request: Request):
@@ -3282,6 +3390,41 @@ def photogrammetry_job_status(job_id: str, request: Request):
         raise HTTPException(status_code=502, detail=f"Failed to communicate with photogrammetry server: {str(e)}")
 
 
+def ensure_background_services():
+    """Auto-detects and launches missing microservices (Ganache, BNS, Audio, Crime Detection, Photogrammetry, Frontend) if their ports are inactive."""
+    if not os.environ.get("AUTO_SPAWN_MICROSERVICES", "True").lower() in ("true", "1", "yes"):
+        return
+
+    import socket
+    import sys
+
+    def is_port_in_use(port: int) -> bool:
+        with socket.socket(socket.AF_INET, socket.SOCK_STREAM) as s:
+            s.settimeout(0.3)
+            return s.connect_ex(("127.0.0.1", port)) == 0
+
+    base_dir = os.path.dirname(os.path.dirname(os.path.abspath(__file__)))
+    services_to_check = [
+        ("Ganache Blockchain", 8545, ["npx", "ganache", "--server.host", "127.0.0.1", "--server.port", "8545", "--chain.chainId", "1337", "--wallet.deterministic", "--database.dbPath", "./ganache-data"], os.path.join(base_dir, "blockchain")),
+        ("BNS ML Service", 8001, ["py", "-3.10", "-m", "uvicorn", "app.main:app", "--port", "8001", "--reload"], os.path.join(base_dir, "bns-backend")),
+        ("Audio Forensics", 8002, ["py", "-3.10", "app.py"], os.path.join(base_dir, "audio-backend")),
+        ("Crime Detection", 8003, ["py", "-3.10", "main.py"], os.path.join(base_dir, "crime-detection")),
+        ("Photogrammetry", 8004, ["py", "-3.10", "app.py"], os.path.join(base_dir, "photogrammetry-backend")),
+        ("React Frontend", 5173, ["npm", "run", "dev"], os.path.join(base_dir, "audit-frontend")),
+    ]
+
+    for name, port, cmd, cwd in services_to_check:
+        if not is_port_in_use(port):
+            print(f"[AUTO-LAUNCH] Port {port} ({name}) is inactive. Launching service...")
+            try:
+                is_shell = sys.platform == "win32" and (cmd[0] in ("npx", "npm"))
+                subprocess.Popen(cmd, cwd=cwd, shell=is_shell)
+                print(f"[AUTO-LAUNCH] Started {name} successfully.")
+            except Exception as exc:
+                print(f"[AUTO-LAUNCH] Failed to launch {name}: {exc}")
+
+
 if __name__ == "__main__":
     import uvicorn
+    ensure_background_services()
     uvicorn.run(app, host="0.0.0.0", port=8000)

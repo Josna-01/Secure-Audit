@@ -394,8 +394,8 @@ export function BNSPage() {
       if (data.bns && data.bns.length > 0) {
         setExpandedSection(data.bns[0].section_id)
       }
-    } catch { 
-      setErr('Classification failed. The BNS prediction service is unavailable. Please ensure the BNS server is running (uvicorn app.main:app --port 8001 in bns-backend/).') 
+    } catch {
+      setErr('Classification failed. The BNS prediction service is unavailable. Please ensure the BNS server is running (uvicorn app.main:app --port 8001 in bns-backend/).')
     }
     finally { setRunning(false) }
   }
@@ -410,38 +410,55 @@ export function BNSPage() {
     }
   }
 
-  // Filter sections by category or threshold
-  const displayedSections = (result?.bns || result?.sections || []).filter(s => {
-    if (filterCategory !== 'all' && s.category !== filterCategory) return false
-    const sc = s.confidence !== undefined ? s.confidence : (s.score || 0)
-    return sc >= threshold
+  // Filter sections by confidence threshold and sort from highest to lowest
+  const rawSections = (result?.bns || result?.sections || [])
+  const thresholdPassedSections = rawSections
+    .filter((s: any) => {
+      const sc = s.confidence !== undefined ? s.confidence : (s.score || 0)
+      return sc >= threshold
+    })
+    .sort((a: any, b: any) => {
+      const scA = a.confidence !== undefined ? a.confidence : (a.score || 0)
+      const scB = b.confidence !== undefined ? b.confidence : (b.score || 0)
+      return scB - scA
+    })
+
+  // Dynamic available categories from current threshold predictions
+  const availableCategories: string[] = Array.from(
+    new Set(thresholdPassedSections.map((s: any) => s.category).filter(Boolean))
+  )
+
+  // Displayed sections based on category selection
+  const displayedSections = thresholdPassedSections.filter((s: any) => {
+    if (filterCategory === 'all') return true
+    return s.category === filterCategory
   })
 
   return (
     <AppShell title="BNS Multi-Label Legal Classification & Explainability">
-      <div style={{ display: 'grid', gridTemplateColumns: '4fr 6fr', gap: '20px', alignItems: 'start' }}>
+      <div style={{ display: 'grid', gridTemplateColumns: 'minmax(0, 3.8fr) minmax(0, 6.2fr)', gap: '16px', alignItems: 'start', width: '100%', maxWidth: '100%', boxSizing: 'border-box' }}>
         {/* Left Column: FIR Input & Controls */}
-        <div style={{ display: 'flex', flexDirection: 'column', gap: '16px' }}>
+        <div style={{ display: 'flex', flexDirection: 'column', gap: '16px', minWidth: 0, width: '100%' }}>
           <Card>
             <CardTitle>FIR Narrative Input</CardTitle>
             {err && <div style={{ marginBottom: '12px' }}><AlertBox type="error">{err}</AlertBox></div>}
-            
+
             <div style={{ marginBottom: '12px' }}>
               <label style={{ fontSize: '11px', color: 'var(--text3)', display: 'block', marginBottom: '4px', textTransform: 'uppercase', letterSpacing: '.4px' }}>Case Reference</label>
-              <input 
-                value={caseSearch} 
-                onChange={(e) => { setCaseSearch(e.target.value); searchCases(e.target.value) }} 
-                placeholder="Search case number or title to auto-fill FIR..." 
-                style={{ width: '100%', background: 'var(--bg3)', border: '1px solid var(--border)', borderRadius: 'var(--r)', padding: '8px 12px', fontSize: '13px', color: 'var(--text)', fontFamily: 'var(--font)', outline: 'none' }} 
+              <input
+                value={caseSearch}
+                onChange={(e) => { setCaseSearch(e.target.value); searchCases(e.target.value) }}
+                placeholder="Search case number or title to auto-fill FIR..."
+                style={{ width: '100%', boxSizing: 'border-box', background: 'var(--bg3)', border: '1px solid var(--border)', borderRadius: 'var(--r)', padding: '8px 12px', fontSize: '13px', color: 'var(--text)', fontFamily: 'var(--font)', outline: 'none' }}
               />
               {caseResults.length > 0 && !selectedCase && (
                 <div style={{ background: 'var(--bg2)', border: '1px solid var(--border)', borderRadius: 'var(--r)', marginTop: '4px', maxHeight: '180px', overflowY: 'auto' }}>
                   {caseResults.map((c) => (
-                    <div 
-                      key={c.id} 
-                      onClick={() => selectCase(c)} 
-                      style={{ padding: '8px 12px', cursor: 'pointer', fontSize: '12px', borderBottom: '1px solid var(--border)' }} 
-                      onMouseEnter={(e) => { e.currentTarget.style.background = 'var(--bg3)' }} 
+                    <div
+                      key={c.id}
+                      onClick={() => selectCase(c)}
+                      style={{ padding: '8px 12px', cursor: 'pointer', fontSize: '12px', borderBottom: '1px solid var(--border)' }}
+                      onMouseEnter={(e) => { e.currentTarget.style.background = 'var(--bg3)' }}
                       onMouseLeave={(e) => { e.currentTarget.style.background = 'transparent' }}
                     >
                       <span style={{ fontFamily: 'var(--mono)', color: 'var(--blue)', fontWeight: 600 }}>{c.case_number}</span> — {c.title}
@@ -450,7 +467,7 @@ export function BNSPage() {
                 </div>
               )}
               {selectedCase && (
-                <div style={{ marginTop: '6px', fontSize: '12px', color: 'var(--blue)', display: 'flex', alignItems: 'center', gap: '6px' }}>
+                <div style={{ marginTop: '6px', fontSize: '12px', color: 'var(--blue)', display: 'flex', alignItems: 'center', gap: '6px', flexWrap: 'wrap' }}>
                   <span>Linked:</span>
                   <span style={{ fontFamily: 'var(--mono)', fontWeight: 600 }}>{selectedCase.case_number}</span>
                   <span style={{ color: 'var(--text2)' }}>— {selectedCase.title}</span>
@@ -465,12 +482,12 @@ export function BNSPage() {
               </select>
             </div>
 
-            <textarea 
-              value={firText} 
-              onChange={(e) => setFirText(e.target.value)} 
-              rows={16} 
-              placeholder="Paste full First Information Report (FIR) narrative. The multi-label engine will analyze all sentences to identify every applicable BNS section..." 
-              style={{ width: '100%', background: 'var(--bg3)', border: '1px solid var(--border)', borderRadius: 'var(--r)', padding: '10px 12px', fontSize: '13px', color: 'var(--text)', fontFamily: 'var(--font)', outline: 'none', resize: 'vertical', lineHeight: 1.6, marginBottom: '14px' }} 
+            <textarea
+              value={firText}
+              onChange={(e) => setFirText(e.target.value)}
+              rows={16}
+              placeholder="Paste full First Information Report (FIR) narrative. The multi-label engine will analyze all sentences to identify every applicable BNS section..."
+              style={{ width: '100%', boxSizing: 'border-box', background: 'var(--bg3)', border: '1px solid var(--border)', borderRadius: 'var(--r)', padding: '10px 12px', fontSize: '13px', color: 'var(--text)', fontFamily: 'var(--font)', outline: 'none', resize: 'vertical', lineHeight: 1.6, marginBottom: '14px' }}
             />
 
             {/* Configurable Threshold Slider */}
@@ -479,12 +496,12 @@ export function BNSPage() {
                 <span style={{ fontSize: '11px', fontWeight: 600, color: 'var(--text2)', textTransform: 'uppercase', letterSpacing: '.3px' }}>Confidence Cutoff Threshold</span>
                 <span style={{ fontFamily: 'var(--mono)', fontSize: '13px', fontWeight: 700, color: 'var(--purple)' }}>{Math.round(threshold * 100)}%</span>
               </div>
-              <input 
-                type="range" 
-                min="0.20" 
-                max="0.80" 
-                step="0.05" 
-                value={threshold} 
+              <input
+                type="range"
+                min="0.20"
+                max="0.80"
+                step="0.05"
+                value={threshold}
                 onChange={(e) => setThreshold(parseFloat(e.target.value))}
                 style={{ width: '100%', accentColor: 'var(--purple)', cursor: 'pointer', marginBottom: '8px' }}
               />
@@ -518,12 +535,12 @@ export function BNSPage() {
         </div>
 
         {/* Right Column: Multi-Label Predictions & Explainability Dossier */}
-        <div style={{ display: 'flex', flexDirection: 'column', gap: '16px' }}>
+        <div style={{ display: 'flex', flexDirection: 'column', gap: '16px', minWidth: 0, width: '100%' }}>
           <Card>
             <CardHeader>
               <CardTitle>BNS Legal Classification Dossier</CardTitle>
               <span style={{ fontSize: '11px', color: result ? 'var(--green)' : 'var(--text3)', fontWeight: 500 }}>
-                {result ? `${displayedSections.length} Applicable Sections Identified` : 'Awaiting FIR Analysis'}
+                {result ? `${displayedSections.length} ${displayedSections.length === 1 ? 'Applicable Section Identified' : 'Applicable Sections Identified'}` : 'Awaiting FIR Analysis'}
               </span>
             </CardHeader>
 
@@ -561,74 +578,72 @@ export function BNSPage() {
             )}
 
             {result && (
-              <div>
+              <div style={{ width: '100%', minWidth: 0, boxSizing: 'border-box' }}>
                 {/* Header Summary Banner */}
-                <div style={{ padding: '12px 14px', background: 'var(--purple-bg)', border: '1px solid var(--purple)', borderRadius: 'var(--r)', marginBottom: '16px' }}>
-                  <div style={{ display: 'flex', justifyContent: 'space-between', alignItems: 'center', marginBottom: '6px' }}>
+                <div style={{ padding: '12px 14px', background: 'var(--purple-bg)', border: '1px solid var(--purple)', borderRadius: 'var(--r)', marginBottom: '16px', boxSizing: 'border-box' }}>
+                  <div style={{ display: 'flex', justifyContent: 'space-between', alignItems: 'center', marginBottom: '6px', flexWrap: 'wrap', gap: '6px' }}>
                     <span style={{ fontSize: '11px', fontWeight: 600, color: 'var(--purple)', textTransform: 'uppercase', letterSpacing: '.4px' }}>
                       Primary Incident Classification
                     </span>
                     <span style={{ fontSize: '11px', fontFamily: 'var(--mono)', color: 'var(--purple)', fontWeight: 700 }}>
-                      {displayedSections.length} Sections Applicable
+                      {thresholdPassedSections.length} {thresholdPassedSections.length === 1 ? 'Section Applicable' : 'Sections Applicable'}
                     </span>
                   </div>
-                  <div style={{ fontSize: '14px', fontWeight: 700, color: 'var(--text)', marginBottom: '6px' }}>
+                  <div style={{ fontSize: '14px', fontWeight: 700, color: 'var(--text)', marginBottom: '6px', wordBreak: 'break-word' }}>
                     {result.crime_type}
                   </div>
-                  {result.crime_categories && result.crime_categories.length > 0 && (
-                    <div style={{ display: 'flex', flexWrap: 'wrap', gap: '4px', marginTop: '6px' }}>
-                      {result.crime_categories.map((cat, idx) => (
-                        <span key={idx} style={{ fontSize: '10px', background: 'var(--bg2)', color: 'var(--text2)', border: '1px solid var(--border)', borderRadius: '3px', padding: '2px 6px' }}>
+                  {availableCategories && availableCategories.length > 0 && (
+                    <div style={{ display: 'flex', flexWrap: 'wrap', gap: '4px', marginTop: '6px', alignItems: 'center' }}>
+                      {availableCategories.slice(0, 4).map((cat: string, idx: number) => (
+                        <span key={idx} style={{ fontSize: '10px', background: 'var(--bg2)', color: 'var(--text2)', border: '1px solid var(--border)', borderRadius: '3px', padding: '2px 6px', wordBreak: 'break-word' }}>
                           {cat}
                         </span>
                       ))}
+                      {availableCategories.length > 4 && (
+                        <span style={{ fontSize: '10px', color: 'var(--purple)', fontFamily: 'var(--mono)', fontWeight: 600, padding: '2px 4px' }}>
+                          +{availableCategories.length - 4} more
+                        </span>
+                      )}
                     </div>
                   )}
                 </div>
 
-                {/* Filter / Category Selector */}
-                {result.crime_categories && result.crime_categories.length > 1 && (
-                  <div style={{ display: 'flex', gap: '6px', alignItems: 'center', marginBottom: '14px', overflowX: 'auto', paddingBottom: '4px' }}>
-                    <span style={{ fontSize: '10px', color: 'var(--text3)', textTransform: 'uppercase', minWidth: '45px' }}>Filter:</span>
-                    <button
-                      type="button"
-                      onClick={() => setFilterCategory('all')}
+                {/* Filter / Category Selector Dropdown */}
+                {availableCategories && availableCategories.length > 1 && (
+                  <div style={{ display: 'flex', gap: '10px', alignItems: 'center', marginBottom: '14px', background: 'var(--bg2)', border: '1px solid var(--border)', borderRadius: 'var(--r)', padding: '8px 12px', boxSizing: 'border-box', width: '100%' }}>
+                    <label style={{ fontSize: '11px', fontWeight: 600, color: 'var(--text3)', textTransform: 'uppercase', letterSpacing: '.4px', whiteSpace: 'nowrap' }}>
+                      Filter by Category:
+                    </label>
+                    <select
+                      value={filterCategory}
+                      onChange={(e) => setFilterCategory(e.target.value)}
                       style={{
-                        padding: '3px 8px',
-                        fontSize: '11px',
-                        borderRadius: 'var(--r)',
+                        flex: 1,
+                        background: 'var(--bg3)',
                         border: '1px solid var(--border)',
-                        background: filterCategory === 'all' ? 'var(--blue)' : 'var(--bg3)',
-                        color: filterCategory === 'all' ? '#fff' : 'var(--text3)',
-                        cursor: 'pointer'
+                        borderRadius: 'var(--r)',
+                        padding: '6px 10px',
+                        fontSize: '12px',
+                        color: 'var(--text)',
+                        fontFamily: 'var(--font)',
+                        outline: 'none',
+                        cursor: 'pointer',
+                        minWidth: 0
                       }}
                     >
-                      All ({result.bns?.length || 0})
-                    </button>
-                    {result.crime_categories.map((cat, i) => (
-                      <button
-                        key={i}
-                        type="button"
-                        onClick={() => setFilterCategory(cat)}
-                        style={{
-                          padding: '3px 8px',
-                          fontSize: '11px',
-                          borderRadius: 'var(--r)',
-                          border: '1px solid var(--border)',
-                          background: filterCategory === cat ? 'var(--blue)' : 'var(--bg3)',
-                          color: filterCategory === cat ? '#fff' : 'var(--text3)',
-                          cursor: 'pointer',
-                          whiteSpace: 'nowrap'
-                        }}
-                      >
-                        {cat}
-                      </button>
-                    ))}
+                      <option value="all">All Categories ({thresholdPassedSections.length} Sections)</option>
+                      {availableCategories.map((cat: string, i: number) => {
+                        const count = thresholdPassedSections.filter((s: any) => s.category === cat).length
+                        return (
+                          <option key={i} value={cat}>{cat} ({count})</option>
+                        )
+                      })}
+                    </select>
                   </div>
                 )}
 
                 {/* Ranked Section Predictions */}
-                <div style={{ display: 'flex', flexDirection: 'column', gap: '12px' }}>
+                <div style={{ display: 'flex', flexDirection: 'column', gap: '12px', width: '100%' }}>
                   {displayedSections.length === 0 && (
                     <div style={{ padding: '20px', textAlign: 'center', color: 'var(--text3)', fontSize: '12px' }}>
                       No sections meet the {Math.round(threshold * 100)}% threshold. Lower the threshold slider to view secondary predictions.
@@ -639,7 +654,7 @@ export function BNSPage() {
                     const isExpanded = expandedSection === s.section_id
                     const confVal = s.confidence !== undefined ? s.confidence : (s.score || 0)
                     const confPct = s.confidence_percent || `${Math.round(confVal * 100)}%`
-                    
+
                     // Color code confidence badges
                     let badgeColor = 'var(--text3)'
                     let badgeBg = 'var(--bg3)'
@@ -659,67 +674,72 @@ export function BNSPage() {
                     }
 
                     return (
-                      <div 
-                        key={s.section_id} 
-                        style={{ 
-                          border: isExpanded ? '1px solid var(--purple)' : '1px solid var(--border)', 
-                          borderRadius: 'var(--r)', 
+                      <div
+                        key={s.section_id}
+                        style={{
+                          border: isExpanded ? '1px solid var(--purple)' : '1px solid var(--border)',
+                          borderRadius: 'var(--r)',
                           background: 'var(--bg2)',
                           overflow: 'hidden',
-                          transition: 'all .2s ease'
+                          transition: 'all .2s ease',
+                          width: '100%',
+                          boxSizing: 'border-box'
                         }}
                       >
                         {/* Section Header Card Bar */}
-                        <div 
-                          onClick={() => setExpandedSection(isExpanded ? null : s.section_id)} 
-                          style={{ 
-                            padding: '10px 14px', 
-                            cursor: 'pointer', 
-                            display: 'flex', 
-                            alignItems: 'center', 
+                        <div
+                          onClick={() => setExpandedSection(isExpanded ? null : s.section_id)}
+                          style={{
+                            padding: '10px 14px',
+                            cursor: 'pointer',
+                            display: 'flex',
+                            alignItems: 'center',
                             justifyContent: 'space-between',
                             gap: '12px',
-                            background: isExpanded ? 'var(--bg3)' : 'transparent'
+                            background: isExpanded ? 'var(--bg3)' : 'transparent',
+                            boxSizing: 'border-box',
+                            width: '100%'
                           }}
                         >
-                          <div style={{ display: 'flex', alignItems: 'center', gap: '10px', flex: 1, minWidth: 0 }}>
-                            <span style={{ 
-                              fontFamily: 'var(--mono)', 
-                              fontSize: '13px', 
-                              fontWeight: 700, 
-                              color: 'var(--purple)', 
-                              minWidth: '70px',
+                          <div style={{ display: 'flex', alignItems: 'center', gap: '10px', flex: 1, minWidth: 0, overflow: 'hidden' }}>
+                            <span style={{
+                              fontFamily: 'var(--mono)',
+                              fontSize: '12px',
+                              fontWeight: 700,
+                              color: 'var(--purple)',
+                              minWidth: '65px',
                               background: 'var(--purple-bg)',
                               padding: '2px 6px',
                               borderRadius: '4px',
-                              textAlign: 'center'
+                              textAlign: 'center',
+                              flexShrink: 0
                             }}>
                               BNS {s.section_id}
                             </span>
-                            <div style={{ minWidth: 0 }}>
-                              <div style={{ fontSize: '13px', fontWeight: 600, color: 'var(--text)', whiteSpace: 'nowrap', overflow: 'hidden', textOverflow: 'ellipsis' }}>
+                            <div style={{ minWidth: 0, flex: 1 }}>
+                              <div style={{ fontSize: '13px', fontWeight: 600, color: 'var(--text)', whiteSpace: 'normal', wordBreak: 'break-word' }}>
                                 {s.title || s.name}
                               </div>
-                              <div style={{ fontSize: '11px', color: 'var(--text3)' }}>
+                              <div style={{ fontSize: '11px', color: 'var(--text3)', whiteSpace: 'normal', wordBreak: 'break-word' }}>
                                 {s.category || 'Statutory Offence'}
                               </div>
                             </div>
                           </div>
 
                           {/* Confidence Gauge Badge */}
-                          <div style={{ display: 'flex', alignItems: 'center', gap: '12px' }}>
-                            <div style={{ width: '70px', height: '6px', background: 'var(--bg4)', borderRadius: '3px', overflow: 'hidden' }}>
+                          <div style={{ display: 'flex', alignItems: 'center', gap: '10px', flexShrink: 0 }}>
+                            <div style={{ width: '50px', height: '6px', background: 'var(--bg4)', borderRadius: '3px', overflow: 'hidden' }}>
                               <div style={{ width: `${Math.min(100, Math.round(confVal * 100))}%`, height: '100%', background: progressColor }} />
                             </div>
-                            <span style={{ 
-                              fontFamily: 'var(--mono)', 
-                              fontSize: '12px', 
-                              fontWeight: 700, 
-                              color: badgeColor, 
+                            <span style={{
+                              fontFamily: 'var(--mono)',
+                              fontSize: '12px',
+                              fontWeight: 700,
+                              color: badgeColor,
                               background: badgeBg,
-                              padding: '3px 8px',
+                              padding: '2px 6px',
                               borderRadius: '4px',
-                              minWidth: '48px',
+                              minWidth: '40px',
                               textAlign: 'right'
                             }}>
                               {confPct}
@@ -732,14 +752,14 @@ export function BNSPage() {
 
                         {/* Expandable Accordion Body */}
                         {isExpanded && (
-                          <div style={{ padding: '14px', borderTop: '1px solid var(--border)', background: 'var(--bg1)' }}>
+                          <div style={{ padding: '14px', borderTop: '1px solid var(--border)', background: 'var(--bg1)', boxSizing: 'border-box', width: '100%' }}>
                             {/* AI Explanation / Rationale Box */}
                             {s.explanation && (
-                              <div style={{ marginBottom: '12px', padding: '10px 12px', background: 'rgba(99, 102, 241, 0.08)', border: '1px solid rgba(99, 102, 241, 0.25)', borderRadius: 'var(--r)' }}>
+                              <div style={{ marginBottom: '12px', padding: '10px 12px', background: 'rgba(99, 102, 241, 0.08)', border: '1px solid rgba(99, 102, 241, 0.25)', borderRadius: 'var(--r)', wordBreak: 'break-word' }}>
                                 <div style={{ fontSize: '10px', fontWeight: 700, color: 'var(--blue)', textTransform: 'uppercase', letterSpacing: '.4px', marginBottom: '4px' }}>
                                   💡 AI Legal Explanation &amp; Rationale
                                 </div>
-                                <div style={{ fontSize: '12px', color: 'var(--text)', lineHeight: 1.5 }}>
+                                <div style={{ fontSize: '12px', color: 'var(--text)', lineHeight: 1.5, wordBreak: 'break-word' }}>
                                   {s.explanation}
                                 </div>
                               </div>
@@ -752,7 +772,7 @@ export function BNSPage() {
                                   Evidentiary Trigger Citations from FIR
                                 </div>
                                 {s.trigger_sentences.map((sent: string, sIdx: number) => (
-                                  <div key={sIdx} style={{ fontSize: '12px', fontStyle: 'italic', color: 'var(--text2)', background: 'var(--bg3)', borderLeft: '3px solid var(--purple)', padding: '6px 10px', borderRadius: '0 4px 4px 0', marginBottom: '4px' }}>
+                                  <div key={sIdx} style={{ fontSize: '12px', fontStyle: 'italic', color: 'var(--text2)', background: 'var(--bg3)', borderLeft: '3px solid var(--purple)', padding: '6px 10px', borderRadius: '0 4px 4px 0', marginBottom: '4px', wordBreak: 'break-word' }}>
                                     "{sent}"
                                   </div>
                                 ))}
@@ -764,7 +784,7 @@ export function BNSPage() {
                               <div style={{ fontSize: '10px', fontWeight: 700, color: 'var(--text3)', textTransform: 'uppercase', letterSpacing: '.4px', marginBottom: '4px' }}>
                                 Statutory Meaning &amp; Definition
                               </div>
-                              <div style={{ fontSize: '12px', color: 'var(--text2)', lineHeight: 1.5 }}>
+                              <div style={{ fontSize: '12px', color: 'var(--text2)', lineHeight: 1.5, wordBreak: 'break-word' }}>
                                 {s.description || s.meaning}
                               </div>
                             </div>
@@ -787,7 +807,7 @@ export function BNSPage() {
                                 </span>
                               )}
                               {s.punishment && (
-                                <span style={{ fontSize: '11px', background: 'var(--bg3)', border: '1px solid var(--border)', borderRadius: '3px', padding: '2px 8px', color: 'var(--text2)' }}>
+                                <span style={{ fontSize: '11px', background: 'var(--bg3)', border: '1px solid var(--border)', borderRadius: '3px', padding: '2px 8px', color: 'var(--text2)', wordBreak: 'break-word' }}>
                                   Punishment: <strong>{typeof s.punishment === 'string' ? s.punishment : JSON.stringify(s.punishment)}</strong>
                                 </span>
                               )}
@@ -847,6 +867,14 @@ export function OCRPage() {
   const [searchResults, setSearchResults] = useState<any[]>([])
 
   useEffect(() => {
+    api.getCases({ per_page: 1 }).then((res) => {
+      if (res.data && res.data.length > 0) {
+        setSelectedCase(res.data[0])
+      }
+    }).catch(() => { })
+  }, [])
+
+  useEffect(() => {
     if (!file || !file.type.startsWith('image/')) {
       setPreviewUrl(null)
       return
@@ -863,8 +891,8 @@ export function OCRPage() {
   }
 
   const runExtract = async () => {
-    if (!selectedCase) { alert('Please search and select a case reference first.'); return }
-    if (!file) { alert('Please upload a scanned document or image.'); return }
+    if (!selectedCase) { setOcrError('Please search and select a case reference first.'); return }
+    if (!file) { setOcrError('Please upload a scanned document or image.'); return }
     setRunning(true)
     setResult(null)
     setOcrError('')
@@ -872,7 +900,7 @@ export function OCRPage() {
       // 1. Upload file as case evidence first
       let evidenceId: string
       try {
-        const uploadRes = await api.uploadEvidence(selectedCase.id, file, { 
+        const uploadRes = await api.uploadEvidence(selectedCase.id, file, {
           evidence_type: file.type.includes('pdf') ? 'Document' : 'Image',
           description: 'Uploaded for OCR text extraction.'
         })
@@ -898,7 +926,7 @@ export function OCRPage() {
           throw uploadErr
         }
       }
-      
+
       // 2. Execute OCR processing on evidence ID
       const res = await api.runOCR(evidenceId, language)
       // Keep compatibility with older OCR responses while immediately
@@ -939,21 +967,21 @@ export function OCRPage() {
           <div style={{ display: 'flex', flexDirection: 'column', gap: '16px' }}>
             <Card>
               <CardTitle>Case Link & Configuration</CardTitle>
-              
+
               <div style={{ marginBottom: '12px' }}>
                 <label style={{ fontSize: '11px', color: 'var(--text3)', display: 'block', marginBottom: '4px', textTransform: 'uppercase', letterSpacing: '.4px' }}>Case Reference</label>
-                <input 
-                  value={caseSearch} 
-                  onChange={(e) => { setCaseSearch(e.target.value); searchCases(e.target.value) }} 
-                  placeholder="Search case by title or number..." 
-                  style={{ width: '100%', background: 'var(--bg3)', border: '1px solid var(--border)', borderRadius: 'var(--r)', padding: '7px 10px', fontSize: '13px', color: 'var(--text)', fontFamily: 'var(--font)', outline: 'none' }} 
+                <input
+                  value={caseSearch}
+                  onChange={(e) => { setCaseSearch(e.target.value); searchCases(e.target.value) }}
+                  placeholder="Search case by title or number..."
+                  style={{ width: '100%', background: 'var(--bg3)', border: '1px solid var(--border)', borderRadius: 'var(--r)', padding: '7px 10px', fontSize: '13px', color: 'var(--text)', fontFamily: 'var(--font)', outline: 'none' }}
                 />
                 {caseResults.length > 0 && !selectedCase && (
                   <div style={{ background: 'var(--bg2)', border: '1px solid var(--border)', borderRadius: 'var(--r)', marginTop: '4px' }}>
                     {caseResults.map((c) => (
-                      <div 
-                        key={c.id} 
-                        onClick={() => { setSelectedCase(c); setCaseSearch(''); setCaseResults([]) }} 
+                      <div
+                        key={c.id}
+                        onClick={() => { setSelectedCase(c); setCaseSearch(''); setCaseResults([]) }}
                         style={{ padding: '8px 10px', cursor: 'pointer', fontSize: '12px', borderBottom: '1px solid var(--border)' }}
                         onMouseEnter={(e) => { e.currentTarget.style.background = 'var(--bg3)' }}
                         onMouseLeave={(e) => { e.currentTarget.style.background = 'transparent' }}
@@ -973,9 +1001,9 @@ export function OCRPage() {
 
               <div style={{ marginBottom: '12px' }}>
                 <label style={{ fontSize: '11px', color: 'var(--text3)', display: 'block', marginBottom: '4px', textTransform: 'uppercase', letterSpacing: '.4px' }}>OCR Language Mode</label>
-                <select 
-                  value={language} 
-                  onChange={(e) => setLanguage(e.target.value)} 
+                <select
+                  value={language}
+                  onChange={(e) => setLanguage(e.target.value)}
                   style={{ width: '100%', background: 'var(--bg3)', border: '1px solid var(--border)', borderRadius: 'var(--r)', padding: '7px 10px', fontSize: '12px', color: 'var(--text)', fontFamily: 'var(--font)', outline: 'none' }}
                 >
                   <option value="auto">Auto-detect (all supported languages)</option>
@@ -1009,23 +1037,6 @@ export function OCRPage() {
               <Btn variant="primary" full loading={running} onClick={runExtract}>
                 Process Scanned Document
               </Btn>
-            </Card>
-
-            <Card>
-              <CardTitle>Technical Reference</CardTitle>
-              {[
-                ['Engine', 'PaddleOCR + Tesseract (Kannada, Malayalam)'],
-                ['Languages', 'English · Hindi · Kannada · Telugu · Tamil · Malayalam'],
-                ['Orientation', 'Page rotation + skew correction'],
-                ['Enhancement', 'Adaptive upscaling, denoise, contrast (only when needed)'],
-                ['Layout', 'Paragraphs, lists and tables preserved'],
-                ['Output Standard', 'Page-wise results for images, TIFF and PDF']
-              ].map(([k, v]) => (
-                <div key={k} style={{ display: 'flex', gap: '10px', padding: '5px 0', borderBottom: '1px solid var(--border)' }}>
-                  <span style={{ fontSize: '11px', color: 'var(--text3)', minWidth: '130px' }}>{k}</span>
-                  <span style={{ fontSize: '11px', color: 'var(--text2)' }}>{v}</span>
-                </div>
-              ))}
             </Card>
           </div>
 
@@ -1071,7 +1082,7 @@ export function OCRPage() {
           <Card>
             <CardTitle>Search OCR Content across Scanned Evidence</CardTitle>
             <div style={{ display: 'flex', gap: '12px' }}>
-              <input 
+              <input
                 value={searchQuery}
                 onChange={(e) => setSearchQuery(e.target.value)}
                 onKeyDown={(e) => { if (e.key === 'Enter') handleSearch() }}
@@ -1105,7 +1116,7 @@ export function OCRPage() {
                     {ev.file_name} <span style={{ fontSize: '11px', color: 'var(--text3)', fontWeight: 400 }}>({ev.file_type})</span>
                   </div>
                   <div style={{ fontSize: '11px', color: 'var(--text3)', marginTop: '2px' }}>
-                    Case: <span 
+                    Case: <span
                       onClick={() => navigate(`/cases/${ev.case_id}`)}
                       style={{ color: 'var(--blue)', cursor: 'pointer', fontWeight: 500 }}
                     >
@@ -1120,8 +1131,8 @@ export function OCRPage() {
                 <div key={idx} style={{ background: 'var(--bg3)', border: '1px solid var(--border)', borderRadius: 'var(--r)', padding: '10px 12px', marginBottom: '8px' }}>
                   <div style={{ display: 'flex', justifyContent: 'space-between', alignItems: 'center', marginBottom: '6px' }}>
                     <span style={{ fontSize: '10px', fontFamily: 'var(--mono)', color: 'var(--blue)', fontWeight: 600 }}>MATCH ON PAGE {m.page_number}</span>
-                    <Btn 
-                      size="xs" 
+                    <Btn
+                      size="xs"
                       onClick={() => {
                         navigator.clipboard.writeText(m.snippet);
                         alert('Snippet copied!');
@@ -1182,7 +1193,7 @@ function GLBViewer({ modelUrl, wireframe, resetKey }: { modelUrl: string, wirefr
 
     const controls = new OrbitControls(camera, renderer.domElement)
     controls.enableDamping = true
-    
+
     // Balanced studio lighting: ambient + key + fill + top
     scene.add(new THREE.AmbientLight(0xffffff, 1.2))
     const keyLight = new THREE.DirectionalLight(0xffffff, 1.8)
@@ -1276,7 +1287,7 @@ export function Photo3DPage() {
   const [selectedCaseId, setSelectedCaseId] = useState<string>('')
   const [evidenceList, setEvidenceList] = useState<Evidence[]>([])
   const [selectedEvidenceId, setSelectedEvidenceId] = useState<string>('')
-  
+
   const [status, setStatus] = useState<'Waiting' | 'Pending' | 'Processing' | 'Completed' | 'Failed'>('Waiting')
   const [jobDetails, setJobDetails] = useState<{
     model_url?: string
@@ -1286,7 +1297,7 @@ export function Photo3DPage() {
     completed_at?: string
     error_message?: string
   }>({})
-  
+
   const [pipelineStep, setPipelineStep] = useState<number>(1)
   const [isLogOpen, setIsLogOpen] = useState(false) // Default state: Collapsed
   const [viewMode, setViewMode] = useState<'orbit' | 'wireframe' | 'pointcloud'>('orbit')
@@ -1413,7 +1424,7 @@ export function Photo3DPage() {
         } else {
           setSelectedEvidenceId('')
         }
-        
+
         // Auto-load latest photogrammetry job for this case if one exists
         try {
           const latestJob = await api.getPhotogrammetryStatusByCase(selectedCaseId)
@@ -1636,7 +1647,7 @@ export function Photo3DPage() {
                 borderRadius: 'var(--r)', padding: '8px 12px', fontSize: '13px', color: 'var(--text)', outline: 'none'
               }}
             >
-            {evidenceList.length === 0 ? (
+              {evidenceList.length === 0 ? (
                 <option value="">No video evidence found for selected case</option>
               ) : (
                 evidenceList.map(ev => (
@@ -2177,9 +2188,9 @@ export function AuditPage() {
                     {expandedLogId === log.id && (() => {
                       const action = log.action || ''
                       const caseInfo = log.case_id ? `${log.case_number} - ${log.case_title}` : 'N/A'
-                      
+
                       let detailContent = null
-                      
+
                       if (action === 'User Activated') {
                         detailContent = (
                           <div style={{ display: 'grid', gridTemplateColumns: 'repeat(auto-fit, minmax(240px, 1fr))', gap: '16px' }}>

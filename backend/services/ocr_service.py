@@ -399,6 +399,54 @@ def _rotate(image: np.ndarray, angle: float) -> np.ndarray:
                           borderMode=cv2.BORDER_CONSTANT, borderValue=(255, 255, 255))
 
 
+def _correct_perspective(image: np.ndarray) -> Tuple[np.ndarray, bool]:
+    """Detect main document outline in angled/tilted photos and warp perspective."""
+    if not _env_bool("OCR_PERSPECTIVE_CORRECTION", True):
+        return image, False
+    h, w = image.shape[:2]
+    area = h * w
+    gray = cv2.cvtColor(image, cv2.COLOR_BGR2GRAY)
+    blurred = cv2.GaussianBlur(gray, (5, 5), 0)
+    edged = cv2.Canny(blurred, 50, 200)
+
+    contours, _ = cv2.findContours(edged, cv2.RETR_LIST, cv2.CHAIN_APPROX_SIMPLE)
+    contours = sorted(contours, key=cv2.contourArea, reverse=True)[:5]
+
+    for c in contours:
+        peri = cv2.arcLength(c, True)
+        approx = cv2.approxPolyDP(c, 0.02 * peri, True)
+        if len(approx) == 4 and cv2.contourArea(approx) >= 0.30 * area:
+            pts = approx.reshape(4, 2).astype("float32")
+            rect = np.zeros((4, 2), dtype="float32")
+            s = pts.sum(axis=1)
+            rect[0] = pts[np.argmin(s)]
+            rect[2] = pts[np.argmax(s)]
+            diff = np.diff(pts, axis=1)
+            rect[1] = pts[np.argmin(diff)]
+            rect[3] = pts[np.argmax(diff)]
+
+            (tl, tr, br, bl) = rect
+            widthA = np.sqrt(((br[0] - bl[0]) ** 2) + ((br[1] - bl[1]) ** 2))
+            widthB = np.sqrt(((tr[0] - tl[0]) ** 2) + ((tr[1] - tl[1]) ** 2))
+            maxWidth = max(int(widthA), int(widthB))
+
+            heightA = np.sqrt(((tr[0] - br[0]) ** 2) + ((tr[1] - br[1]) ** 2))
+            heightB = np.sqrt(((tl[0] - bl[0]) ** 2) + ((tl[1] - bl[1]) ** 2))
+            maxHeight = max(int(heightA), int(heightB))
+
+            if maxWidth > 200 and maxHeight > 200:
+                dst = np.array([
+                    [0, 0],
+                    [maxWidth - 1, 0],
+                    [maxWidth - 1, maxHeight - 1],
+                    [0, maxHeight - 1]
+                ], dtype="float32")
+                M = cv2.getPerspectiveTransform(rect, dst)
+                warped = cv2.warpPerspective(image, M, (maxWidth, maxHeight), flags=cv2.INTER_CUBIC, borderMode=cv2.BORDER_REPLICATE)
+                return warped, True
+    return image, False
+
+
 def preprocess_page(image: np.ndarray) -> Tuple[np.ndarray, Dict[str, Any]]:
     """Prepare a BGR page for PaddleOCR without degrading clean input.
 
@@ -406,14 +454,21 @@ def preprocess_page(image: np.ndarray) -> Tuple[np.ndarray, Dict[str, Any]]:
     colour images, so binarization and blanket filtering are deliberately
     avoided. Each step below is applied only when the page needs it:
 
+    * perspective correction for camera photos of tilted documents
     * downscale oversized pages / upscale low-resolution scans
     * denoise visibly noisy scans (edge-aware noise estimate)
     * local contrast enhancement (CLAHE) for faded or low-contrast pages
     * skew correction for tilted scans (90°/180° turns are handled later by
       PaddleOCR's document-orientation model)
+    * edge sharpening for low-resolution or upscaled images
     """
     info: Dict[str, Any] = {"original_width": int(image.shape[1]), "original_height": int(image.shape[0]),
                             "scale": 1.0, "skew_angle": 0.0, "enhancements": [], "blank": False}
+
+    image, corrected = _correct_perspective(image)
+    if corrected:
+        info["enhancements"].append("perspective_corrected")
+
     gray = cv2.cvtColor(image, cv2.COLOR_BGR2GRAY)
     if _is_blank(gray):
         info["blank"] = True
@@ -439,6 +494,9 @@ def preprocess_page(image: np.ndarray) -> Tuple[np.ndarray, Dict[str, Any]]:
         info["scale"] = factor
         image = cv2.resize(image, None, fx=factor, fy=factor, interpolation=cv2.INTER_CUBIC)
         info["enhancements"].append("upscaled")
+        gaussian = cv2.GaussianBlur(image, (0, 0), sigmaX=3.0)
+        image = cv2.addWeighted(image, 1.4, gaussian, -0.4, 0)
+        info["enhancements"].append("sharpened")
 
     gray = cv2.cvtColor(image, cv2.COLOR_BGR2GRAY)
     # Contrast between the paper (median) and the darkest ink; a global
@@ -505,6 +563,8 @@ def _crop_line(image: np.ndarray, polygon: Any, orientation: int) -> np.ndarray:
         crop = np.rot90(crop)
     if orientation == 1:  # textline classifier: 1 == upside down
         crop = cv2.rotate(crop, cv2.ROTATE_180)
+    # Add subtle border padding so ascenders/descenders are not clipped
+    crop = cv2.copyMakeBorder(crop, 2, 2, 2, 2, cv2.BORDER_CONSTANT, value=(255, 255, 255))
     return np.ascontiguousarray(crop)
 
 

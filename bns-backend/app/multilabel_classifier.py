@@ -187,9 +187,16 @@ class MultiLabelBNSClassifier:
         element_matches = 0
         triggering_reasons = []
 
-        # Count accused numbers
-        has_mob_size = bool(re.search(r'\b(five|six|seven|eight|nine|ten|[5-9]|\d{2,})\s*(persons|people|men|women|accused|attackers|assailants|rioters|members|individuals)\b', facts_lower))
-        has_multiple_accused = bool(re.search(r'\b(two|three|four|five|six|seven|eight|nine|ten|[2-9]|\d{2,})\s*(persons|people|men|women|accused|attackers|assailants|rioters|members|individuals)\b', facts_lower)) or bool(re.search(r'\b(multiple accused|co-accused|accomplices|acting in concert|jointly|together|along with (his|her|their) associates|two bike-borne|three bike-borne)\b', facts_lower))
+        # --- Original Code (Alisha) ---
+        # # Count accused numbers
+        # has_mob_size = bool(re.search(r'\b(five|six|seven|eight|nine|ten|[5-9]|\d{2,})\s*(persons|people|men|women|accused|attackers|assailants|rioters|members|individuals)\b', facts_lower))
+        # has_multiple_accused = bool(re.search(r'\b(two|three|four|five|six|seven|eight|nine|ten|[2-9]|\d{2,})\s*(persons|people|men|women|accused|attackers|assailants|rioters|members|individuals)\b', facts_lower)) or bool(re.search(r'\b(multiple accused|co-accused|accomplices|acting in concert|jointly|together|along with (his|her|their) associates|two bike-borne|three bike-borne)\b', facts_lower))
+        # ...
+        # --- End Original Code ---
+
+        # Count accused numbers with comprehensive numerical & textual patterns
+        has_mob_size = bool(re.search(r'\b(five|six|seven|eight|nine|ten|[5-9]|\d{2,})\s*(persons|people|men|women|accused|attackers|assailants|rioters|members|individuals|youths|culprits)\b', facts_lower)) or bool(re.search(r'\b(mob|crowd of|group of (five|six|seven|eight|nine|ten|[5-9]|\d{2,})|violent assembly)\b', facts_lower))
+        has_multiple_accused = has_mob_size or bool(re.search(r'\b(two|three|four|five|six|seven|eight|nine|ten|[2-9]|\d{2,})\s*(persons|people|men|women|accused|attackers|assailants|rioters|members|individuals|youths|culprits)\b', facts_lower)) or bool(re.search(r'\b(multiple accused|another accused|co-accused|accomplices|acting in concert|jointly|together|along with (his|her|their) associates|two bike-borne|three bike-borne|gang)\b', facts_lower))
         
         # 1. Joint Liability / Common Intention (3(5)) & Conspiracy (61)
         if section_id == "3(5)":
@@ -199,10 +206,12 @@ class MultiLabelBNSClassifier:
             else:
                 return 0.0, [], []
         elif section_id.startswith("61"):
-            conspiracy_match = bool(re.search(r'\b(conspiracy|conspired|secret agreement|hatched a conspiracy|planned jointly|plotted)\b', facts_lower))
-            if conspiracy_match or len(matched_kw) >= 1:
+            conspiracy_match = bool(re.search(r'\b(conspiracy|conspired|secret agreement|hatched a conspiracy|planned jointly|plotted|pre-planned)\b', facts_lower))
+            if conspiracy_match:
                 element_matches += 3
                 triggering_reasons.append("FIR records criminal conspiracy and advance agreement to commit an offence")
+            else:
+                return 0.0, [], []
 
         # 2. Criminal Intimidation & Insult (351, 352)
         elif section_id == "351":
@@ -213,11 +222,15 @@ class MultiLabelBNSClassifier:
             if threat_match or len(matched_kw) >= 1:
                 element_matches += 3
                 triggering_reasons.append("FIR contains explicit verbal or physical threats of injury, death, or harm")
+            else:
+                return 0.0, [], []
         elif section_id == "352":
             insult_match = bool(re.search(r'\b(insult|abusive insults|provoke a fight|provoke breach of peace|hurled abuses|foul language to provoke)\b', facts_lower))
             if insult_match or len(matched_kw) >= 1:
                 element_matches += 3
                 triggering_reasons.append("Intentional insult intended or known to be likely to provoke breach of the peace")
+            else:
+                return 0.0, [], []
 
         # 3. Mischief / Property Damage (324, 324(2), 324(4), 324(5))
         elif section_id.startswith("324"):
@@ -225,7 +238,7 @@ class MultiLabelBNSClassifier:
             is_public_prop = section_id == "324(5)"
             
             arson_match = bool(re.search(r'\b(fire|arson|set fire|set on fire|burnt|burned|burning|petrol bomb|poured petrol|inflammable|explosive)\b', facts_lower))
-            public_prop_match = bool(re.search(r'\b(public property|bus|train|station|road|bridge|electricity|telecom|government property|infrastructure|police vehicle|public bus)\b', facts_lower))
+            public_prop_match = bool(re.search(r'\b(public property|bus|train|station|railway|road|bridge|electricity|telecom|government property|government infrastructure|police vehicle|public bus|atm kiosk|hospital property)\b', facts_lower))
             damage_match = bool(re.search(
                 r'\b(damage|damaged|destroy|destroyed|destruction|vandalism|vandalized|smashed|broke|broken|breakage|ruined|shattered|crushed|loss to property|damaged vehicle|smashed windows|destroy the standing|poured petrol)\b',
                 facts_lower
@@ -241,12 +254,14 @@ class MultiLabelBNSClassifier:
                 if public_prop_match and damage_match:
                     element_matches += 4
                     triggering_reasons.append("FIR reports damage inflicted upon public property or essential infrastructure")
-                elif not damage_match:
+                else:
                     return 0.0, [], []
             else:
-                if damage_match or arson_match or len(matched_kw) >= 1:
+                if damage_match or arson_match:
                     element_matches += 3
                     triggering_reasons.append("FIR details intentional damage, vandalism, or destruction of property")
+                else:
+                    return 0.0, [], []
 
         # 4. Voluntarily Causing Hurt / Grievous Hurt / Weapons (114, 115, 116, 117, 118)
         elif section_id in ("114", "115(1)", "115(2)", "116", "117(1)", "117(2)", "117(3)", "117(4)", "118(1)", "118(2)"):
@@ -255,27 +270,38 @@ class MultiLabelBNSClassifier:
                 facts_lower
             ))
             weapon_match = bool(re.search(
-                r'\b(iron rod|knife|dagger|sword|lathi|stick|wooden stick|firearm|gun|pistol|sharp weapon|bludgeon|machete|heavy object|blunt weapon|heavy stone)\b',
+                r'\b(iron rod|knife|dagger|sword|lathi|stick|wooden stick|firearm|gun|pistol|sharp weapon|bludgeon|machete|heavy object|blunt weapon|heavy stone|dangerous weapon)\b',
                 facts_lower
             ))
             is_weapon_sec = section_id.startswith("118")
+            is_mob_grievous = section_id == "117(4)"
             is_grievous = section_id.startswith("117")
 
-            if is_weapon_sec:
+            if is_mob_grievous:
+                if hurt_match and has_mob_size:
+                    element_matches += 4
+                    triggering_reasons.append("FIR reports grievous hurt caused by a mob or group of five or more persons")
+                else:
+                    return 0.0, [], []
+            elif is_weapon_sec:
                 if (hurt_match or "assault" in facts_lower) and weapon_match:
                     element_matches += 4
                     triggering_reasons.append("FIR reports physical assault executed using dangerous or lethal weapons")
-                elif not weapon_match:
+                else:
                     return 0.0, [], []
             elif is_grievous:
                 grievous_words = bool(re.search(r'\b(fracture|grievous|severe|hospitalized|icu|head injury|broken bone|permanent damage|deep cut|stab wound|skull fracture)\b', facts_lower))
                 if hurt_match and (grievous_words or weapon_match):
                     element_matches += 3
                     triggering_reasons.append("FIR reports serious/grievous bodily injury or medical hospitalization")
+                else:
+                    return 0.0, [], []
             else:
                 if hurt_match:
                     element_matches += 3
                     triggering_reasons.append("FIR describes physical assault resulting in bodily hurt and pain")
+                else:
+                    return 0.0, [], []
 
         # 5. Acid Attack (124(1), 124(2))
         elif section_id in ("124(1)", "124(2)"):
@@ -288,10 +314,26 @@ class MultiLabelBNSClassifier:
 
         # 6. Theft / Snatching / Robbery / Dacoity (303(2), 304, 305, 306, 309(2), 310(2), 112)
         elif section_id in ("303(2)", "304", "305", "306", "309(2)", "310(2)", "111", "112"):
-            theft_part = bool(re.search(r'\b(stole|stolen|theft|took away|snatched|snatching|snatch|robbed|robbery|looted|demanded money|extorted|cash|jewellery|gold|purse|mobile|wallet|pickpocket|pickpockets|slitting bags)\b', facts_lower))
+            theft_part = bool(re.search(r'\b(stole|stolen|theft|took away|snatched|snatching|snatch|robbed|robbery|looted|demanded money|extorted|cash|jewellery|gold|purse|mobile|wallet|phone|pickpocket|pickpockets|slitting bags)\b', facts_lower))
             force_part = bool(re.search(r'\b(force|violence|weapon|knife|gun|assault|beat|threatened|fear of death|held at gunpoint|injured|pushed|fell on the road|gunpoint)\b', facts_lower))
             
-            if section_id == "310(2)":
+            # Context-Aware Guard: Theft in Dwelling House (305)
+            if section_id == "305":
+                dwelling_match = bool(re.search(r'\b(dwelling house|inside.*house|inside.*residence|inside.*building|inside.*home|inside.*apartment|inside.*flat|inside.*room|residential premises|entered.*tent|entered.*vessel)\b', facts_lower))
+                if theft_part and dwelling_match:
+                    element_matches += 4
+                    triggering_reasons.append("Theft committed inside a dwelling house, building, tent, or vessel used for human dwelling")
+                else:
+                    return 0.0, [], []
+            # Context-Aware Guard: Theft by Clerk / Servant (304)
+            elif section_id == "304":
+                clerk_servant_match = bool(re.search(r'\b(clerk|servant|employee|maid|driver|cook|cashier|accountant|staff member|domestic worker|office assistant)\b', facts_lower))
+                if theft_part and clerk_servant_match:
+                    element_matches += 4
+                    triggering_reasons.append("Theft committed by a clerk, servant, employee, or domestic staff having custody of property")
+                else:
+                    return 0.0, [], []
+            elif section_id == "310(2)":
                 if theft_part and force_part and has_mob_size:
                     element_matches += 4
                     triggering_reasons.append("Dacoity: robbery committed jointly by five or more persons")
@@ -314,25 +356,31 @@ class MultiLabelBNSClassifier:
                 if theft_part:
                     element_matches += 3
                     triggering_reasons.append("Theft / Snatching: dishonest taking of movable property without consent")
+                else:
+                    return 0.0, [], []
 
         # 7. Extortion (308, 309)
         elif section_id in ("308", "309"):
             extortion_match = bool(re.search(r'\b(extortion|extort|extortionists|extortion money|demanded ransom|demanded protection money|threatened to harm unless|hafta|protection fee|forced to sign|forced to pay|forced under threat of instant death|sign blank cheques)\b', facts_lower))
-            if extortion_match or len(matched_kw) >= 1:
+            if extortion_match:
                 element_matches += 4
                 triggering_reasons.append("Perpetrators intentionally put victim in fear of injury to dishonestly extract money, property, or valuable security")
+            else:
+                return 0.0, [], []
 
-        # 8. House-Trespass & House-Breaking & Criminal Trespass (329(1), 329(3), 331(1), 305)
-        elif section_id in ("329(1)", "329(3)", "331(1)", "305"):
+        # 8. House-Trespass & House-Breaking & Criminal Trespass (329(1), 329(3), 331(1))
+        elif section_id in ("329(1)", "329(3)", "331(1)"):
             trespass_match = bool(re.search(r'\b(broke open|broke lock|broke into|forced entry|entered house|entered residence|trespassed|trespassing|entered.*private|entered.*without authorization|shattered door|climbed wall|night break-in|dwelling)\b', facts_lower))
-            if trespass_match or len(matched_kw) >= 1:
+            if trespass_match:
                 element_matches += 3
                 triggering_reasons.append("Unlawful forced entry, house-breaking, or criminal trespass into property")
+            else:
+                return 0.0, [], []
 
         # 9. Rioting / Unlawful Assembly (189(1), 189(2), 190, 191(1))
         elif section_id.startswith("189") or section_id in ("190", "191(1)"):
             mob_match = bool(re.search(r'\b(mob|riot|rioting|violent crowd|clash|stone pelting|unlawful assembly|vandalizing crowd|armed mob|over twenty persons)\b', facts_lower))
-            if mob_match or len(matched_kw) >= 1:
+            if (mob_match or has_mob_size) and (len(matched_kw) >= 1 or "riot" in facts_lower or "assembly" in facts_lower or "mob" in facts_lower):
                 element_matches += 3
                 triggering_reasons.append("Offence committed by a violent assembly or mob of five or more persons with common object")
             else:
@@ -369,12 +417,20 @@ class MultiLabelBNSClassifier:
 
         # 11. Cyber & Financial Fraud / Cheating / Forgery / Impersonation (318, 318(4), 319, 336, 338, 340, 316(1), 316(2))
         elif section_id in ("318", "318(4)", "319", "336", "338", "340", "316(1)", "316(2)"):
-            fraud_match = bool(re.search(r'\b(cheat|cheated|cheating|fraud|fraudulent|scam|online transaction|fake documents|forged|forgery|phishing|crypto|misappropriated|breach of trust|embezzled|induced to transfer|bogus investment|fraudulently transfer|personated|impersonating|fake police|fake badge|fake uniform)\b', facts_lower))
+            fraud_match = bool(re.search(r'\b(cheat|cheated|cheating|fraud|fraudulent|scam|online transaction|fake documents|forged|forgery|phishing|crypto|misappropriated|breach of trust|embezzled|induced to transfer|bogus investment|fraudulently transfer|personated|impersonating|fake police|fake badge|fake uniform|debit card|credit card|atm|atm kiosk|unauthorized withdrawal|bank account)\b', facts_lower))
+            is_cyber = section_id == "318(4)"
             is_forgery = section_id in ("336", "338", "340")
             is_impersonation = section_id == "319"
             is_cbt = section_id.startswith("316")
 
-            if is_forgery:
+            if is_cyber:
+                cyber_words = bool(re.search(r'\b(atm|debit card|credit card|online|cyber|bank transfer|upi|phishing|crypto|fraudulent attempts|unauthorized transaction|electronic transfer|mobile phone.*switched off.*atm)\b', facts_lower))
+                if cyber_words or fraud_match:
+                    element_matches += 4
+                    triggering_reasons.append("Cyber & Financial Fraud: unauthorized use of electronic cards, ATM, or digital financial instruments")
+                else:
+                    return 0.0, [], []
+            elif is_forgery:
                 forgery_words = bool(re.search(r'\b(forged|forgery|fabricated|altered|fake receipts|forged signatures|bogus document|forged will)\b', facts_lower))
                 if forgery_words:
                     element_matches += 4
@@ -382,19 +438,25 @@ class MultiLabelBNSClassifier:
                 else:
                     return 0.0, [], []
             elif is_impersonation:
-                impers_words = bool(re.search(r'\b(personated|impersonating|impersonated|pretended to be|fake officer|fake police|false identity)\b', facts_lower))
-                if impers_words or fraud_match:
-                    element_matches += 3
+                impers_words = bool(re.search(r'\b(personated|impersonating|impersonated|pretended to be|fake officer|fake police|false identity|disguised as)\b', facts_lower))
+                if impers_words:
+                    element_matches += 4
                     triggering_reasons.append("Cheating by personation: pretending to be someone else or representing a false character")
+                else:
+                    return 0.0, [], []
             elif is_cbt:
-                cbt_words = bool(re.search(r'\b(entrusted|breach of trust|misappropriated|diverting corporate funds|accountant|employee)\b', facts_lower))
+                cbt_words = bool(re.search(r'\b(entrusted|breach of trust|misappropriated|diverting corporate funds|accountant|employee having custody)\b', facts_lower))
                 if cbt_words:
                     element_matches += 4
                     triggering_reasons.append("Criminal breach of trust: dishonest misappropriation of property entrusted to perpetrator")
+                else:
+                    return 0.0, [], []
             else:
-                if fraud_match or len(matched_kw) >= 1:
+                if fraud_match:
                     element_matches += 3
                     triggering_reasons.append("Cheating and dishonest inducement to deliver property or money")
+                else:
+                    return 0.0, [], []
 
         # 12. Domestic Cruelty / Dowry / Suicide Abetment (80, 85, 86, 107, 108, 45, 49)
         elif section_id in ("80", "85", "86", "107", "108", "45", "49"):
@@ -420,6 +482,8 @@ class MultiLabelBNSClassifier:
                 if domestic_match:
                     element_matches += 4
                     triggering_reasons.append("Matrimonial cruelty and unlawful harassment of woman by husband or relatives")
+                else:
+                    return 0.0, [], []
 
         # 13. Offences Against Women & Modesty (64, 69, 74, 75, 76, 77, 78, 79)
         elif section_id in ("64", "69", "74", "75", "76", "77", "78", "79"):
@@ -433,16 +497,26 @@ class MultiLabelBNSClassifier:
         # 14. Kidnapping / Abduction / Confinement (137, 138, 140)
         elif section_id.startswith("137") or section_id.startswith("140") or section_id == "138":
             kidnap_match = bool(re.search(r'\b(kidnap|kidnapped|kidnapping|abduct|abducted|abduction|taken away forcibly|hostage|confined|locked.*in.*godown|ransom demand|missing child)\b', facts_lower))
-            if kidnap_match or len(matched_kw) >= 1:
+            if kidnap_match:
                 element_matches += 4
                 triggering_reasons.append("Forcible abduction, unlawful detention, kidnapping, or wrongful confinement")
+            else:
+                return 0.0, [], []
 
         # 15. Rash Driving & Endangering Safety (281, 125)
         elif section_id in ("281", "125"):
             driving_match = bool(re.search(r'\b(rash driving|reckless driving|speeding car|speeding truck|hit and run|over-speeding|rammed into|negligent driving|endanger human life|personal safety)\b', facts_lower))
-            if driving_match or len(matched_kw) >= 1:
+            if driving_match:
                 element_matches += 4
                 triggering_reasons.append("Vehicle operated on public way in a rash or negligent manner endangering human safety")
+            else:
+                return 0.0, [], []
+
+        # General keyword credit
+        kw_ratio = len(matched_kw) / max(1, len(keywords))
+        score = min(1.0, (element_matches * 0.25) + (kw_ratio * 0.35))
+        
+        return score, matched_kw, triggering_reasons
 
         # General keyword credit
         kw_ratio = len(matched_kw) / max(1, len(keywords))

@@ -1,12 +1,12 @@
 import React, { useState } from 'react'
 import { useNavigate } from 'react-router-dom'
 import { AppShell } from '../components/Layout'
-import { Card, Btn, Input, Textarea, Select, AlertBox, StepWizard } from '../components/UI'
+import { Card, CardHeader, CardTitle, Btn, Input, Textarea, Select, AlertBox, StepWizard } from '../components/UI'
 import { api } from '../services/api'
 import type { Victim, Suspect } from '../types'
 
 const OFFENCE_TYPES = [
-  { value: '', label: 'Select type...' },
+  { value: '', label: 'Select offence type...' },
   { value: 'Robbery', label: 'Robbery' },
   { value: 'Assault', label: 'Assault' },
   { value: 'Murder', label: 'Murder' },
@@ -102,138 +102,350 @@ export default function CreateCase() {
   const updateSuspect = (i: number, val: string) => setSuspects((s) => s.map((x, idx) => idx === i ? { ...x, name: val } : x))
 
   return (
-    <AppShell title="Create Professional Case">
-      <Card style={{ maxWidth: '720px', margin: '0 auto' }}>
-        {step < 5 && <StepWizard steps={['Basics', 'People', 'FIR', 'Review']} current={step} />}
+    <AppShell title="Create Investigation Case">
+      <Card style={{ maxWidth: '780px', margin: '0 auto', padding: '28px 32px' }}>
+        {step < 5 && (
+          <div style={{ marginBottom: '28px' }}>
+            <StepWizard steps={['Investigation Basics', 'Persons & Witnesses', 'FIR Narrative', 'Verification & Review']} current={step} />
+          </div>
+        )}
 
-        {error && <div style={{ marginBottom: '16px' }}><AlertBox type="error">{error}</AlertBox></div>}
+        {error && <div style={{ marginBottom: '20px' }}><AlertBox type="error">{error}</AlertBox></div>}
 
         {/* Step 1 */}
         {step === 1 && (
-          <div style={{ display: 'flex', flexDirection: 'column', gap: '14px' }}>
+          <div style={{ display: 'flex', flexDirection: 'column', gap: '18px' }}>
             <div>
-              <label style={{ fontSize: '11px', color: 'var(--text3)', display: 'block', marginBottom: '4px', textTransform: 'uppercase', letterSpacing: '.4px' }}>Case Number (Auto-generated)</label>
-              <input value={autoId} disabled style={{ width: '100%', background: 'var(--bg3)', border: '1px solid var(--border)', borderRadius: 'var(--r)', padding: '7px 10px', fontSize: '13px', color: 'var(--text3)', fontFamily: 'var(--mono)', opacity: 0.6, outline: 'none' }} />
+              <label style={{ fontSize: '11.5px', fontWeight: 600, color: 'var(--text3)', display: 'block', marginBottom: '5px', textTransform: 'uppercase', letterSpacing: '0.04em' }}>
+                System Reference Identifier (Auto-generated)
+              </label>
+              <input
+                value={autoId}
+                disabled
+                style={{
+                  width: '100%',
+                  background: 'var(--bg3)',
+                  border: '1px solid var(--border)',
+                  borderRadius: 'var(--r)',
+                  padding: '9px 12px',
+                  fontSize: '13px',
+                  color: 'var(--blue)',
+                  fontFamily: 'var(--mono)',
+                  fontWeight: 600,
+                  opacity: 0.85,
+                  outline: 'none'
+                }}
+              />
             </div>
-            <Input label="Case Title *" placeholder="e.g. Robbery at City Bank" value={title} onChange={(e) => setTitle(e.target.value)} />
+
+            <Input
+              label="Investigation Title *"
+              placeholder="e.g. Armed Robbery at Downtown Jewelry Exchange"
+              value={title}
+              onChange={(e) => setTitle(e.target.value)}
+            />
+
             <div>
-              <Select label="Offence Type *" options={OFFENCE_TYPES} value={offenceType} onChange={(e) => setOffenceType(e.target.value)} />
+              <Select
+                label="Offence Category *"
+                options={OFFENCE_TYPES}
+                value={offenceType}
+                onChange={(e) => setOffenceType(e.target.value)}
+              />
               {offenceType === 'Other' && (
-                <input value={offenceCustom} onChange={(e) => setOffenceCustom(e.target.value)} placeholder="Specify offence type" style={{ marginTop: '8px', width: '100%', background: 'var(--bg3)', border: '1px solid var(--border)', borderRadius: 'var(--r)', padding: '7px 10px', fontSize: '13px', color: 'var(--text)', fontFamily: 'var(--font)', outline: 'none' }} />
+                <input
+                  value={offenceCustom}
+                  onChange={(e) => setOffenceCustom(e.target.value)}
+                  placeholder="Specify custom offence classification..."
+                  style={{
+                    marginTop: '8px',
+                    width: '100%',
+                    background: 'var(--bg3)',
+                    border: '1px solid var(--border)',
+                    borderRadius: 'var(--r)',
+                    padding: '8px 12px',
+                    fontSize: '13px',
+                    color: 'var(--text)',
+                    outline: 'none'
+                  }}
+                />
               )}
             </div>
-            <div style={{ display: 'grid', gridTemplateColumns: '1fr 1fr', gap: '10px' }}>
-              <Input label="Date of Incident" type="date" value={incidentDate} onChange={(e) => setIncidentDate(e.target.value)} />
-              <Input label="Time of Incident" type="time" value={incidentTime} onChange={(e) => setIncidentTime(e.target.value)} />
+
+            <div style={{ display: 'grid', gridTemplateColumns: '1fr 1fr', gap: '14px' }}>
+              <Input
+                label="Incident Date"
+                type="date"
+                value={incidentDate}
+                onChange={(e) => setIncidentDate(e.target.value)}
+              />
+              <Input
+                label="Incident Time"
+                type="time"
+                value={incidentTime}
+                onChange={(e) => setIncidentTime(e.target.value)}
+              />
             </div>
-            <Input label="Incident Location" placeholder="Street, Area, City" value={incidentLocation} onChange={(e) => setIncidentLocation(e.target.value)} />
+
+            <Input
+              label="Incident Location"
+              placeholder="Full landmark, Sector, District, City"
+              value={incidentLocation}
+              onChange={(e) => setIncidentLocation(e.target.value)}
+            />
           </div>
         )}
 
         {/* Step 2 */}
         {step === 2 && (
-          <div style={{ display: 'flex', flexDirection: 'column', gap: '16px' }}>
+          <div style={{ display: 'flex', flexDirection: 'column', gap: '20px' }}>
             <div>
-              <div style={{ fontSize: '12px', fontWeight: 500, color: 'var(--text)', marginBottom: '8px' }}>Victim(s) <span style={{ fontSize: '10px', color: 'var(--text3)' }}>— add multiple</span></div>
+              <div style={{ fontSize: '13px', fontWeight: 700, color: 'var(--text)', marginBottom: '10px' }}>
+                Victim(s) Details <span style={{ fontSize: '11px', color: 'var(--text3)', fontWeight: 400 }}>— add all injured or affected parties</span>
+              </div>
               {victims.map((v, i) => (
-                <div key={i} style={{ display: 'flex', gap: '8px', marginBottom: '8px' }}>
-                  <input value={v.name} onChange={(e) => updateVictim(i, e.target.value)} placeholder="Victim name, age, contact" style={{ flex: 1, background: 'var(--bg3)', border: '1px solid var(--border)', borderRadius: 'var(--r)', padding: '7px 10px', fontSize: '13px', color: 'var(--text)', fontFamily: 'var(--font)', outline: 'none' }} />
-                  {i === victims.length - 1 ? <Btn size="xs" variant="green" onClick={addVictim}>+ Add</Btn> : <Btn size="xs" variant="danger" onClick={() => removeVictim(i)}>Remove</Btn>}
+                <div key={i} style={{ display: 'flex', gap: '10px', marginBottom: '10px' }}>
+                  <input
+                    value={v.name}
+                    onChange={(e) => updateVictim(i, e.target.value)}
+                    placeholder="Victim name, age, contact, residential details..."
+                    style={{
+                      flex: 1,
+                      background: 'var(--bg3)',
+                      border: '1px solid var(--border)',
+                      borderRadius: 'var(--r)',
+                      padding: '8px 12px',
+                      fontSize: '13px',
+                      color: 'var(--text)',
+                      outline: 'none'
+                    }}
+                  />
+                  {i === victims.length - 1 ? (
+                    <Btn size="sm" variant="green" onClick={addVictim}>+ Add Victim</Btn>
+                  ) : (
+                    <Btn size="sm" variant="danger" onClick={() => removeVictim(i)}>Remove</Btn>
+                  )}
                 </div>
               ))}
             </div>
+
             <div style={{ height: '1px', background: 'var(--border)' }} />
+
             <div>
-              <div style={{ fontSize: '12px', fontWeight: 500, color: 'var(--text)', marginBottom: '8px' }}>Suspect(s) <span style={{ fontSize: '10px', color: 'var(--text3)' }}>— optional, can be Unknown</span></div>
+              <div style={{ fontSize: '13px', fontWeight: 700, color: 'var(--text)', marginBottom: '10px' }}>
+                Suspect(s) Information <span style={{ fontSize: '11px', color: 'var(--text3)', fontWeight: 400 }}>— optional, or marked as 'Unknown Suspect'</span>
+              </div>
               {suspects.map((s, i) => (
-                <div key={i} style={{ display: 'flex', gap: '8px', marginBottom: '8px' }}>
-                  <input value={s.name} onChange={(e) => updateSuspect(i, e.target.value)} placeholder="Suspect name or Unknown" style={{ flex: 1, background: 'var(--bg3)', border: '1px solid var(--border)', borderRadius: 'var(--r)', padding: '7px 10px', fontSize: '13px', color: 'var(--text)', fontFamily: 'var(--font)', outline: 'none' }} />
-                  {i === suspects.length - 1 ? <Btn size="xs" variant="green" onClick={addSuspect}>+ Add</Btn> : <Btn size="xs" variant="danger" onClick={() => removeSuspect(i)}>Remove</Btn>}
+                <div key={i} style={{ display: 'flex', gap: '10px', marginBottom: '10px' }}>
+                  <input
+                    value={s.name}
+                    onChange={(e) => updateSuspect(i, e.target.value)}
+                    placeholder="Suspect identity, alias, physical description, or Unknown..."
+                    style={{
+                      flex: 1,
+                      background: 'var(--bg3)',
+                      border: '1px solid var(--border)',
+                      borderRadius: 'var(--r)',
+                      padding: '8px 12px',
+                      fontSize: '13px',
+                      color: 'var(--text)',
+                      outline: 'none'
+                    }}
+                  />
+                  {i === suspects.length - 1 ? (
+                    <Btn size="sm" variant="green" onClick={addSuspect}>+ Add Suspect</Btn>
+                  ) : (
+                    <Btn size="sm" variant="danger" onClick={() => removeSuspect(i)}>Remove</Btn>
+                  )}
                 </div>
               ))}
             </div>
+
             <div style={{ height: '1px', background: 'var(--border)' }} />
-            <Input label="Complainant Name *" placeholder="Person filing the complaint" value={complainant} onChange={(e) => setComplainant(e.target.value)} />
-            <Input label="Complainant Contact" placeholder="+91 XXXXX XXXXX or email" value={complainantContact} onChange={(e) => setComplainantContact(e.target.value)} />
+
+            <Input
+              label="Complainant Name *"
+              placeholder="Officer, witness, or citizen filing the complaint"
+              value={complainant}
+              onChange={(e) => setComplainant(e.target.value)}
+            />
+            <Input
+              label="Complainant Contact Information"
+              placeholder="+91 XXXXX XXXXX or official email address"
+              value={complainantContact}
+              onChange={(e) => setComplainantContact(e.target.value)}
+            />
           </div>
         )}
 
         {/* Step 3 */}
         {step === 3 && (
-          <div style={{ display: 'flex', flexDirection: 'column', gap: '14px' }}>
+          <div style={{ display: 'flex', flexDirection: 'column', gap: '18px' }}>
             <div>
-              <div style={{ display: 'flex', alignItems: 'center', justifyContent: 'space-between', marginBottom: '6px' }}>
-                <label style={{ fontSize: '11px', color: 'var(--red)', textTransform: 'uppercase', letterSpacing: '.4px', fontWeight: 600 }}>FIR / Complaint Description * (Most Important)</label>
-                <Select options={LANGUAGES} value={firLanguage} onChange={(e) => setFirLanguage(e.target.value)} style={{ width: '130px', padding: '3px 8px', fontSize: '11px' }} />
+              <div style={{ display: 'flex', alignItems: 'center', justifyContent: 'space-between', marginBottom: '8px' }}>
+                <label style={{ fontSize: '12px', color: 'var(--text)', textTransform: 'uppercase', letterSpacing: '0.04em', fontWeight: 700 }}>
+                  FIR / Comprehensive Incident Narrative *
+                </label>
+                <div style={{ display: 'flex', alignItems: 'center', gap: '8px' }}>
+                  <span style={{ fontSize: '11px', color: 'var(--text3)' }}>Language:</span>
+                  <Select
+                    options={LANGUAGES}
+                    value={firLanguage}
+                    onChange={(e) => setFirLanguage(e.target.value)}
+                    style={{ width: '130px', padding: '4px 10px', fontSize: '12px' }}
+                  />
+                </div>
               </div>
               <textarea
                 value={firText}
                 onChange={(e) => setFirText(e.target.value)}
                 rows={12}
-                placeholder="Describe the incident in full detail — what happened, when, where, who was involved, sequence of events, any witnesses..."
-                style={{ width: '100%', background: 'var(--bg3)', border: '1px solid var(--border)', borderRadius: 'var(--r)', padding: '9px 12px', fontSize: '13px', color: 'var(--text)', fontFamily: 'var(--font)', outline: 'none', resize: 'vertical', lineHeight: 1.7 }}
+                placeholder="Transcribe the verbatim statement or full sequence of events: who was present, weapon details, monetary loss, injuries inflicted, timeline of actions..."
+                style={{
+                  width: '100%',
+                  background: 'var(--bg3)',
+                  border: '1px solid var(--border)',
+                  borderRadius: 'var(--r2)',
+                  padding: '12px 16px',
+                  fontSize: '13.5px',
+                  color: 'var(--text)',
+                  fontFamily: 'var(--font)',
+                  outline: 'none',
+                  resize: 'vertical',
+                  lineHeight: 1.7
+                }}
               />
-              <div style={{ display: 'flex', justifyContent: 'space-between', marginTop: '4px' }}>
-                <span style={{ fontSize: '10px', color: 'var(--text3)' }}>Supports multilingual input — translated to English for AI processing</span>
-                <span style={{ fontSize: '10px', color: 'var(--text3)' }}>{firText.length} chars</span>
+              <div style={{ display: 'flex', justifyContent: 'space-between', marginTop: '6px' }}>
+                <span style={{ fontSize: '11px', color: 'var(--text3)' }}>
+                  Supports multilingual OCR & FIR text (translated for AI classification)
+                </span>
+                <span style={{ fontSize: '11px', color: 'var(--blue)', fontWeight: 600, fontFamily: 'var(--mono)' }}>
+                  {firText.length} characters
+                </span>
               </div>
             </div>
-            <div style={{ padding: '10px 12px', background: 'var(--blue-dim)', border: '1px solid var(--blue)', borderRadius: 'var(--r)', fontSize: '11px', color: 'var(--blue)' }}>
-              This FIR description will be the primary input for BNS Classification and AI Storyboard generation.
+
+            <div style={{
+              padding: '14px 16px',
+              background: 'var(--blue-bg)',
+              border: '1px solid var(--blue-border)',
+              borderRadius: 'var(--r2)',
+              fontSize: '12.5px',
+              color: 'var(--blue)',
+              display: 'flex',
+              alignItems: 'center',
+              gap: '10px'
+            }}>
+              <span>💡</span>
+              <span>This narrative feeds directly into the <strong>Bharatiya Nyaya Sanhita (BNS) AI legal classifier</strong> and <strong>Evidence integrity graph</strong>.</span>
             </div>
           </div>
         )}
 
         {/* Step 4: Review */}
         {step === 4 && (
-          <div style={{ display: 'flex', flexDirection: 'column', gap: '14px' }}>
-            <div style={{ padding: '14px', background: 'var(--bg3)', borderRadius: 'var(--r2)' }}>
-              <div style={{ fontSize: '12px', fontWeight: 600, color: 'var(--text)', marginBottom: '10px' }}>Review Case Details</div>
+          <div style={{ display: 'flex', flexDirection: 'column', gap: '18px' }}>
+            <div style={{
+              padding: '20px',
+              background: 'var(--bg3)',
+              borderRadius: 'var(--r2)',
+              border: '1px solid var(--border)'
+            }}>
+              <div style={{ fontSize: '14px', fontWeight: 700, color: 'var(--text)', marginBottom: '14px' }}>
+                Case Dossier Summary
+              </div>
               {[
-                ['Title', title],
-                ['Offence', offenceType === 'Other' ? offenceCustom : offenceType],
-                ['Date / Time', [incidentDate, incidentTime].filter(Boolean).join(' · ') || '—'],
-                ['Location', incidentLocation || '—'],
+                ['Investigation Title', title],
+                ['Offence Classification', offenceType === 'Other' ? offenceCustom : offenceType],
+                ['Incident Timeline', [incidentDate, incidentTime].filter(Boolean).join(' at ') || '—'],
+                ['Incident Location', incidentLocation || '—'],
                 ['Complainant', complainant],
-                ['Victims', victims.filter((v) => v.name).map((v) => v.name).join(', ') || '—'],
-                ['Suspects', suspects.filter((s) => s.name).map((s) => s.name).join(', ') || '—'],
-                ['FIR Length', firText.length + ' characters'],
-                ['FIR Language', firLanguage === 'auto' ? 'Auto Detect' : firLanguage.toUpperCase()]
+                ['Victims Listed', victims.filter((v) => v.name).map((v) => v.name).join(', ') || '—'],
+                ['Suspects Listed', suspects.filter((s) => s.name).map((s) => s.name).join(', ') || '—'],
+                ['Narrative Word Count', `${firText.split(/\s+/).filter(Boolean).length} words (${firText.length} chars)`],
+                ['Language Mode', firLanguage === 'auto' ? 'Auto Detect' : firLanguage.toUpperCase()]
               ].map(([k, v]) => (
-                <div key={k} style={{ display: 'flex', gap: '10px', padding: '5px 0', borderBottom: '1px solid var(--border)' }}>
-                  <span style={{ fontSize: '11px', color: 'var(--text3)', minWidth: '100px' }}>{k}</span>
-                  <span style={{ fontSize: '11px', color: 'var(--text2)' }}>{v}</span>
+                <div key={k} style={{ display: 'flex', justifyContent: 'space-between', padding: '8px 0', borderBottom: '1px solid var(--border)' }}>
+                  <span style={{ fontSize: '12.5px', color: 'var(--text3)', fontWeight: 500 }}>{k}</span>
+                  <span style={{ fontSize: '12.5px', color: 'var(--text)', fontWeight: 600 }}>{v}</span>
                 </div>
               ))}
             </div>
-            <div style={{ padding: '10px 12px', background: 'var(--amber-bg)', border: '1px solid var(--amber)', borderRadius: 'var(--r)', fontSize: '11px', color: 'var(--amber)' }}>
-              Once created, the case will be assigned an auto-generated case number and all actions will be logged in the immutable audit trail.
+
+            <div style={{
+              padding: '12px 16px',
+              background: 'var(--amber-bg)',
+              border: '1px solid var(--amber-border)',
+              borderRadius: 'var(--r)',
+              fontSize: '12px',
+              color: 'var(--amber)',
+              fontWeight: 500
+            }}>
+              ⚖️ Upon creation, this case will be recorded with an immutable SHA-256 genesis hash and logged to the central audit ledger.
             </div>
           </div>
         )}
 
         {/* Step 5: Success */}
         {step === 5 && (
-          <div style={{ textAlign: 'center', padding: '20px 0' }}>
-            <div style={{ width: '56px', height: '56px', borderRadius: '50%', background: 'var(--green-bg)', border: '2px solid var(--green)', display: 'flex', alignItems: 'center', justifyContent: 'center', margin: '0 auto 16px', fontSize: '24px' }}>+</div>
-            <div style={{ fontSize: '16px', fontWeight: 600, color: 'var(--text)', marginBottom: '6px' }}>Case Created Successfully</div>
-            <div style={{ fontSize: '12px', color: 'var(--text3)', marginBottom: '20px' }}>Your case has been created, SHA-256 hashed, and logged in the audit trail.</div>
-            <div style={{ display: 'flex', gap: '10px', justifyContent: 'center' }}>
-              <Btn variant="primary" onClick={() => navigate(`/cases/${createdCaseId}`)}>View Case</Btn>
-              <Btn onClick={() => navigate('/evidence')}>Add Evidence</Btn>
-              <Btn onClick={() => navigate('/dashboard')}>Dashboard</Btn>
+          <div style={{ textAlign: 'center', padding: '32px 16px' }}>
+            <div style={{
+              width: '64px',
+              height: '64px',
+              borderRadius: '50%',
+              background: 'var(--green-bg)',
+              border: '2px solid var(--green)',
+              display: 'flex',
+              alignItems: 'center',
+              justifyContent: 'center',
+              margin: '0 auto 20px',
+              fontSize: '28px',
+              color: 'var(--green)',
+              boxShadow: '0 0 20px rgba(16, 185, 129, 0.25)'
+            }}>
+              ✓
+            </div>
+            <h3 style={{ fontSize: '20px', fontWeight: 800, color: 'var(--text)', marginBottom: '8px' }}>
+              Investigation Dossier Created
+            </h3>
+            <p style={{ fontSize: '13px', color: 'var(--text3)', maxWidth: '440px', margin: '0 auto 28px' }}>
+              Case has been officially indexed in PostgreSQL and timestamped in the security audit trail.
+            </p>
+            <div style={{ display: 'flex', gap: '12px', justifyContent: 'center', flexWrap: 'wrap' }}>
+              <Btn variant="primary" size="lg" onClick={() => navigate(`/cases/${createdCaseId}`)}>
+                Open Case Dossier
+              </Btn>
+              <Btn size="lg" variant="default" onClick={() => navigate('/evidence')}>
+                Upload Evidence Files
+              </Btn>
+              <Btn size="lg" variant="ghost" onClick={() => navigate('/dashboard')}>
+                Return to Dashboard
+              </Btn>
             </div>
           </div>
         )}
 
-        {/* Navigation buttons */}
+        {/* Wizard Action Footer */}
         {step < 5 && (
-          <div style={{ display: 'flex', justifyContent: 'space-between', marginTop: '24px' }}>
-            {step > 1 ? <Btn onClick={() => { setError(''); setStep((s) => s - 1) }}>Back</Btn> : <Btn onClick={() => navigate('/cases')}>Cancel</Btn>}
-            {step < 4 ? (
-              <Btn variant="primary" onClick={nextStep}>Continue</Btn>
+          <div style={{ display: 'flex', justifyContent: 'space-between', marginTop: '28px', paddingTop: '16px', borderTop: '1px solid var(--border)' }}>
+            {step > 1 ? (
+              <Btn size="md" variant="default" onClick={() => { setError(''); setStep((s) => s - 1) }}>
+                ← Back
+              </Btn>
             ) : (
-              <Btn variant="primary" loading={loading} onClick={submit}>Create Case</Btn>
+              <Btn size="md" variant="ghost" onClick={() => navigate('/cases')}>
+                Cancel
+              </Btn>
+            )}
+
+            {step < 4 ? (
+              <Btn variant="primary" size="md" onClick={nextStep}>
+                Continue Step →
+              </Btn>
+            ) : (
+              <Btn variant="primary" size="lg" loading={loading} onClick={submit}>
+                Register & Sign Case
+              </Btn>
             )}
           </div>
         )}

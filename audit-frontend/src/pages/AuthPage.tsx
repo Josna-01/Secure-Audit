@@ -20,12 +20,12 @@ export default function AuthPage() {
   const [role, setRole] = useState('Investigator')
   const [password, setPassword] = useState('')
   const [tokenInput, setTokenInput] = useState('')
-  
+
   // Transition states
   const [tokenSent, setTokenSent] = useState(false)
   const [tokenLoading, setTokenLoading] = useState(false)
   const [signInLoading, setSignInLoading] = useState(false)
-  
+
   // Reset password states
   const [isResetMode, setIsResetMode] = useState(false)
   const [resetLoading, setResetLoading] = useState(false)
@@ -40,12 +40,12 @@ export default function AuthPage() {
     e.preventDefault()
     setError('')
     setSuccessMsg('')
-    
+
     if (!email) {
       setError('Official email or Officer ID is required to request a token.')
       return
     }
-    
+
     setTokenLoading(true)
     try {
       const res = await api.sendOTP(email)
@@ -96,7 +96,7 @@ export default function AuthPage() {
   const handleSecureSignIn = async (e: React.FormEvent) => {
     e.preventDefault()
     setError('')
-    
+
     if (!email) {
       setError('Official email or Officer ID is required.')
       return
@@ -109,11 +109,11 @@ export default function AuthPage() {
       setError('Access token is required.')
       return
     }
-    
+
     setSignInLoading(true)
     try {
       const res = await api.verifyOTP(email, tokenInput, password)
-      
+
       // Save session start time
       localStorage.setItem('sa_session_start', new Date().toISOString())
 
@@ -144,7 +144,7 @@ export default function AuthPage() {
       position: 'relative',
       overflowX: 'hidden'
     }}>
-      
+
       {/* Background grid accent */}
       <div style={{
         position: 'absolute',
@@ -181,7 +181,7 @@ export default function AuthPage() {
           boxShadow: '0 0 15px rgba(77, 132, 245, 0.2)'
         }}>
           <svg width="26" height="26" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2.5">
-            <path d="M12 22s8-4 8-10V5l-8-3-8 3v7c0 6 8 10 8 10z"/>
+            <path d="M12 22s8-4 8-10V5l-8-3-8 3v7c0 6 8 10 8 10z" />
           </svg>
         </div>
         <h1 style={{
@@ -216,7 +216,7 @@ export default function AuthPage() {
         marginBottom: '32px'
       }}>
         <form onSubmit={isResetMode ? handleResetPassword : handleSecureSignIn}>
-          
+
           {/* Badge text */}
           <div style={{ marginBottom: '10px', display: 'flex' }}>
             <span style={{
@@ -240,7 +240,7 @@ export default function AuthPage() {
             marginBottom: '6px',
             letterSpacing: '-0.2px'
           }}>{isResetMode ? 'Reset Your Passphrase' : 'Authorized Access Portal'}</h2>
-          
+
           <p style={{
             fontSize: '13px',
             color: 'var(--text2)',
@@ -380,13 +380,13 @@ export default function AuthPage() {
               <Btn type="submit" variant="primary" full loading={signInLoading} disabled={!tokenSent}
                 style={{ padding: '12px 20px', fontSize: '13px', fontWeight: 600, letterSpacing: '0.4px', textTransform: 'uppercase', background: tokenSent ? 'var(--blue)' : 'var(--blue-dim)', border: 'none', color: '#ffffff', borderRadius: 'var(--r)', boxShadow: tokenSent ? '0 4px 12px rgba(77, 132, 245, 0.3)' : 'none', cursor: tokenSent ? 'pointer' : 'not-allowed', display: 'flex', alignItems: 'center', justifyContent: 'center', gap: '8px' }}
               >
-                <svg width="14" height="14" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2.5"><rect x="3" y="11" width="18" height="11" rx="2" ry="2"/><path d="M7 11V7a5 5 0 0 1 10 0v4"/></svg>
+                <svg width="14" height="14" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2.5"><rect x="3" y="11" width="18" height="11" rx="2" ry="2" /><path d="M7 11V7a5 5 0 0 1 10 0v4" /></svg>
                 Secure Sign In
               </Btn>
             </>
           )}
 
-        
+
           <div style={{ marginTop: '16px', textAlign: 'center' }}>
             <span
               onClick={() => {

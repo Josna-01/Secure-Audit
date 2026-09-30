@@ -143,3 +143,15 @@ class OTPToken(Base):
     expires_at = Column(DateTime(timezone=True), nullable=False)
     used = Column(Boolean, server_default="false", default=False)
     created_at = Column(DateTime(timezone=True), nullable=False, server_default=func.now())
+
+
+class Detection(Base):
+    __tablename__ = "detections"
+
+    id = Column(UUID(as_uuid=True), primary_key=True, default=uuid.uuid4)
+    case_id = Column(UUID(as_uuid=True), ForeignKey("cases.id", ondelete="CASCADE"), nullable=True)
+    evidence_id = Column(UUID(as_uuid=True), ForeignKey("evidence.id", ondelete="CASCADE"), nullable=True)
+    image_url = Column(String, nullable=True)
+    predictions = Column(JSONB, nullable=True)
+    created_at = Column(DateTime(timezone=True), nullable=False, server_default=func.now())
+
