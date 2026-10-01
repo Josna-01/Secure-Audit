@@ -36,10 +36,9 @@ class _NoSupabase:
 class BlockchainApiEndToEndTest(unittest.TestCase):
     @classmethod
     def setUpClass(cls):
-        cls.node = GanacheNode().start()
+        cls.node = GanacheNode()
         cls.tmp = tempfile.TemporaryDirectory()
         deployment = Path(cls.tmp.name) / "deployment.json"
-        cls.node.deploy(deployment)
         os.environ.update({
             "DATABASE_URL": TEST_DATABASE_URL,
             "ETHEREUM_RPC_URL": cls.node.url,
@@ -52,8 +51,12 @@ class BlockchainApiEndToEndTest(unittest.TestCase):
         for name in ("EVIDENCE_REGISTRY_ADDRESS", "ETHEREUM_SENDER_ADDRESS", "ETHEREUM_PRIVATE_KEY", "BLOCKCHAIN_NETWORK_NAME"):
             os.environ[name] = ""
 
+        # Import the app (and with it numpy/OpenCV) before spawning Ganache: on Windows,
+        # loading numpy's extension after the child process starts occasionally stalls.
         import app as backend  # imported only now, so it picks up the test configuration
-        backend.blockchain_service.__init__()  # re-read config if another test imported the service first
+        cls.node.start()
+        cls.node.deploy(deployment)
+        backend.blockchain_service.__init__()  # re-read config (node URL, deployment) now that they exist
         from db import Base, engine, SessionLocal
         from fastapi.testclient import TestClient
         cls.backend, cls.SessionLocal = backend, SessionLocal
