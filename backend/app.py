@@ -3995,6 +3995,28 @@ def photogrammetry_job_status(job_id: str, request: Request):
         raise HTTPException(status_code=502, detail=f"Failed to communicate with photogrammetry server: {str(e)}")
 
 
+@app.get("/photogrammetry/evaluation/{job_id}")
+def photogrammetry_job_evaluation(job_id: str, request: Request):
+    try:
+        user_info = get_current_user_info(request)
+        res = requests.get(f"http://localhost:8004/jobs/{job_id}/evaluation", timeout=10)
+        res.raise_for_status()
+        return res.json()
+    except requests.RequestException as e:
+        raise HTTPException(status_code=502, detail=f"Failed to communicate with photogrammetry server: {str(e)}")
+
+
+@app.get("/photogrammetry/comparison")
+def photogrammetry_benchmark_comparison(request: Request):
+    try:
+        user_info = get_current_user_info(request)
+        res = requests.get(f"http://localhost:8004/jobs/comparison", timeout=10)
+        res.raise_for_status()
+        return res.json()
+    except requests.RequestException as e:
+        raise HTTPException(status_code=502, detail=f"Failed to communicate with photogrammetry server: {str(e)}")
+
+
 def ensure_background_services():
     """Auto-detects and launches missing microservices (Ganache, BNS, Audio, Crime Detection, Photogrammetry, Frontend) if their ports are inactive."""
     if not os.environ.get("AUTO_SPAWN_MICROSERVICES", "True").lower() in ("true", "1", "yes"):

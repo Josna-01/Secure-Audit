@@ -23,6 +23,9 @@ from services.frame_selector import FrameSelector
 from services.colmap_runner import ColmapRunner
 from services.open3d_processor import Open3DProcessor
 
+from fastapi.staticfiles import StaticFiles
+from services.evaluator import PhotogrammetryEvaluator
+
 # Load environment variables from this service's .env file
 BASE_DIR = os.path.dirname(os.path.abspath(__file__))
 load_dotenv(os.path.join(BASE_DIR, ".env"))
@@ -60,6 +63,13 @@ class TriggerRequest(BaseModel):
     evidence_id: str
     file_url: str
     local_path: str | None = None
+
+class EvaluationRequest(BaseModel):
+    gt_length: float | None = None
+    gt_width: float | None = None
+    gt_height: float | None = None
+    scale: float | None = None
+    unit: str = "cm"
 
 def _set_step(job_id: str, step: int):
     """Write the current pipeline step to the DB for live UI progress tracking."""
@@ -399,6 +409,83 @@ def get_reconstruction_status_by_job(job_id: str, db: Session = Depends(get_db))
         "completed_at": row.completed_at.isoformat().replace("+00:00", "Z") if row.completed_at else None,
         "error_message": row.error_message,
     }
+
+
+@app.get("/jobs/{job_id}/evaluation")
+def get_job_evaluation(job_id: str):
+    """
+    Retrieve or compute the evaluation metrics for a specific photogrammetry job.
+    """
+    jobs_dir = os.getenv("PHOTOGRAMMETRY_WORK_DIR", os.path.join(BASE_DIR, "jobs"))
+    job_dir = os.path.join(jobs_dir, job_id)
+    if not os.path.exists(job_dir):
+        raise HTTPException(status_code=404, detail=f"Job directory not found for job_id: {job_id}")
+    
+    summary_path = os.path.join(job_dir, "evaluation", "evaluation_summary.json")
+    if os.path.exists(summary_path):
+        import json
+        with open(summary_path, "r", encoding="utf-8") as f:
+            return json.load(f)
+    
+    # Otherwise run evaluator on the fly
+    evaluator = PhotogrammetryEvaluator(jobs_dir=jobs_dir)
+    res = evaluator.evaluate_job(job_id)
+    return res
+
+
+@app.post("/jobs/{job_id}/evaluate")
+def evaluate_job_endpoint(job_id: str, payload: EvaluationRequest | None = None):
+    """
+    Execute evaluation on a completed job with optional ground truth measurements.
+    """
+    jobs_dir = os.getenv("PHOTOGRAMMETRY_WORK_DIR", os.path.join(BASE_DIR, "jobs"))
+    job_dir = os.path.join(jobs_dir, job_id)
+    if not os.path.exists(job_dir):
+        raise HTTPException(status_code=404, detail=f"Job directory not found for job_id: {job_id}")
+    
+    gt_dims = None
+    scale = None
+    unit = "cm"
+    if payload:
+        if payload.gt_length is not None and payload.gt_width is not None and payload.gt_height is not None:
+            gt_dims = {
+                "length": payload.gt_length,
+                "width": payload.gt_width,
+                "height": payload.gt_height
+            }
+        scale = payload.scale
+        unit = payload.unit or "cm"
+    
+    evaluator = PhotogrammetryEvaluator(jobs_dir=jobs_dir)
+    res = evaluator.evaluate_job(
+        job_id=job_id,
+        ground_truth_dimensions=gt_dims,
+        dimension_unit=unit,
+        scale=scale
+    )
+    return res
+
+
+@app.get("/jobs/comparison")
+def compare_jobs_endpoint():
+    """
+    Generate comparative analysis across all completed photogrammetry jobs.
+    """
+    jobs_dir = os.getenv("PHOTOGRAMMETRY_WORK_DIR", os.path.join(BASE_DIR, "jobs"))
+    evaluator = PhotogrammetryEvaluator(jobs_dir=jobs_dir)
+    available_jobs = evaluator.list_available_jobs()
+    if not available_jobs:
+        raise HTTPException(status_code=404, detail="No photogrammetry jobs found to compare.")
+    
+    output_dir = os.path.join(BASE_DIR, "evaluation_benchmark")
+    summary = evaluator.compare_multiple_jobs(available_jobs, output_dir=output_dir)
+    return summary
+
+
+# Mount jobs directory for direct access to evaluation artifacts (reports, charts, models)
+jobs_mount_dir = os.getenv("PHOTOGRAMMETRY_WORK_DIR", os.path.join(BASE_DIR, "jobs"))
+if os.path.exists(jobs_mount_dir):
+    app.mount("/artifacts/jobs", StaticFiles(directory=jobs_mount_dir), name="job_artifacts")
 
 
 if __name__ == "__main__":

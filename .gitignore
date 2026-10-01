@@ -311,6 +311,7 @@ object-backend/
 # ==============================================================================
 # INTERNAL DOCUMENTATION NOT FOR PUBLIC REPOSITORY
 # ==============================================================================
+docs/
 COLLABORATION_GUIDE.md
 CLAUDE.md
 .claude/
