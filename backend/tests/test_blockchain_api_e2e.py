@@ -156,6 +156,12 @@ class BlockchainApiEndToEndTest(unittest.TestCase):
         self.assertEqual(res.json()["data"]["status"], "Tampered")
         self.assertEqual(res.json()["data"]["reason"], "HASH_MISMATCH")
         self.assertIn("Tamper Detected", self.audit_actions(ev1["id"]))
+        # Critical tamper alert for the case owner and administrators, never other investigators.
+        for headers in (inv1, admin):
+            alerts = [n for n in client.get("/notifications", headers=headers).json()["data"]
+                      if n["type"] == "tamper" and n["evidence_id"] == ev1["id"]]
+            self.assertEqual([n["severity"] for n in alerts], ["critical"])
+        self.assertEqual(client.get("/notifications", headers=inv2).json()["data"], [])
 
         # Regression: a caller-supplied correct hash + the event listener must not
         # flip a tampered item back to Verified.
@@ -248,6 +254,13 @@ class BlockchainApiEndToEndTest(unittest.TestCase):
         row = self.evidence_row(ev_dup["id"])
         self.assertEqual(row.status, "Verified")
         self.assertEqual(row.last_verification_result, "Verification Failed")
+        # The outage is a warning for administrators, not a tamper alert.
+        admin_alerts = client.get("/notifications", headers=admin).json()["data"]
+        self.assertEqual([(n["type"], n["severity"]) for n in admin_alerts if n["evidence_id"] == ev_dup["id"]],
+                         [("system", "warning")])
+        self.assertFalse([n for n in client.get("/notifications", headers=inv1).json()["data"] if n["type"] == "system"])
+        # Custody was transferred to inv2, who cannot access the case: nothing about it was disclosed.
+        self.assertEqual(client.get("/notifications", headers=inv2).json()["data"], [])
 
         files_before = set(os.listdir(os.path.join(self.backend.UPLOADS_DIR, "cases", self.case_id)))
         self.assertEqual(self.upload(b"new file while chain is down").status_code, 503)

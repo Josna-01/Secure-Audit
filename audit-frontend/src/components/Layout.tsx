@@ -1,9 +1,13 @@
-import React, { useState } from 'react'
+import React, { useEffect, useState } from 'react'
 import { useNavigate, useLocation } from 'react-router-dom'
 import { useAuth } from '../context/AuthContext'
 import { useTheme } from '../context/ThemeContext'
+import { api } from '../services/api'
 import { Btn } from './UI'
 import NotificationPanel from './NotificationPanel'
+
+// Bell badge refresh interval. Notifications are polled, not pushed (no WebSockets yet).
+const NOTIFICATION_POLL_MS = 60_000
 
 const NAV = [
   { section: 'Main Operations' },
@@ -337,7 +341,20 @@ export function Sidebar() {
 export function Topbar({ title, onNewCase }: { title: string; onNewCase: () => void }) {
   const { theme, toggleTheme } = useTheme()
   const [notifOpen, setNotifOpen] = useState(false)
+  const [unreadCount, setUnreadCount] = useState(0)
   const { user } = useAuth()
+
+  useEffect(() => {
+    let active = true
+    const refresh = () => {
+      api.getUnreadNotificationCount()
+        .then((res) => { if (active) setUnreadCount(res.data.count) })
+        .catch(() => {})
+    }
+    refresh()
+    const timer = window.setInterval(refresh, NOTIFICATION_POLL_MS)
+    return () => { active = false; window.clearInterval(timer) }
+  }, [])
 
   return (
     <>
@@ -410,19 +427,30 @@ export function Topbar({ title, onNewCase }: { title: string; onNewCase: () => v
             onClick={() => setNotifOpen((o) => !o)}
             onMouseEnter={(e) => { e.currentTarget.style.background = 'var(--bg4)'; e.currentTarget.style.borderColor = 'var(--border2)' }}
             onMouseLeave={(e) => { e.currentTarget.style.background = 'var(--bg3)'; e.currentTarget.style.borderColor = 'var(--border)' }}
-            title="Notifications & Tamper Alerts"
+            title={unreadCount > 0 ? `Notifications & Tamper Alerts (${unreadCount} unread)` : 'Notifications & Tamper Alerts'}
           >
             <Icon name="bell" size={16} />
-            <div id="notif-dot" style={{
-              position: 'absolute',
-              top: '6px',
-              right: '6px',
-              width: '7px',
-              height: '7px',
-              borderRadius: '50%',
-              background: 'var(--red)',
-              border: '1.5px solid var(--bg2)'
-            }} />
+            {unreadCount > 0 && (
+              <div style={{
+                position: 'absolute',
+                top: '-5px',
+                right: '-5px',
+                minWidth: '16px',
+                height: '16px',
+                padding: '0 4px',
+                borderRadius: '8px',
+                background: 'var(--red)',
+                border: '1.5px solid var(--bg2)',
+                color: 'white',
+                fontSize: '9.5px',
+                fontWeight: 700,
+                lineHeight: '13px',
+                textAlign: 'center',
+                boxSizing: 'border-box'
+              }}>
+                {unreadCount > 99 ? '99+' : unreadCount}
+              </div>
+            )}
           </div>
 
           {/* New Case Button */}
@@ -434,7 +462,7 @@ export function Topbar({ title, onNewCase }: { title: string; onNewCase: () => v
           )}
         </div>
       </header>
-      <NotificationPanel open={notifOpen} onClose={() => setNotifOpen(false)} />
+      <NotificationPanel open={notifOpen} onClose={() => setNotifOpen(false)} onUnreadChange={setUnreadCount} />
     </>
   )
 }

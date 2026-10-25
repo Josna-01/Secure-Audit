@@ -31,9 +31,10 @@ from dotenv import load_dotenv
 from roboflow import Roboflow
 import requests
 from sqlalchemy import text
+from sqlalchemy.dialects.postgresql import insert as pg_insert
 from sqlalchemy.orm import Session
 from db import get_db, SessionLocal
-from models import User, Case, Evidence, AuditLog, OCRResult, BNSPrediction, OTPToken, EvidenceCustodyRecord, BlockchainLog, Detection
+from models import User, Case, Evidence, AuditLog, OCRResult, BNSPrediction, OTPToken, EvidenceCustodyRecord, BlockchainLog, Detection, Notification
 from services.ocr_service import OCRServiceError, build_document_result, ocr_service
 from services.ocr_text import UNKNOWN_LANGUAGE, detect_languages
 from services.translation_service import (TARGET_LANGUAGES, TranslationError,
@@ -56,6 +57,7 @@ from services.storage_gateway import (
     StorageIntegrityError,
 )
 from migrate_blockchain import STATEMENTS as BLOCKCHAIN_SCHEMA_STATEMENTS
+from migrate_notifications import STATEMENTS as NOTIFICATION_SCHEMA_STATEMENTS
 
 load_dotenv()
 logger = logging.getLogger("secure_audit.application")
@@ -271,6 +273,18 @@ def ensure_blockchain_columns() -> None:
             session.commit()
     except Exception as exc:
         logger.error("blockchain.schema_check_failed error=%s (run migrate_blockchain.py)", exc)
+
+
+@app.on_event("startup")
+def ensure_notifications_table() -> None:
+    """Create the notifications table and its indexes if missing (same statements as migrate_notifications.py)."""
+    try:
+        with SessionLocal() as session:
+            for statement in NOTIFICATION_SCHEMA_STATEMENTS:
+                session.execute(text(statement))
+            session.commit()
+    except Exception as exc:
+        logger.error("notifications.schema_check_failed error=%s (run migrate_notifications.py)", exc)
 
 
 @app.on_event("startup")
@@ -1289,6 +1303,230 @@ def apply_registration_receipt(evidence, receipt: dict) -> None:
     evidence.blockchain_tx_status = receipt.get("status", "SUCCESS")
 
 
+# ====== NOTIFICATION HELPER ======
+NOTIFICATION_TYPES = ("tamper", "system", "upload", "yolo", "bns", "custody")
+NOTIFICATION_SEVERITIES = ("info", "warning", "critical")
+
+
+def _optional_uuid(value) -> Optional[uuid.UUID]:
+    if value in (None, ""):
+        return None
+    try:
+        return value if isinstance(value, uuid.UUID) else uuid.UUID(str(value))
+    except (ValueError, TypeError, AttributeError):
+        return None
+
+
+def user_can_access_case(user, case_id, db: Session) -> bool:
+    """Whether a stored user (not the caller) may see a case, by the same rule as check_case_access."""
+    try:
+        return check_case_access(str(case_id), {"id": str(user.id), "role": user.role or "Investigator"}, db)
+    except HTTPException:
+        return False
+
+
+def notification_recipient_ids(db: Session, *, case_id=None, evidence_id=None, recipients=(), case_owner: bool = False,
+                               admins: bool = False, exclude=()) -> List[uuid.UUID]:
+    """Active users chosen for an event, reduced to those authorised for its case.
+
+    Evidence without a case is visible to administrators only (as in load_evidence_for_user).
+    """
+    candidates = {uid for uid in map(_optional_uuid, recipients) if uid}
+    if case_owner and case_id:
+        owner = db.query(Case.created_by).filter(Case.id == case_id).scalar()
+        if owner:
+            candidates.add(owner)
+    if admins:
+        candidates.update(row[0] for row in db.query(User.id).filter(User.role.ilike("admin")).all())
+    candidates -= {uid for uid in map(_optional_uuid, exclude) if uid}
+    if not candidates:
+        return []
+    users = db.query(User).filter(User.id.in_(candidates), User.is_active.isnot(False)).all()
+    if case_id is not None:
+        return [user.id for user in users if user_can_access_case(user, case_id, db)]
+    if evidence_id is not None:
+        return [user.id for user in users if (user.role or "").lower() == "admin"]
+    return [user.id for user in users]
+
+
+def create_notification(type_: str, title: str, description: str, *, severity: str = "info", case_id=None,
+                        evidence_id=None, recipients=(), case_owner: bool = False, admins: bool = False,
+                        exclude=(), fingerprint: Optional[str] = None, db: Optional[Session] = None) -> int:
+    """Store one in-app notification per authorised recipient and return how many were created.
+
+    Call only after the event's own database work and audit entry are committed: a
+    notification reports something that has already been recorded. Recipients are the
+    explicit ``recipients`` plus, optionally, the case owner and administrators, minus
+    ``exclude``; inactive users and anyone who cannot access ``case_id`` are dropped, so
+    case and evidence details never reach an unauthorised user. While a recipient still
+    has an unread notification with the same ``fingerprint`` no duplicate is created.
+
+    Uses its own session unless ``db`` (with nothing pending) is given, and never raises:
+    a failed notification is logged and must not turn a completed operation into an error.
+    """
+    if type_ not in NOTIFICATION_TYPES or severity not in NOTIFICATION_SEVERITIES:
+        logger.error("notifications.invalid type=%r severity=%r", type_, severity)
+        return 0
+    own_session = db is None
+    session = db or SessionLocal()
+    case_uuid, evidence_uuid = _optional_uuid(case_id), _optional_uuid(evidence_id)
+    try:
+        recipient_ids = notification_recipient_ids(session, case_id=case_uuid, evidence_id=evidence_uuid,
+                                                   recipients=recipients, case_owner=case_owner, admins=admins,
+                                                   exclude=exclude)
+        if not recipient_ids:
+            return 0
+        rows = [{"id": uuid.uuid4(), "recipient_id": rid, "case_id": case_uuid, "evidence_id": evidence_uuid,
+                 "type": type_, "title": title, "description": description, "severity": severity,
+                 "fingerprint": fingerprint, "is_read": False} for rid in recipient_ids]
+        statement = pg_insert(Notification).values(rows).on_conflict_do_nothing(
+            index_elements=["recipient_id", "fingerprint"],
+            index_where=text("is_read = false AND fingerprint IS NOT NULL"))
+        created = session.execute(statement).rowcount
+        session.commit()
+        logger.info("notifications.created type=%s severity=%s count=%s case=%s evidence=%s",
+                    type_, severity, created, case_uuid, evidence_uuid)
+        return created
+    except Exception as exc:
+        session.rollback()
+        logger.error("notifications.create_failed type=%s case=%s evidence=%s error=%s",
+                     type_, case_uuid, evidence_uuid, exc)
+        return 0
+    finally:
+        if own_session:
+            session.close()
+
+
+SERVICE_OUTAGE_TITLES = {
+    "STORAGE_UNAVAILABLE": "Evidence storage unavailable",
+    "BLOCKCHAIN_UNAVAILABLE": "Blockchain network unavailable",
+    "TRANSACTION_FAILED": "Blockchain transaction failed",
+}
+
+
+def notify_service_unavailable(reason: str, consequence: str, *, case_id=None, evidence_id=None) -> None:
+    """Warn administrators that storage or the blockchain stopped an operation.
+
+    Never a tamper alert: an outage says nothing about the evidence itself. One unread
+    warning per outage reason, however many operations it interrupts.
+    """
+    create_notification(
+        "system", SERVICE_OUTAGE_TITLES.get(reason, "Service unavailable"),
+        f"{integrity.REASONS.get(reason, reason)} {consequence} "
+        "This is a system availability warning, not a tampering finding.",
+        severity="warning", case_id=case_id, evidence_id=evidence_id, admins=True, fingerprint=f"system:{reason}")
+
+
+def notify_hash_mismatch(evidence, computed_hash: str) -> None:
+    """Critical tamper alert for the case owner and administrators."""
+    create_notification(
+        "tamper", "Tamper alert: SHA-256 hash mismatch",
+        f"'{evidence.file_name or 'Evidence'}' now hashes to {computed_hash[:16]}…, which does not match its "
+        "registered SHA-256. The evidence is marked Tampered.",
+        severity="critical", case_id=evidence.case_id, evidence_id=evidence.id, case_owner=True, admins=True,
+        fingerprint=f"tamper:{evidence.id}:HASH_MISMATCH:{computed_hash}")
+
+
+def notify_analysis_failed(type_: str, label: str, user_info: dict, *, case_id=None, evidence=None) -> None:
+    """Warn the user who requested an AI analysis that it did not complete."""
+    subject = f" of '{evidence.file_name or 'Evidence'}'" if evidence is not None else ""
+    create_notification(
+        type_, f"{label} failed", f"{label}{subject} did not complete; no results were saved.",
+        severity="warning", case_id=case_id, evidence_id=evidence.id if evidence is not None else None,
+        recipients=[user_info["id"]],
+        fingerprint=f"{type_}:{evidence.id if evidence is not None else case_id or '-'}:FAILED")
+
+
+def notification_link(notification) -> Optional[str]:
+    """Frontend route for a notification: the evidence verification page, else the case page."""
+    case_id, evidence_id = notification.case_id, notification.evidence_id
+    if evidence_id and notification.type in ("tamper", "system", "upload", "custody"):
+        return f"/evidence?evidence_id={evidence_id}" + (f"&case_id={case_id}" if case_id else "")
+    return f"/cases/{case_id}" if case_id else None
+
+
+def serialize_notification(notification, case_number: Optional[str] = None) -> dict:
+    return {
+        "id": str(notification.id),
+        "type": notification.type,
+        "title": notification.title,
+        "description": notification.description,
+        "severity": notification.severity,
+        "case_id": str(notification.case_id) if notification.case_id else None,
+        "case_number": case_number,
+        "evidence_id": str(notification.evidence_id) if notification.evidence_id else None,
+        "link": notification_link(notification),
+        "read": bool(notification.is_read),
+        "created_at": utc_iso(notification.created_at),
+        "read_at": utc_iso(notification.read_at),
+    }
+
+
+def visible_notifications_query(db: Session, user_info: dict):
+    """(Notification, case_number) rows addressed to the caller.
+
+    Rows for a case the caller can no longer access (for example after losing the Admin
+    role) are hidden, so stored case and evidence details are never shown to them.
+    """
+    user_uuid = parse_uuid(user_info["id"], "user ID")
+    query = (db.query(Notification, Case.case_number)
+             .outerjoin(Case, Case.id == Notification.case_id)
+             .filter(Notification.recipient_id == user_uuid))
+    if get_data_visibility(user_info, "view_cases") != "all":
+        no_subject = Notification.case_id.is_(None) & Notification.evidence_id.is_(None)
+        accessible_case = Case.id.isnot(None) & (Case.created_by.is_(None) | (Case.created_by == user_uuid))
+        query = query.filter(no_subject | accessible_case)
+    return query
+
+
+# ====== NOTIFICATION ENDPOINTS ======
+@app.get("/notifications")
+def get_notifications(request: Request, unread_only: bool = False, limit: int = 50, db: Session = Depends(get_db)):
+    """The logged-in user's notifications, newest first."""
+    user_info = get_current_user_info(request)
+    query = visible_notifications_query(db, user_info)
+    if unread_only:
+        query = query.filter(Notification.is_read.is_(False))
+    rows = query.order_by(Notification.created_at.desc()).limit(max(1, min(limit, 200))).all()
+    return {"data": [serialize_notification(n, case_number) for n, case_number in rows], "success": True}
+
+
+@app.get("/notifications/unread-count")
+def get_unread_notification_count(request: Request, db: Session = Depends(get_db)):
+    user_info = get_current_user_info(request)
+    count = visible_notifications_query(db, user_info).filter(Notification.is_read.is_(False)).count()
+    return {"data": {"count": count}, "success": True}
+
+
+@app.patch("/notifications/read-all")
+def mark_all_notifications_read(request: Request, db: Session = Depends(get_db)):
+    user_info = get_current_user_info(request)
+    ids = [n.id for n, _ in visible_notifications_query(db, user_info).filter(Notification.is_read.is_(False)).all()]
+    if ids:
+        db.query(Notification).filter(Notification.id.in_(ids)).update(
+            {Notification.is_read: True, Notification.read_at: datetime.datetime.now(datetime.timezone.utc)},
+            synchronize_session=False)
+        db.commit()
+    return {"data": {"message": "All notifications marked as read", "updated": len(ids)}, "success": True}
+
+
+@app.patch("/notifications/{notification_id}/read")
+def mark_notification_read(notification_id: str, request: Request, db: Session = Depends(get_db)):
+    user_info = get_current_user_info(request)
+    notification_uuid = parse_uuid(notification_id, "notification ID")
+    row = visible_notifications_query(db, user_info).filter(Notification.id == notification_uuid).first()
+    if not row:
+        # Same answer for "does not exist" and "addressed to someone else".
+        raise HTTPException(status_code=404, detail="Notification not found")
+    notification, case_number = row
+    if not notification.is_read:
+        notification.is_read = True
+        notification.read_at = datetime.datetime.now(datetime.timezone.utc)
+        db.commit()
+        db.refresh(notification)
+    return {"data": serialize_notification(notification, case_number), "success": True}
+
+
 # ====== CASE ENDPOINTS ======
 @app.post("/cases")
 def create_case(case_data: CaseCreate, request: Request, db: Session = Depends(get_db)):
@@ -1722,6 +1960,8 @@ def upload_evidence(
         logger.error("evidence.registration_failed case=%s error=%s", case_id, e)
         audit_event(integrity.AUDIT_REGISTRATION_FAILED, user_info, request, result="Failed", case_id=case_id,
                     file_hash=hash_hex, details={"file_name": original_filename, "reason": str(e)[:300]})
+        notify_service_unavailable("BLOCKCHAIN_UNAVAILABLE" if isinstance(e, BlockchainUnavailable) else "TRANSACTION_FAILED",
+                                   "An evidence upload was rejected and nothing was stored.", case_id=case_uuid)
         raise HTTPException(status_code=503, detail=f"Evidence was not saved because blockchain registration failed: {e}")
     except Exception:
         db.rollback()
@@ -1759,6 +1999,11 @@ def upload_evidence(
         audit_event(integrity.AUDIT_DUPLICATE_HASH, user_info, request, result="Flagged", evidence=db_evidence,
                     details={"duplicate_evidence_ids": other_cases})
         evidence_row["duplicateOf"] = other_cases
+    create_notification(
+        "upload", "Evidence uploaded",
+        f"{user_info['name']} uploaded '{original_filename}' ({evidence_type}); its SHA-256 is registered on the blockchain.",
+        case_id=case_uuid, evidence_id=db_evidence.id, case_owner=True, exclude=[user_info["id"]],
+        fingerprint=f"upload:{db_evidence.id}")
     logger.info("evidence.registered id=%s tx=%s", db_evidence.id, registration["transactionHash"])
     return {"data": evidence_row, "success": True}
 
@@ -2201,7 +2446,9 @@ def verify_evidence_hash(evidence_id: str, request: Request, deep: bool = True, 
             "success": True
         }
 
-    def record_outcome(result: str, reason: str, audit_action: str, details: dict, new_status: Optional[str] = None) -> None:
+    def record_outcome(result: str, reason: str, audit_action: str, details: dict, new_status: Optional[str] = None) -> bool:
+        """Persist and audit the outcome; True when the outcome itself was committed."""
+        saved = True
         try:
             now = datetime.datetime.now(datetime.timezone.utc)
             evidence_obj.last_verification_result = result
@@ -2213,9 +2460,16 @@ def verify_evidence_hash(evidence_id: str, request: Request, deep: bool = True, 
             db.commit()
         except Exception as e:
             db.rollback()
+            saved = False
             logger.error("evidence.verification_status_update_failed id=%s error=%s", evidence_id, e)
         audit_event(audit_action, user_info, request, result=result, evidence=evidence_obj,
                     details={"reason": reason, "reason_text": integrity.REASONS.get(reason), **details})
+        return saved
+
+    def notify_unchecked(reason: str) -> None:
+        notify_service_unavailable(reason, f"Verification of '{evidence_obj.file_name or 'Evidence'}' did not run "
+                                           "and its status is unchanged.",
+                                   case_id=evidence_obj.case_id, evidence_id=evidence_obj.id)
 
     # 1. Re-hash the stored file using deep byte calculation.
     try:
@@ -2231,7 +2485,9 @@ def verify_evidence_hash(evidence_id: str, request: Request, deep: bool = True, 
         return verification_failure(400, integrity.VERIFICATION_FAILED, "DATABASE_MISMATCH",
                                     f"{e.detail}; the evidence record may have been modified.", evidence_obj)
     except EvidenceStorageUnavailable as e:
-        record_outcome(integrity.VERIFICATION_FAILED, "STORAGE_UNAVAILABLE", integrity.AUDIT_VERIFICATION_FAILED, {"detail": e.detail})
+        if record_outcome(integrity.VERIFICATION_FAILED, "STORAGE_UNAVAILABLE", integrity.AUDIT_VERIFICATION_FAILED,
+                          {"detail": e.detail}):
+            notify_unchecked("STORAGE_UNAVAILABLE")
         return verification_failure(503, integrity.VERIFICATION_FAILED, "STORAGE_UNAVAILABLE",
                                     f"{e.detail}. Integrity was not checked and the evidence status is unchanged.", evidence_obj)
 
@@ -2252,7 +2508,8 @@ def verify_evidence_hash(evidence_id: str, request: Request, deep: bool = True, 
             is_missing=False,
             is_unreadable=False,
         )
-        record_outcome(integrity.VERIFICATION_FAILED, "BLOCKCHAIN_UNAVAILABLE", integrity.AUDIT_VERIFICATION_FAILED, {})
+        if record_outcome(integrity.VERIFICATION_FAILED, "BLOCKCHAIN_UNAVAILABLE", integrity.AUDIT_VERIFICATION_FAILED, {}):
+            notify_unchecked("BLOCKCHAIN_UNAVAILABLE")
         return verification_failure(503, integrity.VERIFICATION_FAILED, "BLOCKCHAIN_UNAVAILABLE",
                                     "The blockchain network is unavailable. Integrity was not checked and the evidence "
                                     "status is unchanged; try again when the node is back.", evidence_obj,
@@ -2297,7 +2554,8 @@ def verify_evidence_hash(evidence_id: str, request: Request, deep: bool = True, 
     except (BlockchainUnavailable, BlockchainTransactionError) as e:
         reason = "BLOCKCHAIN_UNAVAILABLE" if isinstance(e, BlockchainUnavailable) else "TRANSACTION_FAILED"
         logger.error("evidence.verification_tx_failed id=%s error=%s", evidence_id, e)
-        record_outcome(integrity.VERIFICATION_FAILED, reason, integrity.AUDIT_VERIFICATION_FAILED, {"detail": str(e)[:300]})
+        if record_outcome(integrity.VERIFICATION_FAILED, reason, integrity.AUDIT_VERIFICATION_FAILED, {"detail": str(e)[:300]}):
+            notify_unchecked(reason)
         return verification_failure(503, integrity.VERIFICATION_FAILED, reason,
                                     f"{integrity.REASONS[reason]} The evidence status is unchanged.", evidence_obj,
                                     {"calculatedHash": current_hash, "calculatedByteHash": current_hash,
@@ -2385,6 +2643,8 @@ def verify_evidence_hash(evidence_id: str, request: Request, deep: bool = True, 
     if other_failures:
         audit_event(integrity.AUDIT_INTEGRITY_INCONSISTENCY, user_info, request, result="Inconsistent", evidence=evidence_obj,
                     details={"checks": other_failures})
+    if not is_verified:
+        notify_hash_mismatch(evidence_obj, current_hash)
 
     return {
         "data": {
@@ -2580,6 +2840,16 @@ def transfer_evidence_custody(evidence_id: str, body: CustodyTransferRequest, re
     audit_event(integrity.AUDIT_CUSTODY_TRANSFERRED, user_info, request, result="Success", evidence=evidence,
                 details={"officer_id": officer_id, "to_officer_name": officer.full_name,
                          "transaction_hash": result["transactionHash"]})
+    # The new custodian is told only if they may access the case (create_notification checks).
+    file_name, fingerprint = evidence.file_name or "Evidence", f"custody:{evidence.id}:{result['transactionHash']}"
+    create_notification("custody", "Evidence custody transferred to you",
+                        f"{user_info['name']} transferred custody of '{file_name}' to you.",
+                        case_id=evidence.case_id, evidence_id=evidence.id, recipients=[officer_id],
+                        exclude=[user_info["id"]], fingerprint=fingerprint)
+    create_notification("custody", "Evidence custody transferred",
+                        f"{user_info['name']} transferred custody of '{file_name}' to {officer.full_name}.",
+                        case_id=evidence.case_id, evidence_id=evidence.id, case_owner=True,
+                        exclude=[user_info["id"], officer_id], fingerprint=fingerprint)
     return {"data": make_json_safe(result), "success": True}
 
 
@@ -3066,7 +3336,8 @@ def run_ai_detect(req: DetectionRequest, request: Request, db: Session = Depends
     print(f"\n[DEBUG] /ai/detect called with evidence_id: {req.evidence_id}, case_id: {req.case_id}")
     
     user_info = get_current_user_info(request)
-    check_case_access(req.case_id, user_info, db)
+    case_uuid = parse_uuid(req.case_id, "case ID")
+    check_case_access(str(case_uuid), user_info, db)
 
     # ---------------------------------------------------------
     # Original Code (Alisha) - Roboflow Model Check:
@@ -3075,10 +3346,11 @@ def run_ai_detect(req: DetectionRequest, request: Request, db: Session = Depends
     #     raise HTTPException(status_code=500, detail="Roboflow model not loaded")
     # ---------------------------------------------------------
 
-    evidence_obj = db.query(Evidence).filter(Evidence.id == req.evidence_id).first()
-    if not evidence_obj:
-        print(f"[DEBUG] Evidence {req.evidence_id} not found in database")
-        raise HTTPException(status_code=404, detail="Evidence not found")
+    # Authorise the evidence by its own case and require it to belong to the requested
+    # case: access to one case must not open evidence held in another.
+    evidence_obj = load_evidence_for_user(req.evidence_id, user_info, db)
+    if evidence_obj.case_id != case_uuid:
+        raise HTTPException(status_code=404, detail="Evidence not found in this case")
 
     evidence = serialize_evidence(evidence_obj)
     file_path = evidence.get("file_url")
@@ -3168,8 +3440,10 @@ def run_ai_detect(req: DetectionRequest, request: Request, db: Session = Depends
             try:
                 evidence_obj.status = "Tampered"
                 db.commit()
+                tamper_status_saved = True
             except Exception as e:
                 db.rollback()
+                tamper_status_saved = False
                 print(f"[AI DETECT TAMPER UPDATE FAILED] {e}")
             write_audit_log(
                 user_id=user_info["id"],
@@ -3184,6 +3458,8 @@ def run_ai_detect(req: DetectionRequest, request: Request, db: Session = Depends
                 },
                 db=db
             )
+            if tamper_status_saved:
+                notify_hash_mismatch(evidence_obj, current_hash)
             raise HTTPException(
                 status_code=403,
                 detail=f"Evidence integrity check failed — file may have been tampered. Detection blocked. Stored: {stored_hash[:16]}... Current: {current_hash[:16]}..."
@@ -3226,14 +3502,17 @@ def run_ai_detect(req: DetectionRequest, request: Request, db: Session = Depends
             prediction = resp.json()
             print(f"[DEBUG] Local YOLO prediction response: {prediction}")
         except HTTPException:
+            notify_analysis_failed("yolo", "Object detection", user_info, case_id=evidence_obj.case_id, evidence=evidence_obj)
             raise
         except Exception as e:
             print(f"[DEBUG] Object detection service error: {e}")
+            notify_analysis_failed("yolo", "Object detection", user_info, case_id=evidence_obj.case_id, evidence=evidence_obj)
             raise HTTPException(status_code=500, detail=f"Object detection service (port 8003) unreachable: {e}")
     except HTTPException:
         raise
     except Exception as e:
         print(f"[DEBUG] Detection threw error: {e}")
+        notify_analysis_failed("yolo", "Object detection", user_info, case_id=evidence_obj.case_id, evidence=evidence_obj)
         raise HTTPException(status_code=500, detail=f"Detection failed: {e}")
     finally:
         # Always clean up temporary file if it was downloaded from storage
@@ -3291,8 +3570,10 @@ def run_ai_detect(req: DetectionRequest, request: Request, db: Session = Depends
         )
         db.add(det_obj)
         db.commit()
+        detection_saved = True
     except Exception as e:
         db.rollback()
+        detection_saved = False
         print(f"[WARN] Failed to save detection record to local DB: {e}")
 
     # Audit log for successful detection
@@ -3303,6 +3584,11 @@ def run_ai_detect(req: DetectionRequest, request: Request, db: Session = Depends
         metadata={"evidence_id": req.evidence_id, "objects_found": len(objects)},
         db=db
     )
+    if detection_saved:
+        create_notification("yolo", "Object detection complete",
+                            f"YOLO analysis of '{evidence_obj.file_name or 'Evidence'}' found {len(objects)} object(s).",
+                            case_id=evidence_obj.case_id, evidence_id=evidence_obj.id,
+                            recipients=[user_info["id"]], case_owner=True)
 
     return {"data": result_data}
 
@@ -4087,6 +4373,7 @@ def bns_predict(payload: BNSRequest, request: Request):
     except HTTPException:
         raise
     except requests.RequestException as e:
+        notify_analysis_failed("bns", "BNS classification", user_info)
         raise HTTPException(status_code=502, detail=f"Failed to communicate with BNS server: {str(e)}")
 
 @app.post("/bns/store")
@@ -4117,7 +4404,10 @@ def bns_store(payload: BNSStore, request: Request, db: Session = Depends(get_db)
         metadata={"crime_type": payload.crime_type, "sections_count": len(payload.sections)},
         db=db
     )
-    
+    create_notification("bns", "BNS classification complete",
+                        f"{payload.crime_type}: {len(payload.sections)} BNS section(s) saved to the case.",
+                        case_id=db_pred.case_id, recipients=[user_info["id"]], case_owner=True)
+
     data = {
         "id": str(db_pred.id),
         "case_id": str(db_pred.case_id),

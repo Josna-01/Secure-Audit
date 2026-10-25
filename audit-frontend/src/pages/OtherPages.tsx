@@ -16,6 +16,11 @@ import { GLTFLoader } from 'three/examples/jsm/loaders/GLTFLoader.js'
 // ── EVIDENCE ──────────────────────────────────────────────────────────────
 export function EvidencePage() {
   const navigate = useNavigate()
+  // Set when opened from a notification link: /evidence?evidence_id=…&case_id=…
+  const [searchParams] = useSearchParams()
+  const focusCaseId = searchParams.get('case_id')
+  const focusEvidenceId = searchParams.get('evidence_id')
+  const fetchSeq = useRef(0)
   const [caseSearch, setCaseSearch] = useState('')
   const [selectedCase, setSelectedCase] = useState<Case | null>(null)
   const [caseResults, setCaseResults] = useState<Case[]>([])
@@ -39,13 +44,24 @@ export function EvidencePage() {
   }
 
   const fetchEvidence = async () => {
+    const seq = ++fetchSeq.current
     try {
       const res = await api.getEvidence(selectedCase?.id)
-      setEvidence(res.data)
+      if (seq === fetchSeq.current) setEvidence(res.data)  // ignore a slower, older response
     } catch { /* ignore */ }
   }
 
   useEffect(() => { fetchEvidence() }, [selectedCase])
+
+  useEffect(() => {
+    if (!focusCaseId || selectedCase?.id === focusCaseId) return
+    api.getCase(focusCaseId).then((res) => setSelectedCase(res.data)).catch(() => {})
+  }, [focusCaseId])
+
+  useEffect(() => {
+    if (!focusEvidenceId) return
+    document.getElementById(`evidence-${focusEvidenceId}`)?.scrollIntoView({ behavior: 'smooth', block: 'center' })
+  }, [focusEvidenceId, evidence])
 
   const verifyHash = async (evidenceId: string) => {
     setVerifyResult((current) => ({ ...current, [evidenceId]: 'Verifying integrity on Ethereum…' }))
@@ -161,7 +177,7 @@ export function EvidencePage() {
           </CardHeader>
           {evidence.length === 0 && <div style={{ textAlign: 'center', padding: '40px', color: 'var(--text3)', fontSize: '12px' }}>No evidence uploaded yet</div>}
           {evidence.map((f) => (
-            <div key={f.id} style={{ border: '1px solid var(--border)', borderLeft: `3px solid ${f.status === 'Tampered' || f.status === 'Missing' ? 'var(--red)' : f.status === 'Unregistered' ? 'var(--amber)' : 'var(--green)'}`, borderRadius: 'var(--r)', padding: '10px 12px', background: 'var(--bg3)', marginBottom: '8px' }}>
+            <div key={f.id} id={`evidence-${f.id}`} style={{ border: '1px solid var(--border)', borderLeft: `3px solid ${f.status === 'Tampered' || f.status === 'Missing' ? 'var(--red)' : f.status === 'Unregistered' ? 'var(--amber)' : 'var(--green)'}`, borderRadius: 'var(--r)', padding: '10px 12px', background: 'var(--bg3)', marginBottom: '8px', boxShadow: f.id === focusEvidenceId ? '0 0 0 2px var(--blue)' : undefined }}>
               <div style={{ display: 'flex', alignItems: 'center', gap: '10px' }}>
                 <div style={{ flex: 1, minWidth: 0 }}>
                   <div style={{ fontSize: '12px', fontWeight: 500, color: 'var(--text)', whiteSpace: 'nowrap', overflow: 'hidden', textOverflow: 'ellipsis' }}>{f.file_name}</div>
