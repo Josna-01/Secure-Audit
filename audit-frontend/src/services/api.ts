@@ -5,7 +5,12 @@ import type {
   ApiResponse, PaginatedResponse
 } from '../types'
 
-const BASE_URL = import.meta.env.VITE_API_BASE_URL || 'http://localhost:8000'
+// Use Vite's same-origin development proxy. This prevents a frontend started
+// on an alternate available port (for example 5176 when 5173 is occupied)
+// from being blocked by browser CORS before it can reach the API gateway.
+const BASE_URL = import.meta.env.DEV
+  ? '/api'
+  : (import.meta.env.VITE_API_BASE_URL || 'http://localhost:8000')
 
 class ApiService {
   private client: AxiosInstance
@@ -269,28 +274,19 @@ class ApiService {
   }
 
   // ── AUDIO FORENSICS ──────────────────────────────────────────────────────
-  async analyzeAudio(file: File) {
-    const AUDIO_BASE_URL = import.meta.env.VITE_AUDIO_API_BASE_URL || 'http://localhost:8002'
+  async analyzeAudio(file: File, caseId?: string, evidenceId?: string) {
     const formData = new FormData()
     formData.append('audio', file)
     formData.append('file', file)
-    try {
-      const res = await axios.post(`${AUDIO_BASE_URL}/audio/analyze`, formData, {
-        headers: { 'Content-Type': 'multipart/form-data' },
-        timeout: 180000
-      })
-      return res.data
-    } catch (err: any) {
-      if (err.response && err.response.status !== 404) {
-        throw err
-      }
-      // Fallback if backend uses legacy /transcribe route
-      const res = await axios.post(`${AUDIO_BASE_URL}/transcribe`, formData, {
-        headers: { 'Content-Type': 'multipart/form-data' },
-        timeout: 180000
-      })
-      return res.data
-    }
+    if (caseId) formData.append('case_id', caseId)
+    if (evidenceId) formData.append('evidence_id', evidenceId)
+
+    // Route strictly through authenticated and audited API Gateway (port 8000)
+    const res = await this.client.post('/ai/audio/analyze', formData, {
+      headers: { 'Content-Type': 'multipart/form-data' },
+      timeout: 180000
+    })
+    return res.data
   }
 
   // ── STORYBOARD ──────────────────────────────────────────────────────────
@@ -403,7 +399,8 @@ class ApiService {
     return data
   }
 
-  async getPhotogrammetryStatusByCase(caseId: string) {
+  async getPhotogrammetryStatusByCase(caseId: string, evidenceId?: string) {
+    const params = evidenceId ? { evidence_id: evidenceId } : undefined
     const { data } = await this.client.get<{
       status: string
       model_url?: string
@@ -415,7 +412,7 @@ class ApiService {
       job_id: string
       evidence_id?: string
       current_step?: number
-    }>(`/photogrammetry/status/${caseId}`)
+    }>(`/photogrammetry/status/${caseId}`, { params })
     return data
   }
 
@@ -427,6 +424,25 @@ class ApiService {
   async getPhotogrammetryComparison() {
     const { data } = await this.client.get<any>(`/photogrammetry/comparison`)
     return data
+  }
+
+  async getPhotogrammetryModelBlob(jobId: string, format: 'glb' | 'ply'): Promise<Blob> {
+    const { data } = await this.client.get(`/photogrammetry/model/${jobId}/${format}`, {
+      responseType: 'blob'
+    })
+    return data
+  }
+
+  async downloadPhotogrammetryModel(jobId: string, format: 'glb' | 'ply', filename?: string): Promise<void> {
+    const blob = await this.getPhotogrammetryModelBlob(jobId, format)
+    const blobUrl = window.URL.createObjectURL(blob)
+    const a = document.createElement('a')
+    a.href = blobUrl
+    a.download = filename || `${jobId}_model.${format}`
+    document.body.appendChild(a)
+    a.click()
+    document.body.removeChild(a)
+    setTimeout(() => window.URL.revokeObjectURL(blobUrl), 1000)
   }
 }
 

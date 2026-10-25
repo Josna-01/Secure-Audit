@@ -10,10 +10,9 @@ SQL_COMMANDS = [
 def run_migration():
     db_url = os.environ.get("DATABASE_URL")
     if not db_url:
-        print("ERROR: DATABASE_URL environment variable is not set.")
-        sys.exit(1)
-
-    engine = create_engine(db_url)
+        from db import engine
+    else:
+        engine = create_engine(db_url)
     with engine.connect() as conn:
         for cmd in SQL_COMMANDS:
             print(f"Executing: {cmd}")

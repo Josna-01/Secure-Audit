@@ -138,7 +138,7 @@ function EvidenceModal({ evidenceId, onClose, onOpenTx, onVerified }: {
       link.download = detail.evidence.fileName || 'evidence'
       link.click()
       URL.revokeObjectURL(url)
-      setNotice(integrity === 'match' ? `Downloaded · SHA-256 ${short(sha256, 12, 8)} matches the recorded hash` : `Downloaded · ⚠ served file hash ${short(sha256, 12, 8)} differs from the recorded hash`)
+      setNotice(integrity === 'match' ? `Downloaded · SHA-256 ${short(sha256, 12, 8)} matches the recorded hash` : `Downloaded · Warning: served file hash ${short(sha256, 12, 8)} differs from the recorded hash`)
       load()
     } catch (e: any) {
       setNotice(errorText(e, 'Download failed'))
@@ -200,8 +200,18 @@ function EvidenceModal({ evidenceId, onClose, onOpenTx, onVerified }: {
           <div style={{ ...sectionTitle, display: 'flex', alignItems: 'center', gap: 10 }}>Integrity Checks <Badge label={detail.integrity} /></div>
           {detail.integrityChecks.length === 0 && <div style={{ fontSize: 12, color: 'var(--text3)' }}>Not available while the blockchain is offline.</div>}
           {detail.integrityChecks.map((check) => (
-            <div key={check.code} style={{ fontSize: 12, padding: '4px 0', color: check.ok ? 'var(--text2)' : check.severity === 'critical' ? 'var(--red)' : 'var(--amber)' }}>
-              {check.ok ? '✓' : '✗'} {check.message}
+            <div key={check.code} style={{ fontSize: 12, padding: '4px 0', color: check.ok ? 'var(--text2)' : check.severity === 'critical' ? 'var(--red)' : 'var(--amber)', display: 'flex', alignItems: 'center', gap: '6px' }}>
+              {check.ok ? (
+                <svg width="12" height="12" viewBox="0 0 24 24" fill="none" stroke="var(--green)" strokeWidth="2.5" strokeLinecap="round" strokeLinejoin="round">
+                  <polyline points="20 6 9 17 4 12" />
+                </svg>
+              ) : (
+                <svg width="12" height="12" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2.5" strokeLinecap="round" strokeLinejoin="round">
+                  <line x1="18" y1="6" x2="6" y2="18" />
+                  <line x1="6" y1="6" x2="18" y2="18" />
+                </svg>
+              )}
+              <span>{check.message}</span>
             </div>
           ))}
 

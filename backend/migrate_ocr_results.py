@@ -18,7 +18,10 @@ from sqlalchemy import create_engine, text
 
 DATABASE_URL = os.getenv("DATABASE_URL")
 if not DATABASE_URL:
-    sys.exit("DATABASE_URL is required; no migration was run.")
+    try:
+        from db import DATABASE_URL
+    except Exception:
+        DATABASE_URL = None
 
 
 SQL_COMMANDS = [

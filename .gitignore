@@ -19,7 +19,9 @@ backend/.env
 photogrammetry-backend/.env
 bns-backend/.env
 audio-backend/.env
-crime-detection/.env
+best/.env
+best/outputs/
+best/uploads/
 
 # Key / credential files
 *.pem
@@ -175,6 +177,17 @@ photogrammetry-backend/focused_tower_validation_broad/
 photogrammetry-backend/quality_validation_colmap/
 photogrammetry-backend/quality_validation_output/
 
+# Photogrammetry generated evaluation benchmark comparison directories & chart images
+photogrammetry-backend/evaluation_comparisons/
+photogrammetry-backend/all_jobs_evaluation_comparison/
+photogrammetry-backend/evaluation_benchmark/charts/
+photogrammetry-backend/evaluation_benchmark/*.png
+photogrammetry-backend/evaluation_benchmark/all_modules_graphs/
+evaluation_benchmark/
+photogrammetry-backend/technical_report/*.pdf
+photogrammetry-backend/technical_report/*.docx
+photogrammetry-backend/jobs/*/evaluation/*.png
+
 # Generated 3D model file formats (produced by Open3D/COLMAP at runtime)
 *.glb
 *.ply
@@ -186,10 +199,11 @@ point_cloud_preview.png
 # ==============================================================================
 # GENERATED OUTPUTS — CRIME DETECTION
 # ==============================================================================
-# Annotated inference output images produced by YOLOv8 at runtime
+# Annotated inference output images and training runs produced by YOLOv8 at runtime
+best/outputs/
+best/runs/
+best/uploads/
 crime-detection/outputs/
-
-# YOLOv8 training run artefacts (weights, metrics, plots)
 crime-detection/runs/
 bns-backend/runs/
 
@@ -209,19 +223,19 @@ bns-backend/runs/
 *.bin
 *.safetensors
 
-# numpy arrays are generated training artifacts in most cases — but see BNS
-# exception below before adding any global *.npy rule.
+# YOLOv8 object detection service (best) - model weights, unpacked torch tensors, and archive data
+best/*.pt
+best/data/
+best/.data/
+best/data.pkl
+best/byteorder
+best/.format_version
+best/.storage_alignment
+best/version
 
-# Crime detection — trained YOLOv8 weights
-# yolov8n.pt   → auto-downloaded by ultralytics on startup, safe to ignore
-# best.pt      → trained on synthetic data (not reliable), safe to ignore
-# crime_best.pt → REQUIRED active crime model (knife/gun/bullet/blood);
-#                 no download source. Track in Git (only 6 MB).
+# Legacy crime detection
 crime-detection/model/best.pt
 crime-detection/model/yolov8n.pt
-# NOTE: crime-detection/model/crime_best.pt is intentionally NOT ignored.
-# The global *.pt rule above catches it, so we explicitly negate it here:
-!crime-detection/model/crime_best.pt
 
 # BNS backend — trained HGAT model + FAISS retrieval files
 # best_rag_hgat_model.pth  → 76 MB trained weight. Use Git LFS:
@@ -367,3 +381,26 @@ Desktop.ini
 
 # Profiling output
 *.prof
+
+# ==============================================================================
+# SECURE AUDIT FORENSIC EVIDENCE & RECOVERY ARTIFACTS
+# ==============================================================================
+# Disaster recovery dumps, SQL exports, manifests and migration reports
+backups/
+*.dump
+*.sql
+*.sql.gz
+!schema.sql
+
+# Local evidence stores (contain confidential digital exhibits)
+backend/uploads/
+**/uploads/
+!backend/uploads/.gitkeep
+
+# Ganache blockchain persistent LevelDB data
+blockchain/ganache-data/
+**/ganache-data/
+
+# Temporary and scratch directories
+scratch/
+.scratch/

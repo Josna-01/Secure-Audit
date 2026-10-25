@@ -335,9 +335,9 @@ def postprocess_ocr_text(text: str) -> str:
     if not text:
         return text
 
-    # Standardize space around punctuation
-    text = re.sub(r"\s+([,.!?:;])", r"\1", text)
-    text = re.sub(r"(?<=[a-zA-Z])([,.!?:;])(?=[a-zA-Z])", r"\1 ", text)
+    # Standardize space around punctuation (except ellipsis dots)
+    text = re.sub(r"\s+([,!?:;]|\.(?!\.))", r"\1", text)
+    text = re.sub(r"(?<=[a-zA-Z])([,!?:;]|\.(?!\.))(?=[a-zA-Z])", r"\1 ", text)
 
     words = text.split(" ")
     corrected_words = [correct_english_word(w) for w in words]

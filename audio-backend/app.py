@@ -18,19 +18,45 @@ import speech_recognition as sr
 load_dotenv()
 
 _FFMPEG_EXE = None
-try:
-    import imageio_ffmpeg  # type: ignore
-    _FFMPEG_EXE = imageio_ffmpeg.get_ffmpeg_exe()
-    _FFMPEG_DIR = os.path.dirname(_FFMPEG_EXE)
-    if _FFMPEG_DIR not in os.environ.get("PATH", ""):
-        os.environ["PATH"] = _FFMPEG_DIR + os.pathsep + os.environ.get("PATH", "")
+_FFPROBE_EXE = None
+
+# 1. Search for full system/installed FFmpeg binaries (including ffprobe)
+_CANDIDATE_FFMPEG_DIRS = [
+    r"C:\ffmpeg\ffmpeg-9.0.2-essentials_build\bin",
+    r"C:\ffmpeg\bin",
+    r"C:\Program Files\ffmpeg\bin",
+    r"C:\Program Files (x86)\ffmpeg\bin",
+    r"C:\tools\ffmpeg\bin",
+]
+for _candidate_dir in _CANDIDATE_FFMPEG_DIRS:
+    if os.path.isdir(_candidate_dir) and os.path.exists(os.path.join(_candidate_dir, "ffmpeg.exe")):
+        if _candidate_dir not in os.environ.get("PATH", ""):
+            os.environ["PATH"] = _candidate_dir + os.pathsep + os.environ.get("PATH", "")
+        _FFMPEG_EXE = os.path.join(_candidate_dir, "ffmpeg.exe")
+        if os.path.exists(os.path.join(_candidate_dir, "ffprobe.exe")):
+            _FFPROBE_EXE = os.path.join(_candidate_dir, "ffprobe.exe")
+        break
+
+# 2. Fallback to imageio_ffmpeg if not found
+if not _FFMPEG_EXE:
     try:
-        from pydub import AudioSegment  # type: ignore
-        AudioSegment.converter = _FFMPEG_EXE
+        import imageio_ffmpeg  # type: ignore
+        _FFMPEG_EXE = imageio_ffmpeg.get_ffmpeg_exe()
+        _FFMPEG_DIR = os.path.dirname(_FFMPEG_EXE)
+        if _FFMPEG_DIR not in os.environ.get("PATH", ""):
+            os.environ["PATH"] = _FFMPEG_DIR + os.pathsep + os.environ.get("PATH", "")
     except Exception:
-        pass
+        _FFMPEG_EXE = None
+
+# 3. Configure pydub explicitly
+try:
+    from pydub import AudioSegment, utils as pydub_utils  # type: ignore
+    if _FFMPEG_EXE:
+        AudioSegment.converter = _FFMPEG_EXE
+    if _FFPROBE_EXE:
+        AudioSegment.ffprobe = _FFPROBE_EXE
 except Exception:
-    _FFMPEG_EXE = None
+    pass
 
 app = FastAPI(title="Secure Audit — ENF AI Audio Evidence Examination Tool")
 
@@ -61,6 +87,28 @@ def _decode_audio_to_mono_pcm(
 
     ext = os.path.splitext(filename)[1].lstrip(".").upper() or "AUDIO"
 
+    # 1. Native container & audio decoding via PyAV (MP4, AAC, M4A, MOV, MKV, WAV, MP3, etc.)
+    try:
+        import av
+        buffer = io.BytesIO(audio_bytes)
+        container = av.open(buffer)
+        audio_stream = next((s for s in container.streams if s.type == "audio"), None)
+        if audio_stream:
+            target_sr = 16000
+            resampler = av.AudioResampler(format="fltp", layout="mono", rate=target_sr)
+            all_chunks = []
+            for frame in container.decode(audio_stream):
+                for resampled in resampler.resample(frame):
+                    all_chunks.append(resampled.to_ndarray()[0])
+            if all_chunks:
+                samples = np.concatenate(all_chunks).astype(np.float32)
+                if len(samples) > 0:
+                    codec_name = (getattr(audio_stream.codec_context, "name", None) or ext or "AUDIO").upper()
+                    orig_channels = getattr(audio_stream.codec_context, "channels", 1) or 1
+                    return samples, target_sr, orig_channels, 16, codec_name
+    except Exception:
+        pass
+
     if audio_bytes.startswith(b"RIFF") and b"WAVE" in audio_bytes[:16]:
         try:
             buffer = io.BytesIO(audio_bytes)
@@ -82,7 +130,8 @@ def _decode_audio_to_mono_pcm(
 
                 if nchannels > 1:
                     data = data.reshape(-1, nchannels).mean(axis=1)
-                return data, sample_rate, nchannels, sampwidth * 8, "WAV"
+                if len(data) > 0:
+                    return data, sample_rate, nchannels, sampwidth * 8, "WAV"
         except Exception:
             pass
 
@@ -132,7 +181,8 @@ def _decode_audio_to_mono_pcm(
         samples = np.array(segment_mono.get_array_of_samples(), dtype=np.float32)
         samples = samples / (2.0 ** (max(1, bit_depth) - 1))
         fmt_str = "MP3" if ext == "MP3" else ("MP4" if ext in ["MP4", "M4A"] else (ext or "AUDIO"))
-        return samples, segment.frame_rate, orig_channels, bit_depth, fmt_str
+        if len(samples) > 0:
+            return samples, segment.frame_rate, orig_channels, bit_depth, fmt_str
     except Exception:
         pass
 
@@ -1656,7 +1706,11 @@ def transcribe(
         contents = target_file.file.read()
         report = analyze_audio_bytes(contents, target_file.filename or "uploaded_audio")
         return JSONResponse(content=report)
+    except ValueError as exc:
+        raise HTTPException(status_code=400, detail=str(exc)) from exc
     except Exception as exc:
+        import traceback
+        traceback.print_exc()
         raise HTTPException(status_code=500, detail=f"Analysis failed: {str(exc)}") from exc
 
 
@@ -1670,14 +1724,23 @@ def analyze_audio(
         raise HTTPException(status_code=422, detail="No audio file uploaded (expected 'audio' or 'file' form parameter).")
     try:
         contents = target_file.file.read()
+        if not contents or len(contents) == 0:
+            raise HTTPException(status_code=400, detail="The uploaded file is empty (0 bytes).")
         report = analyze_audio_bytes(contents, target_file.filename or "uploaded_audio")
         return JSONResponse(content=report)
+    except HTTPException:
+        raise
+    except ValueError as exc:
+        raise HTTPException(status_code=400, detail=str(exc)) from exc
     except Exception as exc:
+        import traceback
+        traceback.print_exc()
         raise HTTPException(status_code=500, detail=f"Audio forensic analysis failed: {str(exc)}") from exc
 
 
 if __name__ == "__main__":
     import uvicorn
 
-    port = int(os.environ.get("PORT", 8002))
-    uvicorn.run("app:app", host="0.0.0.0", port=port, reload=True)
+    host = os.environ.get("AUDIO_HOST", "127.0.0.1")
+    port = int(os.environ.get("PORT", os.environ.get("AUDIO_PORT", 8002)))
+    uvicorn.run("app:app", host=host, port=port, reload=True)

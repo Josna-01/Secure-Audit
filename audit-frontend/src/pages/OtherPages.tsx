@@ -1,6 +1,6 @@
 // ── EVIDENCE UPLOAD ───────────────────────────────────────────────────────
 import React, { useEffect, useRef, useState } from 'react'
-import { useNavigate, useParams } from 'react-router-dom'
+import { useNavigate, useParams, useSearchParams } from 'react-router-dom'
 import { AppShell } from '../components/Layout'
 import { Card, CardTitle, CardHeader, Btn, Badge, HashChip, AlertBox, FutureNotice, UploadZone, InfoRow, Spinner, Tabs } from '../components/UI'
 import { OcrTextViewer } from '../components/OcrTextViewer'
@@ -173,7 +173,10 @@ export function EvidencePage() {
                 <HashChip hash={f.sha256_hash} />
                 <div style={{ flex: 1 }} />
                 {f.file_type === 'Audio' && (
-                  <Btn size="xs" onClick={() => navigate('/audio')}>Analyze Audio</Btn>
+                  <Btn size="xs" onClick={() => navigate(f.case_id ? `/audio?case_id=${f.case_id}&evidence_id=${f.id}` : `/audio?evidence_id=${f.id}`)}>Analyze Audio</Btn>
+                )}
+                {f.file_type === 'Video' && f.case_id && (
+                  <Btn size="xs" onClick={() => navigate(`/photo3d?case_id=${f.case_id}&evidence_id=${f.id}`)}>3D Reconstruct</Btn>
                 )}
                 <Btn size="xs" onClick={() => verifyHash(f.id)}>Verify Hash</Btn>
               </div>
@@ -325,7 +328,28 @@ export function DetectionPage() {
               <div style={{ padding: '16px', width: '100%', display: 'flex', flexDirection: 'column' }}>
                 <div style={{ width: '100%', height: '550px', background: '#000', borderRadius: '4px', marginBottom: '16px', display: 'flex', justifyContent: 'center', alignItems: 'center', overflow: 'hidden' }}>
                   <div style={{ position: 'relative', display: 'inline-flex', maxWidth: '100%', maxHeight: '100%' }}>
-                    <img src={result.image_url} alt="Annotated Detection Output" style={{ display: 'block', maxWidth: '100%', maxHeight: '550px', objectFit: 'contain' }} />
+                    <img
+                      src={result.image_url}
+                      alt="Annotated Detection Output"
+                      style={{ display: 'block', maxWidth: '100%', maxHeight: '550px', objectFit: 'contain' }}
+                      onError={async (e) => {
+                        try {
+                          if (file) {
+                            (e.target as HTMLImageElement).src = URL.createObjectURL(file)
+                            return
+                          }
+                          const evId = imgSource === 'evidence' ? selectedEvidence : ''
+                          if (evId) {
+                            const dl = await api.downloadEvidence(evId)
+                            if (dl && dl.blob) {
+                              ;(e.target as HTMLImageElement).src = URL.createObjectURL(dl.blob)
+                            }
+                          }
+                        } catch (err) {
+                          console.warn("Fallback evidence image fetch failed:", err)
+                        }
+                      }}
+                    />
                     {result.objects.map((obj, i) => {
                       const [left, top, w, h] = obj.bbox;
                       return (
@@ -546,7 +570,26 @@ export function BNSPage() {
 
             {!result && !running && (
               <div style={{ textAlign: 'center', padding: '50px 20px', color: 'var(--text3)', fontSize: '13px', lineHeight: 1.6 }}>
-                <div style={{ fontSize: '28px', marginBottom: '10px' }}>⚖️</div>
+                <div style={{
+                  width: '56px',
+                  height: '56px',
+                  borderRadius: '50%',
+                  background: 'var(--bg3)',
+                  border: '1px solid var(--border)',
+                  display: 'inline-flex',
+                  alignItems: 'center',
+                  justifyContent: 'center',
+                  color: 'var(--text3)',
+                  marginBottom: '12px'
+                }}>
+                  <svg width="26" height="26" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="1.8" strokeLinecap="round" strokeLinejoin="round">
+                    <path d="M12 3v18"/>
+                    <path d="M6 8l-4 6h8l-4-6z"/>
+                    <path d="M18 8l-4 6h8l-4-6z"/>
+                    <path d="M3 8h18"/>
+                  </svg>
+                </div>
+                <br />
                 Enter FIR facts and execute classification.<br />
                 The system will automatically detect every applicable BNS section with confidence scores, triggering evidentiary sentences, and legal explanations.
               </div>
@@ -756,8 +799,13 @@ export function BNSPage() {
                             {/* AI Explanation / Rationale Box */}
                             {s.explanation && (
                               <div style={{ marginBottom: '12px', padding: '10px 12px', background: 'rgba(99, 102, 241, 0.08)', border: '1px solid rgba(99, 102, 241, 0.25)', borderRadius: 'var(--r)', wordBreak: 'break-word' }}>
-                                <div style={{ fontSize: '10px', fontWeight: 700, color: 'var(--blue)', textTransform: 'uppercase', letterSpacing: '.4px', marginBottom: '4px' }}>
-                                  💡 AI Legal Explanation &amp; Rationale
+                                <div style={{ fontSize: '10px', fontWeight: 700, color: 'var(--blue)', textTransform: 'uppercase', letterSpacing: '.4px', marginBottom: '4px', display: 'flex', alignItems: 'center', gap: '6px' }}>
+                                  <svg width="12" height="12" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2.2" strokeLinecap="round" strokeLinejoin="round">
+                                    <path d="M12 2a6 6 0 0 0-6 6c0 2.2 1.2 3.8 2 5 .8 1.2 1 2 1 3h6c0-1 .2-1.8 1-3 .8-1.2 2-2.8 2-5a6 6 0 0 0-6-6z" />
+                                    <path d="M9 18h6" />
+                                    <path d="M10 21h4" />
+                                  </svg>
+                                  AI Legal Explanation &amp; Rationale
                                 </div>
                                 <div style={{ fontSize: '12px', color: 'var(--text)', lineHeight: 1.5, wordBreak: 'break-word' }}>
                                   {s.explanation}
@@ -1168,7 +1216,7 @@ export function PlaceholderPage({ title, description }: { title: string; descrip
   )
 }
 
-function GLBViewer({ modelUrl, wireframe, resetKey }: { modelUrl: string, wireframe: boolean, resetKey: number }) {
+function GLBViewer({ modelUrl, jobId, wireframe, resetKey }: { modelUrl?: string, jobId?: string, wireframe: boolean, resetKey: number }) {
   const hostRef = useRef<HTMLDivElement>(null)
   const [viewerError, setViewerError] = useState('')
   const maxViewportDimension = 4096
@@ -1177,6 +1225,9 @@ function GLBViewer({ modelUrl, wireframe, resetKey }: { modelUrl: string, wirefr
     const host = hostRef.current
     if (!host) return
     setViewerError('')
+
+    let blobUrlToRevoke: string | null = null
+    let active = true
 
     const scene = new THREE.Scene()
     scene.background = new THREE.Color(0x111827)
@@ -1222,32 +1273,59 @@ function GLBViewer({ modelUrl, wireframe, resetKey }: { modelUrl: string, wirefr
     }
 
     const loader = new GLTFLoader()
-    loader.load(modelUrl, (gltf: any) => {
-      model = gltf?.scene
-      if (!model) return
-      model.traverse((child: any) => {
-        if (child instanceof THREE.Mesh) {
-          const materials = Array.isArray(child.material) ? child.material : [child.material]
-          materials.forEach((material: any) => {
-            material.wireframe = wireframe
-            // Ensure photogrammetry vertex-colored models render with true dielectric diffuse colors
-            if (child.geometry.getAttribute('color')) {
-              material.vertexColors = true
-              if ('metalness' in material) {
-                material.metalness = 0.0
-              }
-              if ('roughness' in material) {
-                material.roughness = 0.8
-              }
-            }
-            material.side = THREE.DoubleSide
-            material.needsUpdate = true
-          })
+
+    const loadModel = async () => {
+      try {
+        let loadTarget = modelUrl || ''
+        if (jobId) {
+          try {
+            const blob = await api.getPhotogrammetryModelBlob(jobId, 'glb')
+            if (!active) return
+            blobUrlToRevoke = URL.createObjectURL(blob)
+            loadTarget = blobUrlToRevoke
+          } catch (fetchErr) {
+            console.warn('Could not retrieve model blob via authenticated API, falling back to URL:', fetchErr)
+          }
         }
-      })
-      scene.add(model)
-      frameModel()
-    }, undefined, () => setViewerError('The GLB could not be loaded. Check the artifact URL and storage CORS settings.'))
+        if (!loadTarget) {
+          setViewerError('No model source available.')
+          return
+        }
+        loader.load(
+          loadTarget,
+          (gltf: any) => {
+            if (!active) return
+            model = gltf?.scene
+            if (!model) return
+            model.traverse((child: any) => {
+              if (child instanceof THREE.Mesh) {
+                const materials = Array.isArray(child.material) ? child.material : [child.material]
+                materials.forEach((material: any) => {
+                  material.wireframe = wireframe
+                  if (child.geometry.getAttribute('color')) {
+                    material.vertexColors = true
+                    if ('metalness' in material) material.metalness = 0.0
+                    if ('roughness' in material) material.roughness = 0.8
+                  }
+                  material.side = THREE.DoubleSide
+                  material.needsUpdate = true
+                })
+              }
+            })
+            scene.add(model)
+            frameModel()
+          },
+          undefined,
+          () => {
+            if (active) setViewerError('The GLB could not be loaded. Check storage access.')
+          }
+        )
+      } catch (err: any) {
+        if (active) setViewerError(`Failed to load model: ${err.message || err}`)
+      }
+    }
+
+    loadModel()
 
     const resize = () => {
       const bounds = host.getBoundingClientRect()
@@ -1268,13 +1346,17 @@ function GLBViewer({ modelUrl, wireframe, resetKey }: { modelUrl: string, wirefr
     }
     animate()
     return () => {
+      active = false
+      if (blobUrlToRevoke) {
+        URL.revokeObjectURL(blobUrlToRevoke)
+      }
       cancelAnimationFrame(animationFrame)
       observer.disconnect()
       controls.dispose()
       renderer.dispose()
       host.replaceChildren()
     }
-  }, [modelUrl, wireframe, resetKey])
+  }, [modelUrl, jobId, wireframe, resetKey])
 
   return <div ref={hostRef} style={{ width: '100%', height: '100%', minWidth: 0, minHeight: 0, position: 'relative' }}>
     {viewerError && <div style={{ position: 'absolute', inset: 0, display: 'grid', placeItems: 'center', padding: '24px', color: 'var(--red)', textAlign: 'center', zIndex: 2 }}>{viewerError}</div>}
@@ -1283,6 +1365,10 @@ function GLBViewer({ modelUrl, wireframe, resetKey }: { modelUrl: string, wirefr
 
 // ── 3D SCENE RECONSTRUCTION (PHOTOGRAMMETRY) PAGE ────────────────────────
 export function Photo3DPage() {
+  const [searchParams] = useSearchParams()
+  const urlCaseId = searchParams.get('case_id')
+  const urlEvidenceId = searchParams.get('evidence_id')
+
   const [cases, setCases] = useState<Case[]>([])
   const [selectedCaseId, setSelectedCaseId] = useState<string>('')
   const [evidenceList, setEvidenceList] = useState<Evidence[]>([])
@@ -1291,6 +1377,7 @@ export function Photo3DPage() {
   const [status, setStatus] = useState<'Waiting' | 'Pending' | 'Processing' | 'Completed' | 'Failed'>('Waiting')
   const [jobDetails, setJobDetails] = useState<{
     job_id?: string
+    evidence_id?: string
     model_url?: string
     point_cloud_url?: string
     frame_count?: number
@@ -1306,6 +1393,24 @@ export function Photo3DPage() {
   const [viewMode, setViewMode] = useState<'orbit' | 'wireframe' | 'pointcloud'>('orbit')
   const [viewerReset, setViewerReset] = useState(0)
   const [errorMsg, setErrorMsg] = useState('')
+  const [isExpanded, setIsExpanded] = useState(false)
+
+  useEffect(() => {
+    const handleKeyDown = (e: KeyboardEvent) => {
+      if (e.key === 'Escape') setIsExpanded(false)
+    }
+    window.addEventListener('keydown', handleKeyDown)
+    return () => window.removeEventListener('keydown', handleKeyDown)
+  }, [])
+
+  useEffect(() => {
+    if (isExpanded) {
+      document.body.style.overflow = 'hidden'
+    } else {
+      document.body.style.overflow = ''
+    }
+    return () => { document.body.style.overflow = '' }
+  }, [isExpanded])
 
   const [logs, setLogs] = useState<string[]>([])
   const pollTimerRef = useRef<NodeJS.Timeout | null>(null)
@@ -1326,11 +1431,12 @@ export function Photo3DPage() {
   useEffect(() => {
     async function loadCases() {
       try {
-        const res = await api.getCases({ per_page: 20 })
+        const res = await api.getCases({ per_page: 50 })
         const caseData = res.data || []
         setCases(caseData)
         if (caseData.length > 0) {
-          setSelectedCaseId(caseData[0].id)
+          const matchCase = urlCaseId && caseData.find(c => c.id === urlCaseId)
+          setSelectedCaseId(matchCase ? matchCase.id : caseData[0].id)
         }
       } catch (err) {
         console.error('Failed to load cases:', err)
@@ -1340,19 +1446,21 @@ export function Photo3DPage() {
   }, [])
 
   // Function to query status
-  const checkCurrentStatus = async (jobId: string) => {
+  const checkCurrentStatus = async (jobId: string, expectedEvidenceId?: string) => {
     try {
       const res = await api.getPhotogrammetryStatus(jobId)
       if (res && res.status) {
+        if (expectedEvidenceId && res.evidence_id && res.evidence_id !== expectedEvidenceId) {
+          return
+        }
         setStatus(res.status as any)
         setJobDetails(res)
         if (res.status === 'Completed') {
           setPipelineStep(8)
         } else if (res.status === 'Processing' || res.status === 'Pending') {
-          // Advance UI to whatever step the backend is currently on
           const step = (res as any).current_step
           if (step && step > 0) setPipelineStep(step)
-          startPolling(jobId)
+          startPolling(jobId, expectedEvidenceId)
         } else if (res.status === 'Failed') {
           setPipelineStep(1)
           setErrorMsg(`Reconstruction failed.${res.error_message ? ` ${res.error_message}` : ''}`)
@@ -1364,19 +1472,22 @@ export function Photo3DPage() {
   }
 
   // Polling function (every 3 seconds)
-  const startPolling = (jobId: string) => {
+  const startPolling = (jobId: string, expectedEvidenceId?: string) => {
     stopPolling()
     pollTimerRef.current = setInterval(async () => {
       try {
         const res = await api.getPhotogrammetryStatus(jobId)
         if (!res) return
+        if (expectedEvidenceId && res.evidence_id && res.evidence_id !== expectedEvidenceId) {
+          stopPolling()
+          return
+        }
         setStatus(res.status as any)
         setJobDetails(res)
 
         const timeStr = new Date().toLocaleTimeString()
 
         if (res.status === 'Processing' || res.status === 'Pending') {
-          // Advance UI to wherever the backend actually is right now
           const step = (res as any).current_step
           if (step && step > 0) setPipelineStep(step)
           setLogs(prev => [...prev, `[${timeStr}] Pipeline ${res.status.toLowerCase()}... (step ${step ?? 1}/8)`])
@@ -1411,50 +1522,111 @@ export function Photo3DPage() {
 
   // 2. Fetch Evidence when selectedCaseId changes
   useEffect(() => {
-    if (!selectedCaseId) return
+    if (!selectedCaseId) {
+      setEvidenceList([])
+      setSelectedEvidenceId('')
+      return
+    }
     async function loadEvidence() {
       try {
         const res = await api.getEvidence(selectedCaseId)
         const evData = res.data || []
-        setEvidenceList(evData)
         const videoEvidence = evData.filter(ev => {
           const type = (ev.evidence_type || ev.file_type || '').toLowerCase()
           return type === 'video' || /\.(mp4|mov|avi|mkv)$/i.test(ev.file_name || '')
         })
         setEvidenceList(videoEvidence)
         if (videoEvidence.length > 0) {
-          setSelectedEvidenceId(videoEvidence[0].id)
+          const matchEv = urlEvidenceId && videoEvidence.find(ev => ev.id === urlEvidenceId)
+          setSelectedEvidenceId(matchEv ? matchEv.id : videoEvidence[0].id)
         } else {
           setSelectedEvidenceId('')
         }
-
-        // Auto-load latest photogrammetry job for this case if one exists
-        try {
-          const latestJob = await api.getPhotogrammetryStatusByCase(selectedCaseId)
-          if (latestJob && latestJob.status) {
-            setStatus(latestJob.status as any)
-            setJobDetails(latestJob)
-            if (latestJob.status === 'Completed') {
-              setPipelineStep(8)
-            } else if (latestJob.status === 'Processing' || latestJob.status === 'Pending') {
-              const step = latestJob.current_step || 1
-              setPipelineStep(step)
-              startPolling(latestJob.job_id)
-            }
-          } else {
-            setStatus('Waiting')
-            setJobDetails({})
-          }
-        } catch {
-          setStatus('Waiting')
-          setJobDetails({})
-        }
       } catch (err) {
         console.error('Failed to load evidence:', err)
+        setEvidenceList([])
+        setSelectedEvidenceId('')
       }
     }
     loadEvidence()
   }, [selectedCaseId])
+
+  // 2.5. Fetch reconstruction status specifically for the selected evidence item
+  useEffect(() => {
+    stopPolling()
+
+    if (!selectedCaseId || !selectedEvidenceId) {
+      setStatus('Waiting')
+      setJobDetails({})
+      setPipelineStep(1)
+      setLogs([])
+      setErrorMsg('')
+      setEvaluationData(null)
+      return
+    }
+
+    let active = true
+
+    async function loadStatusForEvidence() {
+      setErrorMsg('')
+      try {
+        const job = await api.getPhotogrammetryStatusByCase(selectedCaseId, selectedEvidenceId)
+        if (!active) return
+
+        if (job && job.status) {
+          // Safety verification: Ensure the job returned strictly belongs to the selected evidence
+          if (job.evidence_id && job.evidence_id !== selectedEvidenceId) {
+            console.warn('Received job for different evidence item, ignoring.')
+            setStatus('Waiting')
+            setJobDetails({})
+            setPipelineStep(1)
+            return
+          }
+
+          setStatus(job.status as any)
+          setJobDetails(job)
+
+          if (job.status === 'Completed') {
+            setPipelineStep(8)
+            setLogs([
+              `[${new Date().toLocaleTimeString()}] Loaded existing 3D reconstruction for selected evidence.`,
+              `[${new Date().toLocaleTimeString()}] Job ID: ${job.job_id} | Created: ${job.created_at ? new Date(job.created_at).toLocaleString() : 'N/A'}`
+            ])
+          } else if (job.status === 'Processing' || job.status === 'Pending') {
+            const step = job.current_step || 1
+            setPipelineStep(step)
+            setLogs([
+              `[${new Date().toLocaleTimeString()}] Pipeline is currently ${job.status.toLowerCase()} (step ${step}/8). Resuming monitoring...`
+            ])
+            startPolling(job.job_id, selectedEvidenceId)
+          } else if (job.status === 'Failed') {
+            const step = job.current_step || 1
+            setPipelineStep(step)
+            const reason = job.error_message ? ` ${job.error_message}` : ''
+            setErrorMsg(`Reconstruction failed.${reason}`)
+            setLogs([`[${new Date().toLocaleTimeString()}] Reconstruction failed.${reason}`])
+          }
+        } else {
+          setStatus('Waiting')
+          setJobDetails({})
+          setPipelineStep(1)
+        }
+      } catch (err: any) {
+        if (!active) return
+        // 404 means no reconstruction job exists yet for this specific evidence item
+        setStatus('Waiting')
+        setJobDetails({})
+        setPipelineStep(1)
+      }
+    }
+
+    loadStatusForEvidence()
+
+    return () => {
+      active = false
+      stopPolling()
+    }
+  }, [selectedCaseId, selectedEvidenceId])
 
   // Fetch evaluation metrics when a job completes or is loaded
   useEffect(() => {
@@ -1495,7 +1667,7 @@ export function Photo3DPage() {
     try {
       const job = await api.triggerPhotogrammetry(selectedCaseId, currentEvidence.id)
       setLogs(prev => [...prev, `[${new Date().toLocaleTimeString()}] Pipeline triggered successfully. Starting polling...`])
-      checkCurrentStatus(job.job_id)
+      checkCurrentStatus(job.job_id, currentEvidence.id)
     } catch (err: any) {
       const detail = err.response?.data?.detail || err.message || 'Trigger failed'
       setStatus('Failed')
@@ -1791,8 +1963,16 @@ export function Photo3DPage() {
               variant="green"
               size="md"
               full
-              disabled={status !== 'Completed' || !jobDetails.model_url}
-              onClick={() => jobDetails.model_url && window.open(jobDetails.model_url, '_blank')}
+              disabled={status !== 'Completed' || (!jobDetails.model_url && !jobDetails.job_id)}
+              onClick={async () => {
+                if (jobDetails.job_id) {
+                  try {
+                    await api.downloadPhotogrammetryModel(jobDetails.job_id, 'glb')
+                  } catch (e: any) {
+                    setErrorMsg(`Failed to download GLB: ${e.message || e}`)
+                  }
+                }
+              }}
             >
               <svg width="15" height="15" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2">
                 <path d="M21 15v4a2 2 0 0 1-2 2H5a2 2 0 0 1-2-2v-4" />
@@ -1805,8 +1985,16 @@ export function Photo3DPage() {
               variant="default"
               size="md"
               full
-              disabled={status !== 'Completed' || !jobDetails.point_cloud_url}
-              onClick={() => jobDetails.point_cloud_url && window.open(jobDetails.point_cloud_url, '_blank')}
+              disabled={status !== 'Completed' || (!jobDetails.point_cloud_url && !jobDetails.job_id)}
+              onClick={async () => {
+                if (jobDetails.job_id) {
+                  try {
+                    await api.downloadPhotogrammetryModel(jobDetails.job_id, 'ply')
+                  } catch (e: any) {
+                    setErrorMsg(`Failed to download PLY: ${e.message || e}`)
+                  }
+                }
+              }}
             >
               <svg width="15" height="15" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2">
                 <path d="M21 15v4a2 2 0 0 1-2 2H5a2 2 0 0 1-2-2v-4" />
@@ -1818,25 +2006,98 @@ export function Photo3DPage() {
           </div>
         </Card>
 
-        {/* RIGHT COLUMN: Large 3D Model Viewer */}
-        <Card style={{ display: 'flex', flexDirection: 'column', height: 'clamp(440px, 55vh, 720px)', minHeight: 0, minWidth: 0 }}>
-          <CardHeader>
-            <CardTitle>3D Model Viewer</CardTitle>
-            <div style={{ display: 'flex', gap: '6px' }}>
+        {/* RIGHT COLUMN: Large 3D Model Viewer with Expandable Fullscreen Mode */}
+        <Card
+          style={isExpanded ? {
+            position: 'fixed',
+            inset: 0,
+            zIndex: 99999,
+            width: '100vw',
+            height: '100vh',
+            borderRadius: 0,
+            margin: 0,
+            display: 'flex',
+            flexDirection: 'column',
+            background: 'var(--bg)',
+            boxShadow: '0 0 50px rgba(0,0,0,0.85)'
+          } : {
+            display: 'flex',
+            flexDirection: 'column',
+            height: 'clamp(440px, 55vh, 720px)',
+            minHeight: 0,
+            minWidth: 0
+          }}
+        >
+          <CardHeader style={isExpanded ? {
+            padding: '12px 24px',
+            borderBottom: '1px solid var(--border)',
+            background: 'var(--bg2)',
+            display: 'flex',
+            alignItems: 'center',
+            justifyContent: 'space-between'
+          } : undefined}>
+            <div style={{ display: 'flex', alignItems: 'center', gap: '10px' }}>
+              <CardTitle>
+                {isExpanded ? '3D Scene Reconstruction — Fullscreen Inspection' : '3D Model Viewer'}
+              </CardTitle>
+              {isExpanded && (
+                <span style={{
+                  fontSize: '11px',
+                  fontWeight: 600,
+                  padding: '2px 8px',
+                  borderRadius: '12px',
+                  background: 'rgba(34, 197, 94, 0.15)',
+                  color: 'var(--green)',
+                  border: '1px solid rgba(34, 197, 94, 0.3)'
+                }}>
+                  Live 3D View
+                </span>
+              )}
+            </div>
+            <div style={{ display: 'flex', gap: '6px', alignItems: 'center' }}>
               <Btn size="xs" variant={viewMode === 'orbit' ? 'primary' : 'default'} onClick={() => setViewMode('orbit')}>Orbit</Btn>
               <Btn size="xs" variant={viewMode === 'wireframe' ? 'primary' : 'default'} onClick={() => setViewMode('wireframe')}>Wireframe</Btn>
               <Btn size="xs" variant={viewMode === 'pointcloud' ? 'primary' : 'default'} onClick={() => setViewMode('pointcloud')}>Points</Btn>
               <Btn size="xs" variant="default" onClick={() => setViewerReset(prev => prev + 1)}>Reset</Btn>
+              <Btn
+                size="xs"
+                variant={isExpanded ? 'danger' : 'primary'}
+                onClick={() => setIsExpanded(prev => !prev)}
+                style={{
+                  display: 'inline-flex',
+                  alignItems: 'center',
+                  justifyContent: 'center',
+                  width: '28px',
+                  height: '24px',
+                  padding: 0,
+                  color: '#ffffff'
+                }}
+                title={isExpanded ? 'Exit Fullscreen (Esc)' : 'Expand 3D Scene View'}
+              >
+                {isExpanded ? (
+                  <svg width="14" height="14" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2.5">
+                    <line x1="18" y1="6" x2="6" y2="18" />
+                    <line x1="6" y1="6" x2="18" y2="18" />
+                  </svg>
+                ) : (
+                  <svg width="14" height="14" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2.5">
+                    <polyline points="15 3 21 3 21 9" />
+                    <polyline points="9 21 3 21 3 15" />
+                    <line x1="21" y1="3" x2="14" y2="10" />
+                    <line x1="3" y1="21" x2="10" y2="14" />
+                  </svg>
+                )}
+              </Btn>
             </div>
           </CardHeader>
 
           {/* Viewport Canvas Area */}
           <div style={{
-            flex: '1 1 0', minHeight: 0, minWidth: 0, borderRadius: 'var(--r)',
+            flex: '1 1 0', minHeight: 0, minWidth: 0, borderRadius: isExpanded ? 0 : 'var(--r)',
             background: 'radial-gradient(circle at center, var(--bg3) 0%, var(--bg2) 100%)',
-            border: '1px dashed var(--border2)', position: 'relative',
+            border: isExpanded ? 'none' : '1px dashed var(--border2)', position: 'relative',
             display: 'flex', flexDirection: 'column', alignItems: 'center', justifyContent: 'center',
-            overflow: 'hidden', padding: '24px'
+            overflow: 'hidden', padding: isExpanded ? 0 : '24px'
           }}>
             {/* Engineering Grid Pattern */}
             <div style={{
@@ -1844,6 +2105,85 @@ export function Photo3DPage() {
               backgroundImage: 'linear-gradient(var(--text3) 1px, transparent 1px), linear-gradient(90deg, var(--text3) 1px, transparent 1px)',
               backgroundSize: '24px 24px'
             }} />
+
+
+            {/* Bottom HUD Navigation Guide in Fullscreen */}
+            {isExpanded && (
+              <div
+                style={{
+                  position: 'absolute',
+                  bottom: '24px',
+                  left: '50%',
+                  transform: 'translateX(-50%)',
+                  zIndex: 20,
+                  background: 'rgba(15, 23, 42, 0.78)',
+                  backdropFilter: 'blur(16px)',
+                  WebkitBackdropFilter: 'blur(16px)',
+                  border: '1px solid rgba(255, 255, 255, 0.1)',
+                  borderRadius: '24px',
+                  padding: '7px 20px',
+                  display: 'flex',
+                  alignItems: 'center',
+                  gap: '16px',
+                  fontSize: '11.5px',
+                  letterSpacing: '0.2px',
+                  color: 'rgba(255, 255, 255, 0.8)',
+                  pointerEvents: 'none',
+                  boxShadow: '0 12px 36px -4px rgba(0, 0, 0, 0.6), inset 0 1px 0 rgba(255, 255, 255, 0.12)'
+                }}
+              >
+                <div style={{ display: 'inline-flex', alignItems: 'center', gap: '6px' }}>
+                  <svg width="14" height="14" viewBox="0 0 24 24" fill="none" stroke="var(--blue)" strokeWidth="2.2" strokeLinecap="round" strokeLinejoin="round" style={{ opacity: 0.9 }}>
+                    <path d="M21.5 2v6h-6M2.5 22v-6h6M2 11.5a10 10 0 0 1 18.8-4.3M22 12.5a10 10 0 0 1-18.8 4.2" />
+                  </svg>
+                  <span><strong style={{ color: '#fff', fontWeight: 600 }}>Rotate:</strong> Left Click</span>
+                </div>
+
+                <span style={{ width: '1px', height: '14px', background: 'rgba(255, 255, 255, 0.15)' }} />
+
+                <div style={{ display: 'inline-flex', alignItems: 'center', gap: '6px' }}>
+                  <svg width="14" height="14" viewBox="0 0 24 24" fill="none" stroke="var(--blue)" strokeWidth="2.2" strokeLinecap="round" strokeLinejoin="round" style={{ opacity: 0.9 }}>
+                    <polyline points="5 9 2 12 5 15" />
+                    <polyline points="9 5 12 2 15 5" />
+                    <polyline points="15 19 12 22 9 19" />
+                    <polyline points="19 9 22 12 19 15" />
+                    <line x1="2" y1="12" x2="22" y2="12" />
+                    <line x1="12" y1="2" x2="12" y2="22" />
+                  </svg>
+                  <span><strong style={{ color: '#fff', fontWeight: 600 }}>Pan:</strong> Right Click</span>
+                </div>
+
+                <span style={{ width: '1px', height: '14px', background: 'rgba(255, 255, 255, 0.15)' }} />
+
+                <div style={{ display: 'inline-flex', alignItems: 'center', gap: '6px' }}>
+                  <svg width="14" height="14" viewBox="0 0 24 24" fill="none" stroke="var(--blue)" strokeWidth="2.2" strokeLinecap="round" strokeLinejoin="round" style={{ opacity: 0.9 }}>
+                    <circle cx="11" cy="11" r="7" />
+                    <line x1="21" y1="21" x2="16.65" y2="16.65" />
+                    <line x1="11" y1="8" x2="11" y2="14" />
+                    <line x1="8" y1="11" x2="14" y2="11" />
+                  </svg>
+                  <span><strong style={{ color: '#fff', fontWeight: 600 }}>Zoom:</strong> Scroll</span>
+                </div>
+
+                <span style={{ width: '1px', height: '14px', background: 'rgba(255, 255, 255, 0.15)' }} />
+
+                <div style={{ display: 'inline-flex', alignItems: 'center', gap: '6px' }}>
+                  <kbd style={{
+                    padding: '1px 6px',
+                    borderRadius: '4px',
+                    background: 'rgba(255, 255, 255, 0.12)',
+                    border: '1px solid rgba(255, 255, 255, 0.2)',
+                    fontSize: '10px',
+                    fontFamily: 'monospace',
+                    fontWeight: 600,
+                    color: '#fff'
+                  }}>
+                    ESC
+                  </kbd>
+                  <span style={{ color: 'rgba(255, 255, 255, 0.6)' }}>Exit</span>
+                </div>
+              </div>
+            )}
 
             {status !== 'Completed' ? (
               <div style={{ textAlign: 'center', zIndex: 2, padding: '30px' }}>
@@ -1866,7 +2206,15 @@ export function Photo3DPage() {
                 </div>
               </div>
             ) : (
-              jobDetails.model_url && <GLBViewer modelUrl={jobDetails.model_url} wireframe={viewMode === 'wireframe'} resetKey={viewerReset} />
+              (jobDetails.model_url || jobDetails.job_id) &&
+              (!jobDetails.evidence_id || jobDetails.evidence_id === selectedEvidenceId) && (
+                <GLBViewer
+                  modelUrl={jobDetails.model_url}
+                  jobId={jobDetails.job_id}
+                  wireframe={viewMode === 'wireframe'}
+                  resetKey={viewerReset}
+                />
+              )
             )}
           </div>
         </Card>

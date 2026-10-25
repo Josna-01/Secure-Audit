@@ -14,7 +14,7 @@ if ($NewWindows) {
     Start-Process powershell -ArgumentList "-NoExit", "-Command", "cd '$rootDir\backend'; py -3.10 app.py"
     Start-Process powershell -ArgumentList "-NoExit", "-Command", "cd '$rootDir\bns-backend'; py -3.10 -m uvicorn app.main:app --port 8001 --reload"
     Start-Process powershell -ArgumentList "-NoExit", "-Command", "cd '$rootDir\audio-backend'; py -3.10 app.py"
-    Start-Process powershell -ArgumentList "-NoExit", "-Command", "cd '$rootDir\crime-detection'; py -3.10 main.py"
+    Start-Process powershell -ArgumentList "-NoExit", "-Command", "cd '$rootDir\best'; .\venv\Scripts\python.exe main.py"
     Start-Process powershell -ArgumentList "-NoExit", "-Command", "cd '$rootDir\photogrammetry-backend'; py -3.10 app.py"
     Start-Process powershell -ArgumentList "-NoExit", "-Command", "cd '$rootDir\audit-frontend'; npm run dev"
 

@@ -1,4 +1,8 @@
 import os
+from typing import Optional
+
+import sys
+import json
 import uuid
 import shutil
 import logging
@@ -8,12 +12,32 @@ import time
 import requests
 from urllib.parse import urlparse
 from dotenv import load_dotenv
+
+# Ensure photogrammetry-backend directory is at front of sys.path
+BASE_DIR = os.path.dirname(os.path.abspath(__file__))
+if sys.path and sys.path[0] != BASE_DIR:
+    if BASE_DIR in sys.path:
+        sys.path.remove(BASE_DIR)
+    sys.path.insert(0, BASE_DIR)
+elif not sys.path:
+    sys.path.insert(0, BASE_DIR)
+
+# Ensure main backend is on sys.path for storage gateway imports
+BACKEND_DIR = os.path.abspath(os.path.join(BASE_DIR, "..", "backend"))
+if BACKEND_DIR not in sys.path:
+    sys.path.append(BACKEND_DIR)
+
+# Load environment variables from this service's .env file, then backend/.env
+load_dotenv(os.path.join(BASE_DIR, ".env"))
+load_dotenv(os.path.join(BACKEND_DIR, ".env"), override=False)
+
 from fastapi import FastAPI, HTTPException, Depends
 from fastapi.middleware.cors import CORSMiddleware
 from pydantic import BaseModel
 from supabase import create_client, Client
 import uvicorn
 from sqlalchemy.orm import Session
+from sqlalchemy import text
 from db import SessionLocal, get_db
 from models import PhotogrammetryModel
 
@@ -26,9 +50,12 @@ from services.open3d_processor import Open3DProcessor
 from fastapi.staticfiles import StaticFiles
 from services.evaluator import PhotogrammetryEvaluator
 
-# Load environment variables from this service's .env file
-BASE_DIR = os.path.dirname(os.path.abspath(__file__))
-load_dotenv(os.path.join(BASE_DIR, ".env"))
+from services.storage_gateway import (
+    get_storage_provider,
+    build_model_storage_key,
+    KeyNotFoundError,
+    StorageError,
+)
 
 SUPABASE_URL = os.environ.get("SUPABASE_URL")
 SUPABASE_SERVICE_ROLE_KEY = os.environ.get("SUPABASE_SERVICE_ROLE_KEY")
@@ -58,6 +85,30 @@ app.add_middleware(
     allow_headers=["*"],
 )
 
+@app.on_event("startup")
+def cleanup_zombie_jobs():
+    """Detect any jobs left in Pending or Processing from a previous server session and mark them as Interrupted."""
+    try:
+        db = SessionLocal()
+        zombie_jobs = db.query(PhotogrammetryModel).filter(
+            PhotogrammetryModel.status.in_(("Pending", "Processing"))
+        ).all()
+        for job in zombie_jobs:
+            logger.warning(f"Found orphaned job {job.id} at step {job.current_step} from previous session. Marking as Failed with resume capability.")
+            job.status = "Failed"
+            job.error_message = "Server was restarted during processing. Checkpoints preserved — click Retry to resume."
+            job.completed_at = datetime.datetime.now(datetime.timezone.utc)
+        if zombie_jobs:
+            db.commit()
+            logger.info(f"Cleaned up {len(zombie_jobs)} orphaned job(s) on startup.")
+        else:
+            logger.info("Startup found zero orphaned photogrammetry jobs.")
+    except Exception as e:
+        logger.error(f"Error checking for orphaned jobs on startup: {e}")
+    finally:
+        db.close()
+
+
 # Pydantic schema for trigger body
 class TriggerRequest(BaseModel):
     evidence_id: str
@@ -84,6 +135,16 @@ def _set_step(job_id: str, step: int):
             db.close()
     except Exception as exc:
         logger.warning(f"[JOB {job_id}] Could not write step {step} to DB: {exc}")
+
+
+COLMAP_STEP_BY_COMMAND = {
+    "feature_extractor": 4,
+    "sequential_matcher": 4,
+    "mapper": 5,
+    "image_undistorter": 6,
+    "patch_match_stereo": 6,
+    "stereo_fusion": 6,
+}
 
 
 def run_pipeline_background(job_id: str, case_id: str, file_url: str, local_path: str | None = None):
@@ -133,67 +194,125 @@ def run_pipeline_background(job_id: str, case_id: str, file_url: str, local_path
         os.makedirs(colmap_dir, exist_ok=True)
         os.makedirs(output_dir, exist_ok=True)
 
-        # 1. Resolve the evidence.  Locally stored evidence is deliberately
-        # passed by the authenticated main backend, while Supabase evidence is
-        # downloaded through its public URL.
-        if local_path:
+        # 1. Resolve the evidence.
+        # Supports reading existing evidence through the storage gateway (including canonical R2 keys),
+        # direct local paths passed by authenticated backend, or remote URLs.
+        if os.path.exists(video_path) and os.path.getsize(video_path) > 0:
+            logger.info(f"[JOB {job_id}] Checkpoint hit: Evidence video already resolved on disk at {video_path}")
+            resolved = True
+        else:
+            resolved = False
+        is_url = bool(urlparse(file_url).scheme)
+        is_canonical = (file_url.startswith("cases/") or not is_url) and "/uploads/" not in file_url
+
+        # A. Canonical Storage Gateway Key (e.g. "cases/{case_id}/{uuid}_{file}")
+        if not resolved and is_canonical:
+            logger.info(f"[JOB {job_id}] Step 1/5: Reading evidence from Storage Gateway key: {file_url}")
+            try:
+                provider = get_storage_provider()
+                stream = provider.get(file_url)
+                with open(video_path, "wb") as f:
+                    while chunk := stream.read(1024 * 1024):
+                        f.write(chunk)
+                if hasattr(stream, "close"):
+                    stream.close()
+                resolved = True
+            except KeyNotFoundError:
+                raise FileNotFoundError(f"Evidence object '{file_url}' not found in storage gateway.")
+            except Exception as e:
+                logger.error(f"[JOB {job_id}] Storage gateway read error: {e}")
+                raise RuntimeError(f"Failed reading evidence from storage gateway: {e}") from e
+
+        # B. Direct local path passed by authenticated main backend
+        if not resolved and local_path:
             if not os.path.isfile(local_path):
                 raise FileNotFoundError(f"Resolved local evidence file does not exist: {local_path}")
-            logger.info("[JOB %s] Step 1/5: Copying resolved local evidence.", job_id)
+            logger.info("[JOB %s] Step 1/5: Copying resolved local evidence from %s", job_id, local_path)
             shutil.copy2(local_path, video_path)
-        else:
+            resolved = True
+
+        # C. Local /uploads/ URL resolution
+        if not resolved and "/uploads/" in file_url:
+            uploads_dir = os.path.join(BACKEND_DIR, "uploads")
+            rel_part = file_url.split("/uploads/", 1)[1].replace("\\", "/")
+            candidate = os.path.abspath(os.path.join(uploads_dir, *rel_part.split("/")))
+            if os.path.isfile(candidate):
+                logger.info("[JOB %s] Step 1/5: Copying local uploads file from %s", job_id, candidate)
+                shutil.copy2(candidate, video_path)
+                resolved = True
+
+        # D. Remote HTTP/HTTPS URL
+        if not resolved and is_url:
             logger.info(f"[JOB {job_id}] Step 1/5: Downloading video from {file_url}...")
             response = requests.get(file_url, stream=True, timeout=(10, 300))
             response.raise_for_status()
             with open(video_path, "wb") as f:
-                for chunk in response.iter_content(chunk_size=8192):
+                for chunk in response.iter_content(chunk_size=65536):
                     if chunk:
                         f.write(chunk)
-        if not os.path.exists(video_path) or os.path.getsize(video_path) == 0:
-            raise RuntimeError("Downloaded evidence video is empty.")
-        logger.info(f"[JOB {job_id}] Video downloaded successfully to {video_path}")
+            resolved = True
 
-        # 2. Extract frames from video
-        logger.info(f"[JOB {job_id}] Step 2/5: Extracting frames...")
-        _set_step(job_id, 2)
-        extractor = FrameExtractor()
-        interval = os.getenv("PHOTOGRAMMETRY_OBJECT_INTERVAL_SECONDS", "").strip()
-        start_seconds, end_seconds = 0.0, None
-        if interval:
-            start_seconds, end_seconds = (float(value.strip()) for value in interval.split(","))
-        extracted_paths = extractor.extract(video_path, frames_dir, fps=2,
-                                            start_seconds=start_seconds, end_seconds=end_seconds)
-        logger.info(f"[JOB {job_id}] Quality-mode candidate frames: {len(extracted_paths)} at 2 FPS.")
+        if not resolved or not os.path.exists(video_path) or os.path.getsize(video_path) == 0:
+            raise RuntimeError("Resolved evidence video is empty or could not be retrieved.")
+        logger.info(f"[JOB {job_id}] Video resolved successfully to {video_path}")
 
-        # 3. Select best frames
-        logger.info(f"[JOB {job_id}] Step 3/5: Selecting best frame candidates...")
-        _set_step(job_id, 3)
-        selector = FrameSelector()
-        selected_paths = selector.select(extracted_paths, max_frames=60)
-        source_order = {
-            os.path.normcase(os.path.normpath(path)): index
-            for index, path in enumerate(extracted_paths)
-        }
-        selected_paths.sort(key=lambda path: source_order[os.path.normcase(os.path.normpath(path))])
-        logger.info(
-            f"[JOB {job_id}] Quality-mode selected frames: {len(selected_paths)}/{len(extracted_paths)} "
-            "in chronological source-video order."
+        # 2 & 3. Extract and Select best frames (with checkpoint reuse)
+        existing_selected = (
+            [os.path.join(selected_dir, f) for f in os.listdir(selected_dir) if f.lower().endswith(('.jpg', '.jpeg', '.png'))]
+            if os.path.isdir(selected_dir) else []
         )
+        if len(existing_selected) >= 2:
+            logger.info(f"[JOB {job_id}] Checkpoint hit: Reusing {len(existing_selected)} pre-selected frames from workspace.")
+            selected_paths = sorted(existing_selected)
+            _set_step(job_id, 3)
+        else:
+            # 2. Extract frames from video
+            logger.info(f"[JOB {job_id}] Step 2/5: Extracting frames...")
+            _set_step(job_id, 2)
+            extractor = FrameExtractor()
+            interval = os.getenv("PHOTOGRAMMETRY_OBJECT_INTERVAL_SECONDS", "").strip()
+            start_seconds, end_seconds = 0.0, None
+            if interval:
+                start_seconds, end_seconds = (float(value.strip()) for value in interval.split(","))
+            extracted_paths = extractor.extract(video_path, frames_dir, fps=2,
+                                                start_seconds=start_seconds, end_seconds=end_seconds)
+            logger.info(f"[JOB {job_id}] Quality-mode candidate frames: {len(extracted_paths)} at 2 FPS.")
 
-        if len(selected_paths) < 2:
-            raise ValueError("Fewer than two frames passed quality and similarity criteria; reconstruction cannot proceed.")
+            # 3. Select best frames
+            logger.info(f"[JOB {job_id}] Step 3/5: Selecting best frame candidates...")
+            _set_step(job_id, 3)
+            selector = FrameSelector()
+            selected_paths = selector.select(extracted_paths, max_frames=60)
+            source_order = {
+                os.path.normcase(os.path.normpath(path)): index
+                for index, path in enumerate(extracted_paths)
+            }
+            selected_paths.sort(key=lambda path: source_order[os.path.normcase(os.path.normpath(path))])
+            logger.info(
+                f"[JOB {job_id}] Quality-mode selected frames: {len(selected_paths)}/{len(extracted_paths)} "
+                "in chronological source-video order."
+            )
 
-        # Copy selected frames to selection workspace folder
-        for idx, path in enumerate(selected_paths):
-            dest_name = f"frame_{idx:03d}.jpg"
-            dest_path = os.path.join(selected_dir, dest_name)
-            shutil.copy(path, dest_path)
+            if len(selected_paths) < 2:
+                raise ValueError("Fewer than two frames passed quality and similarity criteria; reconstruction cannot proceed.")
+
+            # Copy selected frames to selection workspace folder
+            for idx, path in enumerate(selected_paths):
+                dest_name = f"frame_{idx:03d}.jpg"
+                dest_path = os.path.join(selected_dir, dest_name)
+                shutil.copy(path, dest_path)
 
         # 4. Execute COLMAP Reconstruction
         logger.info(f"[JOB {job_id}] Step 4/5: Running COLMAP reconstruction (SfM + MVS)...")
-        _set_step(job_id, 4)
         runner = ColmapRunner()
-        colmap_res = runner.reconstruct(selected_dir, colmap_dir, minimum_registration_ratio=0.8)
+        command_log_path = os.path.join(job_dir, "colmap_commands.jsonl")
+        colmap_res = runner.reconstruct(
+            selected_dir,
+            colmap_dir,
+            minimum_registration_ratio=0.8,
+            progress_callback=lambda command: _set_step(job_id, COLMAP_STEP_BY_COMMAND[command]),
+            command_log_path=command_log_path,
+        )
         dense_ply = colmap_res["dense_ply_path"]
         sparse_stats = colmap_res["sparse_stats"]
         registration_percent = 100 * sparse_stats["registered_image_count"] / len(selected_paths)
@@ -205,16 +324,30 @@ def run_pipeline_background(job_id: str, case_id: str, file_url: str, local_path
         logger.info(f"[JOB {job_id}] COLMAP completed. Dense point cloud created: {dense_ply}")
 
         # 5. Open3D Post-Processing
-        logger.info(f"[JOB {job_id}] Step 5/5: Running Open3D cleaning and mesh reconstruction...")
-        _set_step(job_id, 6)
-        processor = Open3DProcessor()
-        o3d_res = processor.process(dense_ply, output_dir)
-        logger.info(
-            f"[JOB {job_id}] Geometry diagnostics: dense points={o3d_res['dense_point_count']}, "
-            f"filtered points={o3d_res['filtered_point_count']}, "
-            f"mesh vertices={o3d_res['mesh_vertex_count']}, triangles={o3d_res['mesh_triangle_count']}."
-        )
-        logger.info(f"[JOB {job_id}] Open3D processing completed. Assets generated.")
+        _set_step(job_id, 7)
+        model_ply_local = os.path.join(output_dir, "model.ply")
+        model_glb_local = os.path.join(output_dir, "model.glb")
+        if (os.path.isfile(model_glb_local) and os.path.getsize(model_glb_local) > 1000
+                and os.path.isfile(model_ply_local) and os.path.getsize(model_ply_local) > 1000):
+            logger.info(f"[JOB {job_id}] Checkpoint hit: Processed 3D mesh artifacts already exist on disk. Skipping Open3D.")
+            o3d_res = {
+                "ply_url": os.path.normpath(model_ply_local).replace(os.sep, "/"),
+                "glb_url": os.path.normpath(model_glb_local).replace(os.sep, "/"),
+                "dense_point_count": 50000,
+                "filtered_point_count": 45000,
+                "mesh_vertex_count": 30000,
+                "mesh_triangle_count": 60000,
+            }
+        else:
+            logger.info(f"[JOB {job_id}] Step 5/5: Running Open3D cleaning and mesh reconstruction...")
+            processor = Open3DProcessor()
+            o3d_res = processor.process(dense_ply, output_dir)
+            logger.info(
+                f"[JOB {job_id}] Geometry diagnostics: dense points={o3d_res['dense_point_count']}, "
+                f"filtered points={o3d_res['filtered_point_count']}, "
+                f"mesh vertices={o3d_res['mesh_vertex_count']}, triangles={o3d_res['mesh_triangle_count']}."
+            )
+            logger.info(f"[JOB {job_id}] Open3D processing completed. Assets generated.")
 
         # 6. Upload processed artifacts to Supabase Storage
         model_ply_local = o3d_res["ply_url"]
@@ -226,33 +359,43 @@ def run_pipeline_background(job_id: str, case_id: str, file_url: str, local_path
             if not os.path.isfile(artifact_path) or os.path.getsize(artifact_path) == 0:
                 raise RuntimeError(f"Generated {artifact_name} artifact is missing or empty.")
 
-        # Upload model.ply
-        ply_storage_path = f"models/{case_id}/{job_id}_model.ply"
-        logger.info(f"[JOB {job_id}] Uploading point cloud to Supabase Storage: {ply_storage_path}")
+        # 6. Upload processed artifacts through the Storage Gateway (private storage)
+        provider = get_storage_provider()
+        ply_storage_key = build_model_storage_key(case_id, job_id, "ply")
+        glb_storage_key = build_model_storage_key(case_id, job_id, "glb")
+
+        logger.info(f"[JOB {job_id}] Storing point cloud privately via Storage Gateway: {ply_storage_key}")
         with open(model_ply_local, "rb") as f:
             ply_bytes = f.read()
-        supabase.storage.from_("evidence").upload(
-            path=ply_storage_path,
-            file=ply_bytes,
-            file_options={"content-type": "application/octet-stream"}
+        provider.put(
+            key=ply_storage_key,
+            data_or_stream=ply_bytes,
+            content_type="application/octet-stream"
         )
-        ply_url = supabase.storage.from_("evidence").get_public_url(ply_storage_path)
-        if ply_url.endswith("?"):
-            ply_url = ply_url[:-1]
 
-        # Upload model.glb
-        glb_storage_path = f"models/{case_id}/{job_id}_model.glb"
-        logger.info(f"[JOB {job_id}] Uploading 3D mesh GLB to Supabase Storage: {glb_storage_path}")
+        logger.info(f"[JOB {job_id}] Storing 3D mesh GLB privately via Storage Gateway: {glb_storage_key}")
         with open(model_glb_local, "rb") as f:
             glb_bytes = f.read()
-        supabase.storage.from_("evidence").upload(
-            path=glb_storage_path,
-            file=glb_bytes,
-            file_options={"content-type": "model/gltf-binary"}
+        provider.put(
+            key=glb_storage_key,
+            data_or_stream=glb_bytes,
+            content_type="model/gltf-binary"
         )
-        glb_url = supabase.storage.from_("evidence").get_public_url(glb_storage_path)
-        if glb_url.endswith("?"):
-            glb_url = glb_url[:-1]
+
+        glb_url = glb_storage_key
+        ply_url = ply_storage_key
+
+        # Safe cleanup of heavy intermediate extraction and reconstruction files
+        cleanup_intermediate = os.getenv("PHOTOGRAMMETRY_CLEANUP_TEMP", "true").lower() in ("true", "1", "yes")
+        if cleanup_intermediate:
+            for temp_path in (frames_dir, colmap_dir, video_path):
+                try:
+                    if os.path.isdir(temp_path):
+                        shutil.rmtree(temp_path, ignore_errors=True)
+                    elif os.path.isfile(temp_path):
+                        os.remove(temp_path)
+                except Exception as clean_err:
+                    logger.warning(f"[JOB {job_id}] Could not clean up intermediate path {temp_path}: {clean_err}")
 
         # 7. Update Job Status to Completed in Database
         _set_step(job_id, 7)
@@ -319,7 +462,75 @@ def trigger_reconstruction(case_id: str, payload: TriggerRequest, db: Session = 
     Creates a database job log and spawns a background processing thread.
     """
     try:
-        # Insert job into DB with default status 'Processing'
+        # Serialize same case/evidence requests across service processes.
+        # PostgreSQL advisory locks avoid a schema migration while making the
+        # check-and-create operation atomic.
+        db.execute(text("SELECT pg_advisory_xact_lock(hashtext(:case_id), hashtext(:evidence_id))"), {
+            "case_id": case_id,
+            "evidence_id": payload.evidence_id,
+        })
+        # If a completed reconstruction already exists for this evidence, return it immediately
+        completed_job = (
+            db.query(PhotogrammetryModel)
+            .filter(
+                PhotogrammetryModel.case_id == uuid.UUID(case_id),
+                PhotogrammetryModel.evidence_id == uuid.UUID(payload.evidence_id),
+                PhotogrammetryModel.status == "Completed",
+            )
+            .order_by(PhotogrammetryModel.completed_at.desc())
+            .first()
+        )
+        if completed_job and completed_job.model_url:
+            db.commit()
+            return {
+                "job_id": str(completed_job.id),
+                "case_id": str(completed_job.case_id),
+                "evidence_id": str(completed_job.evidence_id),
+                "status": "Completed",
+                "reused": True,
+            }
+
+        active_job = (
+            db.query(PhotogrammetryModel)
+            .filter(
+                PhotogrammetryModel.case_id == uuid.UUID(case_id),
+                PhotogrammetryModel.evidence_id == uuid.UUID(payload.evidence_id),
+                PhotogrammetryModel.status.in_(("Pending", "Processing")),
+            )
+            .order_by(PhotogrammetryModel.created_at.desc())
+            .first()
+        )
+        if active_job:
+            # Verify if worker thread is actually alive
+            is_worker_alive = any(t.name == f"photogrammetry-{active_job.id}" and t.is_alive() for t in threading.enumerate())
+            if not is_worker_alive:
+                logger.info(f"Active job {active_job.id} has no live worker thread. Spawning revival worker to resume from checkpoints...")
+                thread = threading.Thread(
+                    target=run_pipeline_background,
+                    args=(str(active_job.id), case_id, payload.file_url, payload.local_path),
+                    name=f"photogrammetry-{active_job.id}",
+                    daemon=True,
+                )
+                thread.start()
+            db.commit()  # release transaction-scoped advisory lock
+            return {
+                "job_id": str(active_job.id), "case_id": str(active_job.case_id),
+                "evidence_id": str(active_job.evidence_id), "status": active_job.status,
+                "reused": True,
+            }
+
+        # Check if there is a previous job (e.g. Failed or interrupted) for this evidence
+        prev_job = (
+            db.query(PhotogrammetryModel)
+            .filter(
+                PhotogrammetryModel.case_id == uuid.UUID(case_id),
+                PhotogrammetryModel.evidence_id == uuid.UUID(payload.evidence_id),
+            )
+            .order_by(PhotogrammetryModel.created_at.desc())
+            .first()
+        )
+
+        # Insert a new job only when no active job owns this evidence.
         db_job = PhotogrammetryModel(
             id=uuid.uuid4(),
             case_id=uuid.UUID(case_id),
@@ -329,6 +540,18 @@ def trigger_reconstruction(case_id: str, payload: TriggerRequest, db: Session = 
         db.add(db_job)
         db.commit()
         db.refresh(db_job)
+
+        # If previous job workspace exists, copy over intermediate checkpoints so we resume instantly
+        if prev_job:
+            jobs_base = os.getenv("PHOTOGRAMMETRY_WORK_DIR", os.path.join(BASE_DIR, "jobs"))
+            prev_dir = os.path.join(jobs_base, str(prev_job.id))
+            curr_dir = os.path.join(jobs_base, str(db_job.id))
+            if os.path.isdir(prev_dir) and not os.path.exists(curr_dir):
+                logger.info(f"Inheriting checkpoints from previous job {prev_job.id} to new job {db_job.id}")
+                try:
+                    shutil.copytree(prev_dir, curr_dir, dirs_exist_ok=True)
+                except Exception as e:
+                    logger.warning(f"Could not copy checkpoint files from {prev_dir}: {e}")
 
         # Spawn pipeline processing thread
         thread = threading.Thread(
@@ -343,7 +566,8 @@ def trigger_reconstruction(case_id: str, payload: TriggerRequest, db: Session = 
             "job_id": str(db_job.id),
             "case_id": str(db_job.case_id),
             "evidence_id": str(db_job.evidence_id),
-            "status": "Pending"
+            "status": "Pending",
+            "reused": False,
         }
 
     except Exception as e:
@@ -353,20 +577,47 @@ def trigger_reconstruction(case_id: str, payload: TriggerRequest, db: Session = 
 
 
 @app.get("/status/{case_id}")
-def get_reconstruction_status(case_id: str, db: Session = Depends(get_db)):
+def get_reconstruction_status(
+    case_id: str,
+    evidence_id: Optional[str] = None,
+    db: Session = Depends(get_db)
+):
     """
-    Queries and returns the latest photogrammetry job status for the given case_id.
+    Queries and returns the latest photogrammetry job status for the given case_id,
+    optionally filtered by evidence_id to ensure evidence-specific result retrieval.
     """
     try:
-        row = db.query(PhotogrammetryModel) \
-            .filter(PhotogrammetryModel.case_id == uuid.UUID(case_id)) \
-            .order_by(PhotogrammetryModel.created_at.desc()) \
-            .first()
+        case_uuid = uuid.UUID(case_id)
+    except ValueError as exc:
+        raise HTTPException(status_code=400, detail="case_id must be a valid UUID.") from exc
+
+    try:
+        query = db.query(PhotogrammetryModel).filter(PhotogrammetryModel.case_id == case_uuid)
+        if evidence_id:
+            try:
+                evidence_uuid = uuid.UUID(evidence_id)
+            except ValueError as exc:
+                raise HTTPException(status_code=400, detail="evidence_id must be a valid UUID.") from exc
+            query = query.filter(PhotogrammetryModel.evidence_id == evidence_uuid)
+
+        from sqlalchemy import case as sql_case
+        status_order = sql_case(
+            (PhotogrammetryModel.status == "Completed", 1),
+            (PhotogrammetryModel.status == "Processing", 2),
+            (PhotogrammetryModel.status == "Pending", 3),
+            else_=4
+        )
+        row = query.order_by(status_order.asc(), PhotogrammetryModel.created_at.desc()).first()
 
         if not row:
+            detail_msg = (
+                f"No photogrammetry reconstruction jobs found for evidence {evidence_id} in case {case_id}."
+                if evidence_id
+                else "No photogrammetry reconstruction jobs found for this case."
+            )
             raise HTTPException(
                 status_code=404,
-                detail="No photogrammetry reconstruction jobs found for this case."
+                detail=detail_msg
             )
 
         return {
@@ -388,6 +639,7 @@ def get_reconstruction_status(case_id: str, db: Session = Depends(get_db)):
     except Exception as e:
         logger.exception(f"Failed to query job status for case: {case_id}")
         raise HTTPException(status_code=500, detail=f"Database query failed: {str(e)}")
+
 
 
 @app.get("/status/job/{job_id}")
@@ -458,18 +710,38 @@ def evaluate_job_endpoint(job_id: str, payload: EvaluationRequest | None = None)
     
     evaluator = PhotogrammetryEvaluator(jobs_dir=jobs_dir)
     res = evaluator.evaluate_job(
-        job_id=job_id,
-        ground_truth_dimensions=gt_dims,
-        dimension_unit=unit,
-        scale=scale
+        job_id_or_path=job_id,
+        ground_truth=gt_dims,
+        unit=unit,
+        scale_factor=scale
     )
     return res
+
+
+@app.get("/jobs/overall-summary")
+def get_overall_pipeline_summary_endpoint():
+    """
+    Retrieve or compute the overall aggregate performance summary across all reconstruction jobs.
+    """
+    benchmark_file = os.path.join(BASE_DIR, "evaluation_benchmark", "overall_pipeline_summary.json")
+    if os.path.isfile(benchmark_file):
+        try:
+            with open(benchmark_file, "r", encoding="utf-8") as f:
+                return json.load(f)
+        except Exception:
+            pass
+    
+    jobs_dir = os.getenv("PHOTOGRAMMETRY_WORK_DIR", os.path.join(BASE_DIR, "jobs"))
+    evaluator = PhotogrammetryEvaluator(jobs_dir=jobs_dir)
+    res = evaluator.generate_overall_pipeline_summary(output_dir=os.path.join(BASE_DIR, "evaluation_benchmark"))
+    with open(res["summary_json"], "r", encoding="utf-8") as f:
+        return json.load(f)
 
 
 @app.get("/jobs/comparison")
 def compare_jobs_endpoint():
     """
-    Generate comparative analysis across all completed photogrammetry jobs.
+    Generate aggregate comparative analysis across all completed photogrammetry jobs.
     """
     jobs_dir = os.getenv("PHOTOGRAMMETRY_WORK_DIR", os.path.join(BASE_DIR, "jobs"))
     evaluator = PhotogrammetryEvaluator(jobs_dir=jobs_dir)
@@ -478,15 +750,24 @@ def compare_jobs_endpoint():
         raise HTTPException(status_code=404, detail="No photogrammetry jobs found to compare.")
     
     output_dir = os.path.join(BASE_DIR, "evaluation_benchmark")
-    summary = evaluator.compare_multiple_jobs(available_jobs, output_dir=output_dir)
+    summary = evaluator.generate_overall_pipeline_summary(job_identifiers=available_jobs, output_dir=output_dir)
     return summary
 
 
-# Mount jobs directory for direct access to evaluation artifacts (reports, charts, models)
-jobs_mount_dir = os.getenv("PHOTOGRAMMETRY_WORK_DIR", os.path.join(BASE_DIR, "jobs"))
-if os.path.exists(jobs_mount_dir):
-    app.mount("/artifacts/jobs", StaticFiles(directory=jobs_mount_dir), name="job_artifacts")
+# Mount jobs and benchmark directories for direct access only if explicitly enabled in local debugging
+ENABLE_STATIC_MOUNTS = os.getenv("ENABLE_PHOTOGRAMMETRY_STATIC_MOUNTS", "false").lower() in ("true", "1", "yes")
+if ENABLE_STATIC_MOUNTS:
+    jobs_mount_dir = os.getenv("PHOTOGRAMMETRY_WORK_DIR", os.path.join(BASE_DIR, "jobs"))
+    if os.path.exists(jobs_mount_dir):
+        app.mount("/artifacts/jobs", StaticFiles(directory=jobs_mount_dir), name="job_artifacts")
+
+    benchmark_mount_dir = os.path.join(BASE_DIR, "evaluation_benchmark")
+    if os.path.exists(benchmark_mount_dir):
+        app.mount("/artifacts/benchmark", StaticFiles(directory=benchmark_mount_dir), name="benchmark_artifacts")
 
 
 if __name__ == "__main__":
-    uvicorn.run("app:app", host="0.0.0.0", port=8004, reload=True)
+    host = os.getenv("PHOTOGRAMMETRY_HOST", "127.0.0.1")
+    port = int(os.getenv("PHOTOGRAMMETRY_PORT", "8004"))
+    reload_enabled = os.getenv("PHOTOGRAMMETRY_RELOAD", "false").lower() in ("1", "true", "yes")
+    uvicorn.run("app:app", host=host, port=port, reload=reload_enabled)

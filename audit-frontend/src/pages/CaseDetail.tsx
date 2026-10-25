@@ -102,7 +102,8 @@ export default function CaseDetail() {
           <div style={{ display: 'flex', gap: '8px', flexWrap: 'wrap' }}>
             <Btn size="xs" onClick={() => navigate('/detection')}>Run Detection</Btn>
             <Btn size="xs" onClick={() => navigate('/bns')}>BNS Classify</Btn>
-            <Btn size="xs" onClick={() => navigate('/audio')}>Audio Forensics</Btn>
+            <Btn size="xs" onClick={() => navigate(`/audio?case_id=${cas.id}`)}>Audio Forensics</Btn>
+            <Btn size="xs" onClick={() => navigate(`/photo3d?case_id=${cas.id}`)}>3D Reconstruction</Btn>
             <Btn size="xs" onClick={() => navigate('/evidence')}>Add Evidence</Btn>
           </div>
         </div>
@@ -204,7 +205,9 @@ export default function CaseDetail() {
                 <Btn size="xs" onClick={() => verifyIntegrity(f.id)}>Verify Integrity</Btn>
                 <Btn size="xs" onClick={() => loadBlockchain(f.id)}>Blockchain Details</Btn>
                 {f.file_type === 'Audio' ? (
-                  <Btn size="xs" onClick={() => navigate('/audio')}>Analyze Audio</Btn>
+                  <Btn size="xs" onClick={() => navigate(`/audio?case_id=${cas.id}&evidence_id=${f.id}`)}>Analyze Audio</Btn>
+                ) : f.file_type === 'Video' ? (
+                  <Btn size="xs" onClick={() => navigate(`/photo3d?case_id=${cas.id}&evidence_id=${f.id}`)}>3D Reconstruct</Btn>
                 ) : (
                   <Btn size="xs" onClick={() => navigate('/detection')}>Run YOLO</Btn>
                 )}

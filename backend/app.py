@@ -1,5 +1,7 @@
 
 import os
+import base64
+import json
 from urllib.parse import urlparse
 import shutil
 import uuid
@@ -15,7 +17,7 @@ from pathlib import Path
 from email.mime.text import MIMEText
 from email.mime.multipart import MIMEMultipart
 from fastapi import FastAPI, File, UploadFile, HTTPException, Form, BackgroundTasks, Request, Depends
-from fastapi.responses import JSONResponse, FileResponse, Response
+from fastapi.responses import JSONResponse, FileResponse, Response, StreamingResponse
 from fastapi.middleware.cors import CORSMiddleware
 from pydantic import BaseModel
 from typing import List, Optional, Dict, Any
@@ -39,6 +41,20 @@ from services.translation_service import (TARGET_LANGUAGES, TranslationError,
 from services.blockchain_service import (blockchain_service, BlockchainUnavailable, BlockchainTransactionError,
                                         hex_variants, is_sha256_hex, normalize_hex, TX_HASH_HEX)
 from services import evidence_integrity as integrity
+from services.storage_gateway import (
+    get_storage_provider,
+    LocalStorageProvider,
+    build_storage_key,
+    validate_storage_key,
+    sanitize_filename,
+    KeyNotFoundError,
+    KeyAlreadyExistsError,
+    StorageError,
+    StorageConfigurationError,
+    StoragePermissionError,
+    StorageUnavailableError,
+    StorageIntegrityError,
+)
 from migrate_blockchain import STATEMENTS as BLOCKCHAIN_SCHEMA_STATEMENTS
 
 load_dotenv()
@@ -131,6 +147,9 @@ ROBOFLOW_API_KEY = os.environ.get("ROBOFLOW_API_KEY")
 JWT_SECRET = os.environ.get("JWT_SECRET")
 EMAIL_USER = os.environ.get("EMAIL_USER")
 EMAIL_PASSWORD = os.environ.get("EMAIL_PASSWORD")
+SMTP_HOST = os.environ.get("SMTP_HOST", "smtp.gmail.com")
+SMTP_PORT = int(os.environ.get("SMTP_PORT", "465"))
+SMTP_TIMEOUT_SECONDS = int(os.environ.get("SMTP_TIMEOUT_SECONDS", "15"))
 USE_LOCAL_STORAGE = os.environ.get("USE_LOCAL_STORAGE", "False").lower() in ("true", "1", "yes")
 
 supabase: Client = create_client(SUPABASE_URL, SUPABASE_KEY)
@@ -163,12 +182,17 @@ def synchronize_blockchain_events() -> None:
                 return
             _blockchain_event_cursor = max(0, status["latestBlock"] - 1)
         events, latest = blockchain_service.events_since(_blockchain_event_cursor)
+        
+        seen_custody_tx = set()
+        seen_log_keys = set()
+
         for event in events:
             raw_ev_id = event["args"].get("evidenceId")
             ev_str = raw_ev_id.hex() if isinstance(raw_ev_id, (bytes, bytearray)) else str(raw_ev_id)
+            tx_hash = event.get("transactionHash")
             
             # Find evidence by transaction hash or valid UUID
-            evidence = session.query(Evidence).filter(Evidence.blockchain_tx_hash.in_(hex_variants(event["transactionHash"]))).first()
+            evidence = session.query(Evidence).filter(Evidence.blockchain_tx_hash.in_(hex_variants(tx_hash))).first()
             if not evidence and ev_str:
                 try:
                     parsed_uuid = uuid.UUID(ev_str)
@@ -178,33 +202,42 @@ def synchronize_blockchain_events() -> None:
             
             safe_payload = make_json_safe(event["args"])
 
-            if evidence:
-                # Events are mirrored for traceability only. Evidence status is changed
-                # exclusively by POST /evidence/{id}/verify, which hashes the stored file
-                # itself; an EvidenceVerified event only proves that *some* hash was
-                # compared, so trusting it would let a caller-chosen hash flip the status.
-                if event["name"] == "CustodyTransferred" and not session.query(EvidenceCustodyRecord.id).filter(EvidenceCustodyRecord.transaction_hash.in_(hex_variants(event["transactionHash"]))).first():
-                    session.add(EvidenceCustodyRecord(
-                        evidence_id=evidence.id,
-                        officer_id=str(event["args"].get("officerId", "system")),
-                        action=str(event["args"].get("action", "TRANSFERRED")),
-                        occurred_at=event["timestamp"],
-                        transaction_hash=event["transactionHash"],
-                        block_number=event["blockNumber"],
-                        source="blockchain"
-                    ))
+            if evidence and event["name"] == "CustodyTransferred":
+                action_str = str(event["args"].get("action", "TRANSFERRED"))
+                custody_key = (str(evidence.id), tx_hash, action_str)
+                if custody_key not in seen_custody_tx:
+                    already_in_db = session.query(EvidenceCustodyRecord.id).filter(
+                        EvidenceCustodyRecord.evidence_id == evidence.id,
+                        EvidenceCustodyRecord.transaction_hash.in_(hex_variants(tx_hash)),
+                        EvidenceCustodyRecord.action == action_str
+                    ).first()
+                    if not already_in_db:
+                        seen_custody_tx.add(custody_key)
+                        session.add(EvidenceCustodyRecord(
+                            evidence_id=evidence.id,
+                            officer_id=str(event["args"].get("officerId", "system")),
+                            action=action_str,
+                            occurred_at=event["timestamp"],
+                            transaction_hash=tx_hash,
+                            block_number=event["blockNumber"],
+                            source="blockchain"
+                        ))
             
-            if not session.query(BlockchainLog.id).filter(
-                BlockchainLog.transaction_hash.in_(hex_variants(event["transactionHash"])),
-                BlockchainLog.event_name == event["name"]
-            ).first():
-                session.add(BlockchainLog(
-                    evidence_id=evidence.id if evidence else None,
-                    event_name=event["name"],
-                    transaction_hash=event["transactionHash"],
-                    block_number=event["blockNumber"],
-                    payload=safe_payload
-                ))
+            log_key = (tx_hash, event["name"])
+            if log_key not in seen_log_keys:
+                already_logged = session.query(BlockchainLog.id).filter(
+                    BlockchainLog.transaction_hash.in_(hex_variants(tx_hash)),
+                    BlockchainLog.event_name == event["name"]
+                ).first()
+                if not already_logged:
+                    seen_log_keys.add(log_key)
+                    session.add(BlockchainLog(
+                        evidence_id=evidence.id if evidence else None,
+                        event_name=event["name"],
+                        transaction_hash=tx_hash,
+                        block_number=event["blockNumber"],
+                        payload=safe_payload
+                    ))
         session.commit()
         _blockchain_event_cursor = latest + 1
     except Exception as exc:
@@ -265,15 +298,32 @@ UPLOADS_DIR = os.path.join(BACKEND_DIR, "uploads")
 os.makedirs(UPLOADS_DIR, exist_ok=True)
 
 
+ALLOWED_ORIGINS = [
+    origin.strip()
+    for origin in os.getenv(
+        "ALLOWED_ORIGINS",
+        "http://localhost:5173,http://127.0.0.1:5173,http://localhost:5176,http://127.0.0.1:5176,http://localhost:3000,http://127.0.0.1:3000"
+    ).split(",")
+    if origin.strip()
+]
+
 app.add_middleware(
     CORSMiddleware,
-    allow_origins=["*"],
+    allow_origins=ALLOWED_ORIGINS,
     allow_credentials=True,
     allow_methods=["*"],
     allow_headers=["*"],
 )
 
-app.mount("/uploads", StaticFiles(directory=UPLOADS_DIR), name="uploads")
+# [SECURITY HARDENING] Direct public access to evidence storage is forbidden.
+# All evidence downloads must be authenticated, authorized, and audited via /evidence/{id}/download.
+@app.get("/uploads/{path:path}")
+def forbidden_uploads_access(path: str):
+    raise HTTPException(
+        status_code=403,
+        detail="Direct public access to raw evidence storage is disabled for forensic security. "
+               "Access evidence via the authenticated and audited /evidence/{evidence_id}/download endpoint."
+    )
 
 # ---------------------------------------------------------
 # Original Code (Alisha) - Roboflow Model Setup:
@@ -358,6 +408,9 @@ def home():
 
 # ====== EMAIL HELPER ======
 def send_otp_email(to_email: str, otp: str, officer_name: str):
+    if not EMAIL_USER or not EMAIL_PASSWORD:
+        raise RuntimeError("Email delivery is not configured on the server.")
+
     msg = MIMEMultipart("alternative")
     msg["Subject"] = "Secure Audits — Your Access Token"
     msg["From"] = EMAIL_USER
@@ -376,9 +429,13 @@ def send_otp_email(to_email: str, otp: str, officer_name: str):
 
     msg.attach(MIMEText(body, "html"))
 
-    with smtplib.SMTP_SSL("smtp.gmail.com", 465) as server:
-        server.login(EMAIL_USER, EMAIL_PASSWORD)
-        server.sendmail(EMAIL_USER, to_email, msg.as_string())
+    try:
+        with smtplib.SMTP_SSL(SMTP_HOST, SMTP_PORT, timeout=SMTP_TIMEOUT_SECONDS) as server:
+            server.login(EMAIL_USER, EMAIL_PASSWORD)
+            server.sendmail(EMAIL_USER, [to_email], msg.as_string())
+    except (OSError, smtplib.SMTPException) as exc:
+        logger.exception("OTP email delivery failed for %s via %s:%s", to_email, SMTP_HOST, SMTP_PORT)
+        raise RuntimeError("The email server could not be reached or rejected delivery.") from exc
 
 
 # ====== JWT HELPER ======
@@ -496,44 +553,71 @@ def get_current_user_info(request: Request) -> dict:
         if not user_id:
             raise HTTPException(status_code=401, detail="Invalid token payload.")
         
-        # Check database to see if user is active
+        # Check database to see if user is active and retrieve canonical role
         supabase_user = {}
+        server_role = None
+        user_email = payload.get("email")
+        user_name = payload.get("name") or "Investigator"
+        can_create = True
+
         try:
             user_res = supabase_admin.table("users").select("*").eq("id", user_id).execute()
             if user_res.data:
                 supabase_user = user_res.data[0]
                 if not supabase_user.get("is_active", True):
                     raise HTTPException(status_code=403, detail="Your account has been deactivated by an administrator.")
+                server_role = supabase_user.get("role")
+                user_email = supabase_user.get("email") or user_email
+                user_name = supabase_user.get("full_name") or user_name
+                can_create = supabase_user.get("can_create_case", True)
         except HTTPException:
             raise
-        except Exception:
-            pass
+        except Exception as e:
+            logger.warning("get_current_user_info: error querying supabase users: %s", e)
 
-        # Sync the user to local PostgreSQL to ensure foreign keys can be resolved
+        # Check local PostgreSQL users table as source of truth or fallback
         db = SessionLocal()
         try:
+            local_user = db.query(User).filter(User.id == uuid.UUID(user_id)).first() if user_id else None
+            if local_user:
+                if not local_user.is_active:
+                    raise HTTPException(status_code=403, detail="Your account has been deactivated by an administrator.")
+                if not server_role:
+                    server_role = local_user.role
+                user_email = local_user.email or user_email
+                user_name = local_user.full_name or user_name
+                can_create = local_user.can_create_case if local_user.can_create_case is not None else can_create
+
+            final_role = server_role or "Investigator"
+
+            # Sync the user to local PostgreSQL to ensure foreign keys can be resolved
             sync_user_to_postgres({
                 "id": user_id,
-                "email": supabase_user.get("email") or payload.get("email"),
-                "full_name": supabase_user.get("full_name") or payload.get("name"),
-                "role": supabase_user.get("role") or payload.get("role"),
-                "department": supabase_user.get("department"),
-                "badge_number": supabase_user.get("badge_number"),
-                "clearance_level": supabase_user.get("clearance_level", 1),
-                "is_active": supabase_user.get("is_active", True),
-                "can_create_case": supabase_user.get("can_create_case", True),
-                "last_login": supabase_user.get("last_login")
+                "email": user_email,
+                "full_name": user_name,
+                "role": final_role,
+                "department": supabase_user.get("department") or (local_user.department if local_user else None),
+                "badge_number": supabase_user.get("badge_number") or (local_user.badge_number if local_user else None),
+                "clearance_level": supabase_user.get("clearance_level", 1) or (local_user.clearance_level if local_user else 1),
+                "is_active": True,
+                "can_create_case": can_create,
+                "last_login": supabase_user.get("last_login") or (local_user.last_login if local_user else None)
             }, db)
+        except HTTPException:
+            raise
         except Exception as e:
-            print(f"[USER SYNC ERROR] Failed to sync user to local PostgreSQL: {e}")
+            logger.warning("[USER SYNC ERROR] Failed to sync user to local PostgreSQL: %s", e)
         finally:
             db.close()
-            
+
+        final_role = server_role or "Investigator"
+
         return {
             "id": user_id,
-            "email": payload.get("email"),
-            "role": payload.get("role") or "Investigator",
-            "name": payload.get("name") or "Investigator"
+            "email": user_email,
+            "role": final_role,
+            "name": user_name,
+            "can_create_case": can_create
         }
     except pyjwt.ExpiredSignatureError:
         raise HTTPException(status_code=401, detail="Token expired. Please log in again.")
@@ -624,10 +708,17 @@ def send_otp(req: LoginRequest, db: Session = Depends(get_db)):
 
     # Generate 6-digit OTP
     otp = "".join(random.choices(string.digits, k=6))
-    print(f"[DEBUG OTP] Generated OTP for {user['email']}: {otp}")
+    logger.info("Generated OTP authentication token and queued secure dispatch")
     expires_at = datetime.datetime.now(datetime.timezone.utc) + datetime.timedelta(minutes=5)
 
-    # Store OTP in PostgreSQL otp_tokens table
+    # Deliver before persisting the OTP. A failed delivery must not leave a token
+    # in the database that the officer never received.
+    try:
+        send_otp_email(user["email"], otp, user["full_name"])
+    except RuntimeError as exc:
+        raise HTTPException(status_code=503, detail=str(exc)) from exc
+
+    # Store OTP in PostgreSQL otp_tokens table only after successful delivery.
     try:
         u_id = uuid.UUID(user["id"])
         local_user = db.query(User).filter(User.id == u_id).first()
@@ -652,12 +743,6 @@ def send_otp(req: LoginRequest, db: Session = Depends(get_db)):
     except Exception as e:
         db.rollback()
         raise HTTPException(status_code=500, detail=f"Failed to store OTP: {str(e)}")
-
-    # Send OTP via Gmail
-    try:
-        send_otp_email(user["email"], otp, user["full_name"])
-    except Exception as e:
-        raise HTTPException(status_code=500, detail=f"Failed to send email: {str(e)}")
 
     return {"success": True, "message": f"Token sent to {user['email']}. Valid for 5 minutes."}
 
@@ -977,23 +1062,99 @@ def reset_password(req: ResetPasswordRequest, db: Session = Depends(get_db)):
 
 
 # ====== AUDIT LOG HELPER ======
+AUDIT_BUFFER_FILE = os.path.join(BACKEND_DIR, "audit_buffer.jsonl")
+_audit_buffer_lock = threading.Lock()
+
+def buffer_failed_audit_log(entry: dict) -> None:
+    """Safely append a failed audit record to emergency local disk buffer."""
+    with _audit_buffer_lock:
+        try:
+            with open(AUDIT_BUFFER_FILE, "a", encoding="utf-8") as f:
+                f.write(json.dumps(entry, default=str) + "\n")
+            logger.warning("[AUDIT BUFFER] Persisted audit record to emergency disk buffer: %s", entry.get("action"))
+        except Exception as buffer_err:
+            logger.critical("[CRITICAL] Failed to write audit event to emergency buffer: %s", buffer_err)
+
+def flush_audit_buffer(db: Optional[Session] = None) -> int:
+    """Flush any buffered audit records to PostgreSQL when database connection is healthy."""
+    if not os.path.isfile(AUDIT_BUFFER_FILE):
+        return 0
+    with _audit_buffer_lock:
+        try:
+            with open(AUDIT_BUFFER_FILE, "r", encoding="utf-8") as f:
+                lines = f.readlines()
+            if not lines:
+                return 0
+
+            session = db or SessionLocal()
+            recovered = 0
+            remaining = []
+            try:
+                for line in lines:
+                    line = line.strip()
+                    if not line:
+                        continue
+                    try:
+                        record = json.loads(line)
+                        p_case_id = uuid.UUID(record["case_id"]) if record.get("case_id") else None
+                        log_entry = AuditLog(
+                            user_id=record.get("user_id") or "system",
+                            action=record.get("action") or "Unknown",
+                            case_id=p_case_id,
+                            file_hash=record.get("file_hash"),
+                            metadata_=record.get("metadata")
+                        )
+                        session.add(log_entry)
+                        recovered += 1
+                    except Exception:
+                        remaining.append(line)
+                session.commit()
+            except Exception as e:
+                session.rollback()
+                logger.error("[AUDIT BUFFER RECOVERY ERROR] Could not commit buffered records: %s", e)
+                return 0
+            finally:
+                if not db:
+                    session.close()
+
+            # Rewrite remaining lines if any failed
+            with open(AUDIT_BUFFER_FILE, "w", encoding="utf-8") as f:
+                for line in remaining:
+                    f.write(line + "\n")
+            if recovered > 0:
+                logger.info("[AUDIT BUFFER] Successfully flushed %d buffered audit records to database.", recovered)
+            return recovered
+        except Exception as e:
+            logger.error("[AUDIT BUFFER ERROR] Failed processing buffer file: %s", e)
+            return 0
+
 def write_audit_log(user_id: str, action: str, case_id: str = None, file_hash: str = None, metadata: dict = None, db: Session = None):
-    """Append-only audit log writer. Never updates, never deletes."""
+    """Append-only audit log writer. Persists to PostgreSQL; buffers to disk on failure so no audit event is silently lost."""
     own_session = False
     if db is None:
         db = SessionLocal()
         own_session = True
-    try:
-        parsed_case_id = None
-        if case_id:
-            if isinstance(case_id, str):
-                try:
-                    parsed_case_id = uuid.UUID(case_id)
-                except ValueError:
-                    parsed_case_id = None
-            elif isinstance(case_id, uuid.UUID):
-                parsed_case_id = case_id
 
+    parsed_case_id = None
+    if case_id:
+        if isinstance(case_id, str):
+            try:
+                parsed_case_id = uuid.UUID(case_id)
+            except ValueError:
+                parsed_case_id = None
+        elif isinstance(case_id, uuid.UUID):
+            parsed_case_id = case_id
+
+    entry_dict = {
+        "user_id": user_id or "system",
+        "action": action,
+        "case_id": str(parsed_case_id) if parsed_case_id else None,
+        "file_hash": file_hash,
+        "metadata": metadata,
+        "buffered_at": datetime.datetime.now(datetime.timezone.utc).isoformat()
+    }
+
+    try:
         log_entry = AuditLog(
             user_id=user_id or "system",
             action=action,
@@ -1005,8 +1166,9 @@ def write_audit_log(user_id: str, action: str, case_id: str = None, file_hash: s
         db.commit()
     except Exception as e:
         db.rollback()
-        # Never crash the main request due to audit failure — just log to console
-        print(f"[AUDIT LOG FAILED] {action}: {e}")
+        # [AUDIT HARDENING] Do NOT silently swallow failure; write to durable disk buffer
+        logger.error("[AUDIT LOG DB FAILURE] %s: %s - Writing to emergency append-only buffer", action, e)
+        buffer_failed_audit_log(entry_dict)
     finally:
         if own_session:
             db.close()
@@ -1214,7 +1376,7 @@ def get_cases(request: Request, search: str = None, db: Session = Depends(get_db
     visibility = get_data_visibility(user_info, "view_cases")
 
     try:
-        query = db.query(Case)
+        query = db.query(Case).filter((Case.is_archived.is_(False)) | (Case.is_archived.is_(None)))
         if visibility == "owned":
             user_uuid = uuid.UUID(user_info['id']) if user_info['id'] else None
             query = query.filter((Case.created_by == user_uuid) | (Case.created_by.is_(None)))
@@ -1223,38 +1385,20 @@ def get_cases(request: Request, search: str = None, db: Session = Depends(get_db
             query = query.filter(Case.title.ilike(f"%{search}%"))
 
         cases = query.order_by(Case.created_at.desc()).all()
-        
+
         serialized_cases = []
         for case in cases:
             row = serialize_case(case)
             row["case_number"] = row.get("case_number") or f'SA-{row["id"][:4].upper()}'
-            row["status"] = "Open"
+            row["status"] = "Archived" if case.is_archived else "Open"
             serialized_cases.append(row)
-            
+
         return {"data": serialized_cases}
+    except HTTPException:
+        raise
     except Exception as e:
-        print(f"[FALLBACK] get_cases failed: {e}")
-        # Return a mock case so the app works even offline or if table doesn't exist
-        mock_cases = [
-            {
-                "id": "11111111-2222-3333-4444-555555555555",
-                "case_number": "SA-DEMO",
-                "title": "Suspected Weapon Storage",
-                "offence_type": "Illegal Arms Possession",
-                "status": "Open",
-                "priority": "High",
-                "fir_description": "First Information Report regarding suspicious activity and stored weapons.",
-                "complainant_name": "Ravi Kumar",
-                "complainant_contact": "+91 98765 43210",
-                "victims": [{"name": "State"}],
-                "suspects": [{"name": "John Doe"}],
-                "incident_date": "2026-05-15",
-                "incident_time": "14:30",
-                "incident_location": "Warehouse 4, Sector 7",
-                "created_at": "2026-05-15T14:30:00Z"
-            }
-        ]
-        return {"data": mock_cases}
+        logger.exception("[ERROR] get_cases database failure: %s", e)
+        raise HTTPException(status_code=500, detail="Database error retrieving cases. Contact system administrator.")
 
 @app.get("/cases/stats")
 def get_case_stats(request: Request, db: Session = Depends(get_db)):
@@ -1443,14 +1587,52 @@ def upload_evidence(
             }
         )
 
-    # ── 3. Upload to local storage or Supabase Storage ───────────────────────
+    # ── 3. Upload to cloud storage (S3/R2), local storage, or Supabase ───────
     file_uuid = str(uuid.uuid4())
     original_filename = safe_filename(file.filename)
     stored_name = f"{file_uuid}_{original_filename}"
     local_file_path = None
     storage_path = None
+    storage_backend = (os.getenv("STORAGE_BACKEND") or "local").strip().lower()
 
-    if USE_LOCAL_STORAGE:
+    if storage_backend in ("s3", "cloud"):
+        canonical_key = build_storage_key(case_id, original_filename, file_uuid)
+        storage_path = canonical_key
+        try:
+            provider = get_storage_provider()
+            stored_obj = provider.put(
+                key=canonical_key,
+                data_or_stream=file_bytes,
+                content_type=file.content_type or "application/octet-stream"
+            )
+        except KeyAlreadyExistsError as e:
+            logger.warning("evidence.s3_collision key=%s error=%s", canonical_key, e)
+            raise HTTPException(status_code=409, detail=f"Evidence storage key already exists: {canonical_key}")
+        except StoragePermissionError as e:
+            logger.error("evidence.s3_permission_denied key=%s error=%s", canonical_key, e)
+            raise HTTPException(status_code=502, detail=f"Evidence cloud storage permission denied: {e}")
+        except StorageUnavailableError as e:
+            logger.error("evidence.s3_unavailable key=%s error=%s", canonical_key, e)
+            raise HTTPException(status_code=502, detail=f"Evidence cloud storage provider unreachable: {e}")
+        except StorageConfigurationError as e:
+            logger.error("evidence.s3_config_error key=%s error=%s", canonical_key, e)
+            raise HTTPException(status_code=500, detail=f"Evidence cloud storage misconfigured: {e}")
+        except StorageError as e:
+            logger.error("evidence.s3_upload_failed key=%s error=%s", canonical_key, e)
+            raise HTTPException(status_code=502, detail=f"Failed to upload evidence to cloud storage: {e}")
+
+        if stored_obj.sha256.lower() != hash_hex.lower():
+            logger.error(
+                "evidence.s3_integrity_mismatch key=%s expected=%s got=%s",
+                canonical_key, hash_hex, stored_obj.sha256
+            )
+            raise HTTPException(
+                status_code=500,
+                detail="Evidence storage integrity error: stored SHA-256 does not match uploaded file."
+            )
+
+        file_url = canonical_key
+    elif USE_LOCAL_STORAGE:
         local_dir = os.path.join(UPLOADS_DIR, "cases", case_id)
         os.makedirs(local_dir, exist_ok=True)
         local_file_path = os.path.join(local_dir, stored_name)
@@ -1480,9 +1662,16 @@ def upload_evidence(
             file_url = f"{SUPABASE_URL}/storage/v1/object/public/evidence/{storage_path}"
 
     def discard_stored_file() -> None:
-        """A rolled-back upload must not leave an unregistered file behind."""
+        """A rolled-back upload must not leave an unregistered file behind on local/Supabase storage."""
         try:
-            if local_file_path and os.path.isfile(local_file_path):
+            if storage_backend in ("s3", "cloud"):
+                # Append-only immutability: StorageProvider defines no delete method.
+                # Evidence is preserved without silent deletion; emit warning for audit tracking.
+                logger.warning(
+                    "evidence.cloud_object_unregistered key=%s hash=%s case=%s",
+                    canonical_key, hash_hex, case_id
+                )
+            elif local_file_path and os.path.isfile(local_file_path):
                 os.remove(local_file_path)
             elif storage_path:
                 supabase_admin.storage.from_("evidence").remove([storage_path])
@@ -1679,32 +1868,65 @@ def storage_url_allowed(file_url: str) -> bool:
     return target.scheme in ("http", "https") and target.netloc.lower() == allowed.netloc.lower()
 
 
-def compute_evidence_file_hash(file_url: str) -> str:
-    """SHA-256 of the stored evidence file.
+def compute_evidence_deep_hash(file_url: str) -> tuple[str, int, Optional[str]]:
+    """Deep byte-level calculation of evidence SHA-256 independent of stored metadata.
+
+    Reads real object bytes chunk-by-chunk through hashlib.sha256.
+    Returns (calculated_byte_hash, total_bytes, storage_metadata_hash).
 
     Raises ``EvidenceFileMissing`` when the file is gone, ``EvidenceStorageUnavailable``
     when storage cannot be read (an outage is not evidence of tampering), and
     ``UnsafeEvidenceLocation`` when the recorded location is not an evidence store.
     """
-    def hash_local(path: str) -> str:
+    if not file_url or not str(file_url).strip():
+        raise EvidenceFileMissing("Evidence file URL is empty")
+
+    url_str = str(file_url).strip()
+
+    # 1. Canonical Storage Gateway key (e.g. "cases/{case_id}/{filename}")
+    if url_str.startswith("cases/") or (not urlparse(url_str).scheme and "/uploads/" not in url_str):
+        try:
+            provider = get_storage_provider()
+            # Deep byte read: reads real bytes chunk-by-chunk through hasher
+            byte_hash, total_size = provider.read_bytes_sha256(url_str)
+            # Retrieve metadata hash where available (for comparison against byte hash)
+            metadata_hash = None
+            try:
+                obj_meta = provider.stat(url_str)
+                metadata_hash = getattr(obj_meta, "metadata_sha256", None) or obj_meta.sha256
+            except Exception:
+                pass
+            return byte_hash, total_size, metadata_hash
+        except KeyNotFoundError:
+            raise EvidenceFileMissing(f"Evidence object '{url_str}' not found in storage gateway")
+        except StorageUnavailableError as e:
+            raise EvidenceStorageUnavailable(f"Storage gateway unreachable: {e}", 502)
+        except Exception as e:
+            logger.error("evidence.storage_gateway_read_failed key=%s error=%s", url_str, e)
+            raise EvidenceStorageUnavailable(f"Failed to read bytes from storage gateway: {e}", 500)
+
+    # 2. Local uploads URL
+    if "/uploads/" in url_str:
+        path = resolve_upload_path(url_str)
         if not os.path.isfile(path):
             raise EvidenceFileMissing("Evidence file not found in local storage")
         sha256 = hashlib.sha256()
+        total_size = 0
         try:
             with open(path, "rb") as f:
                 while chunk := f.read(1 << 20):
                     sha256.update(chunk)
+                    total_size += len(chunk)
         except OSError as e:
             logger.error("evidence.local_read_failed error=%s", e)
             raise EvidenceStorageUnavailable("Failed to read the local evidence file", 500)
-        return sha256.hexdigest()
+        return sha256.hexdigest(), total_size, None
 
-    if "/uploads/" in (file_url or ""):
-        return hash_local(resolve_upload_path(file_url))
-    if not storage_url_allowed(file_url or ""):
+    # 3. Remote Supabase URL
+    if not storage_url_allowed(url_str):
         raise UnsafeEvidenceLocation("Evidence location is not a recognised evidence store")
     try:
-        response = requests.get(file_url, timeout=(5, 60), stream=True)
+        response = requests.get(url_str, timeout=(5, 60), stream=True)
     except requests.RequestException as e:
         logger.warning("evidence.storage_unreachable error=%s", e)
         raise EvidenceStorageUnavailable("Could not reach evidence storage", 502)
@@ -1720,7 +1942,13 @@ def compute_evidence_file_hash(file_url: str) -> str:
             if total > MAX_HASH_DOWNLOAD_BYTES:
                 raise EvidenceStorageUnavailable("Evidence file exceeds the verification size limit", 413)
             sha256.update(chunk)
-    return sha256.hexdigest()
+    return sha256.hexdigest(), total, None
+
+
+def compute_evidence_file_hash(file_url: str) -> str:
+    """SHA-256 of the stored evidence file (deep byte calculation)."""
+    byte_hash, _, _ = compute_evidence_deep_hash(file_url)
+    return byte_hash
 
 
 def verification_failure(http_status: int, result: str, reason: str, message: str, evidence, extra: Optional[dict] = None) -> JSONResponse:
@@ -1856,12 +2084,16 @@ def public_blockchain_status(user_info: Optional[dict] = None) -> dict:
 
 
 @app.post("/evidence/{evidence_id}/verify")
-def verify_evidence_hash(evidence_id: str, request: Request, db: Session = Depends(get_db)):
+def verify_evidence_hash(evidence_id: str, request: Request, deep: bool = True, db: Session = Depends(get_db)):
     """Recomputes SHA-256 from storage and verifies it on the blockchain.
 
-    Outcomes: Verified, Tampered, Missing, Unregistered (stored as the evidence status)
-    or Verification Failed (an outage; the evidence status is left unchanged). Every
-    outcome carries a machine-readable ``reason`` and is written to the audit log.
+    When deep=True (default), reads actual object bytes and computes SHA-256
+    independently of stored metadata. Compares calculated hash with:
+    1. Database hash (evidence.file_hash)
+    2. Storage metadata hash (where available)
+    3. Blockchain registered hash (where applicable)
+
+    When deep=False, performs a fast metadata-only check without certifying byte integrity.
     """
     user_info = get_current_user_info(request)
     evidence_obj = load_evidence_for_user(evidence_id, user_info, db)
@@ -1870,6 +2102,104 @@ def verify_evidence_hash(evidence_id: str, request: Request, db: Session = Depen
     stored_hash = evidence_obj.file_hash
     if not evidence_obj.file_url:
         raise HTTPException(status_code=400, detail="No file URL for this evidence record")
+
+    if not deep:
+        # Fast metadata-only check: compare database hash against storage gateway metadata
+        url_str = str(evidence_obj.file_url).strip()
+        meta_hash = None
+        meta_match = False
+        meta_status = "MetadataMismatch"
+        note = "Fast metadata check only; does not certify byte-level integrity."
+
+        # 1. Canonical Storage Gateway key (e.g. "cases/{case_id}/{filename}")
+        if url_str.startswith("cases/") or (not urlparse(url_str).scheme and "/uploads/" not in url_str):
+            try:
+                provider = get_storage_provider()
+                stat_obj = provider.stat(url_str)
+                meta_hash = getattr(stat_obj, "metadata_sha256", None) or stat_obj.sha256
+                meta_match = bool(stored_hash and meta_hash and stored_hash.lower() == meta_hash.lower())
+                meta_status = "MetadataMatch" if meta_match else "MetadataMismatch"
+            except KeyNotFoundError:
+                raise HTTPException(status_code=404, detail=f"Evidence object '{url_str}' not found in storage gateway")
+            except StorageUnavailableError as e:
+                raise HTTPException(status_code=502, detail=f"Storage gateway unreachable: {e}")
+            except StoragePermissionError as e:
+                raise HTTPException(status_code=502, detail=f"Storage access denied: {e}")
+            except StorageConfigurationError as e:
+                raise HTTPException(status_code=500, detail=f"Storage gateway misconfigured: {e}")
+            except Exception as e:
+                raise HTTPException(status_code=502, detail=f"Storage provider error: {e}")
+
+        # 2. Legacy local uploads URL (e.g. "http://localhost:8000/uploads/cases/...")
+        elif "/uploads/" in url_str:
+            try:
+                path = resolve_upload_path(url_str)
+            except UnsafeEvidenceLocation as e:
+                raise HTTPException(status_code=400, detail=str(e.detail))
+
+            if not os.path.isfile(path):
+                raise HTTPException(status_code=404, detail="Evidence file not found in local storage")
+
+            # Local filesystem does not store out-of-band SHA-256 headers; verify file existence and accessibility
+            try:
+                stat_info = os.stat(path)
+                file_size = stat_info.st_size
+            except OSError as e:
+                raise HTTPException(status_code=500, detail=f"Failed to read local file metadata: {e}")
+
+            meta_hash = None
+            meta_match = False
+            meta_status = "MetadataUnavailable"
+            note = (
+                "Fast metadata check: local evidence file exists and is accessible, but out-of-band SHA-256 "
+                "metadata is not available on local storage. Use deep=true for byte-level cryptographic verification."
+            )
+
+        # 3. Remote URL (Supabase Storage)
+        else:
+            if not storage_url_allowed(url_str):
+                raise HTTPException(status_code=400, detail="Evidence location is not a recognised evidence store")
+            try:
+                head_resp = requests.head(url_str, timeout=(5, 15))
+            except requests.RequestException as e:
+                raise HTTPException(status_code=502, detail=f"Could not reach remote storage: {e}")
+
+            if head_resp.status_code == 404 or (head_resp.status_code == 400 and "not_found" in head_resp.text.lower()):
+                raise HTTPException(status_code=404, detail="Evidence file not found in Supabase Storage")
+            if head_resp.status_code != 200:
+                raise HTTPException(status_code=502, detail=f"Remote evidence storage returned HTTP {head_resp.status_code}")
+
+            # Look for explicit SHA-256 metadata headers (do NOT treat ETag as SHA-256)
+            remote_sha256 = (
+                head_resp.headers.get("x-amz-meta-sha256")
+                or head_resp.headers.get("x-sha256")
+                or head_resp.headers.get("content-sha256")
+            )
+            if remote_sha256 and is_sha256_hex(remote_sha256):
+                meta_hash = normalize_hex(remote_sha256)
+                meta_match = bool(stored_hash and meta_hash.lower() == stored_hash.lower())
+                meta_status = "MetadataMatch" if meta_match else "MetadataMismatch"
+            else:
+                meta_hash = None
+                meta_match = False
+                meta_status = "MetadataUnavailable"
+                note = (
+                    "Fast metadata check: remote evidence file exists in storage, but out-of-band SHA-256 "
+                    "metadata header is not available. Use deep=true for byte-level cryptographic verification."
+                )
+
+        return {
+            "data": {
+                "deepVerification": False,
+                "metadataOnly": True,
+                "databaseHash": stored_hash,
+                "storageMetadataHash": meta_hash,
+                "matchesDatabase": meta_match,
+                "status": meta_status,
+                "note": note
+            },
+            "success": True
+        }
 
     def record_outcome(result: str, reason: str, audit_action: str, details: dict, new_status: Optional[str] = None) -> None:
         try:
@@ -1887,9 +2217,9 @@ def verify_evidence_hash(evidence_id: str, request: Request, db: Session = Depen
         audit_event(audit_action, user_info, request, result=result, evidence=evidence_obj,
                     details={"reason": reason, "reason_text": integrity.REASONS.get(reason), **details})
 
-    # 1. Re-hash the stored file.
+    # 1. Re-hash the stored file using deep byte calculation.
     try:
-        current_hash = compute_evidence_file_hash(evidence_obj.file_url)
+        current_hash, total_bytes, metadata_hash = compute_evidence_deep_hash(evidence_obj.file_url)
     except EvidenceFileMissing as e:
         record_outcome(integrity.MISSING, "EVIDENCE_MISSING", integrity.AUDIT_EVIDENCE_MISSING, {"detail": str(e)},
                        new_status=integrity.MISSING)
@@ -1910,17 +2240,46 @@ def verify_evidence_hash(evidence_id: str, request: Request, db: Session = Depen
         registration = blockchain_service.get_registration(evidence_id)
     except BlockchainUnavailable as e:
         logger.error("evidence.verification_chain_unavailable id=%s error=%s", evidence_id, e)
+        deep_report = integrity.deep_integrity_verification(
+            evidence=evidence_obj,
+            calculated_byte_hash=current_hash,
+            total_bytes=total_bytes,
+            storage_metadata_hash=metadata_hash,
+            registration=None,
+            receipt=None,
+            duplicate_ids=duplicate_evidence_ids(db, evidence_obj),
+            blockchain_available=False,
+            is_missing=False,
+            is_unreadable=False,
+        )
         record_outcome(integrity.VERIFICATION_FAILED, "BLOCKCHAIN_UNAVAILABLE", integrity.AUDIT_VERIFICATION_FAILED, {})
         return verification_failure(503, integrity.VERIFICATION_FAILED, "BLOCKCHAIN_UNAVAILABLE",
                                     "The blockchain network is unavailable. Integrity was not checked and the evidence "
                                     "status is unchanged; try again when the node is back.", evidence_obj,
-                                    {"calculatedHash": current_hash})
+                                    {"calculatedHash": current_hash, "calculatedByteHash": current_hash,
+                                     "storageMetadataHash": metadata_hash, "databaseHash": stored_hash,
+                                     "deepVerification": True, "deepReport": deep_report})
     if registration is None:
+        deep_report = integrity.deep_integrity_verification(
+            evidence=evidence_obj,
+            calculated_byte_hash=current_hash,
+            total_bytes=total_bytes,
+            storage_metadata_hash=metadata_hash,
+            registration=None,
+            receipt=None,
+            duplicate_ids=duplicate_evidence_ids(db, evidence_obj),
+            blockchain_available=True,
+            is_missing=False,
+            is_unreadable=False,
+        )
         record_outcome(integrity.UNREGISTERED, "NOT_REGISTERED", integrity.AUDIT_EVIDENCE_UNREGISTERED,
                        {"computed_hash": current_hash, "database_hash": stored_hash}, new_status=integrity.UNREGISTERED)
         return verification_failure(409, integrity.UNREGISTERED, "NOT_REGISTERED",
                                     "Evidence is not registered on the blockchain, so its integrity cannot be verified. "
-                                    "It is now marked Unregistered.", evidence_obj, {"calculatedHash": current_hash})
+                                    "It is now marked Unregistered.", evidence_obj,
+                                    {"calculatedHash": current_hash, "calculatedByteHash": current_hash,
+                                     "storageMetadataHash": metadata_hash, "databaseHash": stored_hash,
+                                     "deepVerification": True, "deepReport": deep_report})
 
     # 3. Check the stored registration transaction; adopt missing metadata.
     receipt, receipt_state = registration_receipt_state(evidence_obj)
@@ -1941,7 +2300,8 @@ def verify_evidence_hash(evidence_id: str, request: Request, db: Session = Depen
         record_outcome(integrity.VERIFICATION_FAILED, reason, integrity.AUDIT_VERIFICATION_FAILED, {"detail": str(e)[:300]})
         return verification_failure(503, integrity.VERIFICATION_FAILED, reason,
                                     f"{integrity.REASONS[reason]} The evidence status is unchanged.", evidence_obj,
-                                    {"calculatedHash": current_hash})
+                                    {"calculatedHash": current_hash, "calculatedByteHash": current_hash,
+                                     "storageMetadataHash": metadata_hash, "databaseHash": stored_hash})
 
     blockchain_hash = chain_result["onChainHash"]
     database_matches_blockchain = stored_hash == blockchain_hash
@@ -1956,8 +2316,24 @@ def verify_evidence_hash(evidence_id: str, request: Request, db: Session = Depen
         reasons.append("TRANSACTION_MISSING")
         warnings.append(integrity.REASONS["TRANSACTION_MISSING"])
 
-    checks = integrity.integrity_checks(evidence_obj, registration, receipt, duplicate_evidence_ids(db, evidence_obj),
-                                        file_hash=current_hash, receipt_known=receipt_state != "unknown")
+    if metadata_hash and metadata_hash.lower() != current_hash.lower():
+        reasons.append("METADATA_MISMATCH")
+        warnings.append("Storage provider metadata SHA-256 differs from freshly calculated byte hash.")
+
+    deep_report = integrity.deep_integrity_verification(
+        evidence=evidence_obj,
+        calculated_byte_hash=current_hash,
+        total_bytes=total_bytes,
+        storage_metadata_hash=metadata_hash,
+        registration=registration,
+        receipt=receipt,
+        duplicate_ids=duplicate_evidence_ids(db, evidence_obj),
+        blockchain_available=True,
+        is_missing=False,
+        is_unreadable=False,
+        receipt_known=receipt_state != "unknown",
+    )
+    checks = deep_report["checks"]
 
     # 5. Persist status, custody and the on-chain event log.
     try:
@@ -1979,6 +2355,7 @@ def verify_evidence_hash(evidence_id: str, request: Request, db: Session = Depen
             "calculatedHash": current_hash,
             "blockchainHash": blockchain_hash,
             "databaseHash": stored_hash,
+            "storageMetadataHash": metadata_hash,
             "contractAddress": chain_result.get("contractAddress"),
             "gasUsed": chain_result.get("gasUsed"),
             "from": chain_result.get("from"),
@@ -2020,11 +2397,18 @@ def verify_evidence_hash(evidence_id: str, request: Request, db: Session = Depen
             "storedHash": stored_hash,
             "stored_hash": stored_hash,
             "calculatedHash": current_hash,
+            "calculatedByteHash": current_hash,
             "computed_hash": current_hash,
+            "totalBytes": total_bytes,
+            "storageMetadataHash": metadata_hash,
             "databaseHash": stored_hash,
             "blockchainHash": blockchain_hash,
             "fileMatchesBlockchain": is_verified,
             "databaseMatchesBlockchain": database_matches_blockchain,
+            "dbMatchesBytes": (stored_hash == current_hash),
+            "metadataMatchesBytes": (metadata_hash == current_hash) if metadata_hash else None,
+            "deepVerification": True,
+            "deepReport": deep_report,
             "verificationSource": "blockchain",
             "warnings": warnings,
             "integrityChecks": checks,
@@ -2066,7 +2450,23 @@ def download_evidence(evidence_id: str, request: Request, db: Session = Depends(
     evidence = load_evidence_for_user(evidence_id, user_info, db)
     file_url = evidence.file_url or ""
     try:
-        if "/uploads/" in file_url:
+        url_str = str(file_url).strip()
+        # 1. Canonical Storage Gateway key (e.g. "cases/{case_id}/{filename}")
+        if url_str.startswith("cases/") or (not urlparse(url_str).scheme and "/uploads/" not in url_str):
+            try:
+                provider = get_storage_provider()
+                stream = provider.get(url_str)
+                body = stream.read()
+                stream.close()
+                served_hash, path = hashlib.sha256(body).hexdigest(), None
+            except KeyNotFoundError:
+                raise EvidenceFileMissing(f"Evidence object '{url_str}' not found in storage gateway")
+            except StorageUnavailableError as e:
+                raise EvidenceStorageUnavailable(f"Storage gateway unreachable: {e}", 502)
+            except Exception as e:
+                logger.error("evidence.storage_gateway_get_failed key=%s error=%s", url_str, e)
+                raise EvidenceStorageUnavailable(f"Failed to read from storage gateway: {e}", 500)
+        elif "/uploads/" in file_url:
             path = resolve_upload_path(file_url)
             if not os.path.isfile(path):
                 raise EvidenceFileMissing("Evidence file not found in local storage")
@@ -2635,18 +3035,10 @@ def redeploy_evidence_registry(request: Request):
 
 # ====== DETECTION ENDPOINTS ======
 @app.post("/detect")
-async def detect_direct(image: UploadFile = File(...)):
-    # ---------------------------------------------------------
-    # Original Code (Alisha) - Direct Roboflow Prediction:
-    # if not model:
-    #     raise HTTPException(status_code=500, detail="Model not loaded")
-    # file_path = "temp.jpg"
-    # with open(file_path, "wb") as buffer:
-    #     shutil.copyfileobj(image.file, buffer)
-    # prediction = model.predict(file_path).json()
-    # return JSONResponse(content=prediction)
-    # ---------------------------------------------------------
-    # Updated: Forward to local YOLOv8 crime detection microservice (Port 8003)
+async def detect_direct(request: Request, image: UploadFile = File(...)):
+    user_info = get_current_user_info(request)
+    if not has_permission(user_info, "run_ai_analysis"):
+        raise HTTPException(status_code=403, detail="Forbidden: You do not have permission to run object detection.")
     try:
         contents = await image.read()
         resp = requests.post(
@@ -2657,11 +3049,17 @@ async def detect_direct(image: UploadFile = File(...)):
         )
         if resp.status_code != 200:
             raise HTTPException(status_code=resp.status_code, detail=f"Detection error: {resp.text}")
-        return JSONResponse(content=resp.json())
+        result_json = resp.json()
+        write_audit_log(
+            user_id=user_info["id"],
+            action="Object Detection Direct",
+            metadata={"filename": image.filename, "file_size": len(contents), "predictions_count": len(result_json.get("predictions", []))}
+        )
+        return JSONResponse(content=result_json)
     except HTTPException:
         raise
-    except Exception as e:
-        raise HTTPException(status_code=500, detail=f"Crime detection service (port 8003) unreachable: {e}")
+    except requests.RequestException as e:
+        raise HTTPException(status_code=502, detail=f"Crime detection service (port 8003) unreachable: {e}")
 
 @app.post("/ai/detect")
 def run_ai_detect(req: DetectionRequest, request: Request, db: Session = Depends(get_db)):
@@ -2731,6 +3129,22 @@ def run_ai_detect(req: DetectionRequest, request: Request, db: Session = Depends
             local_temp_file = os.path.join(UPLOADS_DIR, f"temp_{file_id}.{ext}")
             with open(local_temp_file, "wb") as f:
                 f.write(file_bytes)
+        elif file_path.startswith("cases/") or (not urlparse(file_path).scheme and "/uploads/" not in file_path and not os.path.exists(file_path)):
+            is_remote_download = True
+            try:
+                provider = get_storage_provider()
+                stream = provider.get(file_path)
+                file_bytes = stream.read()
+                if hasattr(stream, "close"):
+                    stream.close()
+                current_hash = hashlib.sha256(file_bytes).hexdigest()
+                file_id = str(uuid.uuid4())
+                ext = file_path.split(".")[-1].split("?")[0]
+                local_temp_file = os.path.join(UPLOADS_DIR, f"temp_{file_id}.{ext}")
+                with open(local_temp_file, "wb") as f:
+                    f.write(file_bytes)
+            except Exception as e:
+                raise HTTPException(status_code=404, detail=f"Evidence file missing in storage gateway: {e}")
         else:
             is_remote_download = False
             # Legacy local file on disk
@@ -2781,7 +3195,23 @@ def run_ai_detect(req: DetectionRequest, request: Request, db: Session = Depends
         # print(f"[DEBUG] Prediction response: {str(prediction)[:200]}...")
         # ---------------------------------------------------------
         
-        # Updated: Call local YOLOv8 Crime Detection Service (Port 8003)
+        # Prepare base64 preview data URL and measure image dimensions before any cleanup
+        preview_data_url = None
+        image_width, image_height = 800.0, 600.0
+        try:
+            with open(local_temp_file, "rb") as img_f:
+                raw_bytes = img_f.read()
+                ext_clean = os.path.splitext(local_temp_file)[1].lower().replace(".", "")
+                mime = f"image/{ext_clean}" if ext_clean in ("png", "webp", "gif") else "image/jpeg"
+                preview_data_url = f"data:{mime};base64,{base64.b64encode(raw_bytes).decode('utf-8')}"
+            from PIL import Image
+            import io
+            with Image.open(io.BytesIO(raw_bytes)) as im:
+                image_width, image_height = float(im.width), float(im.height)
+        except Exception as e:
+            print(f"[DEBUG] Failed to parse image preview or dimensions: {e}")
+
+        # Call local YOLOv8 Object Detection Service (Port 8003)
         try:
             with open(local_temp_file, "rb") as img_f:
                 fname = os.path.basename(local_temp_file)
@@ -2792,14 +3222,14 @@ def run_ai_detect(req: DetectionRequest, request: Request, db: Session = Depends
                     timeout=30
                 )
             if resp.status_code != 200:
-                raise HTTPException(status_code=resp.status_code, detail=f"Crime detection service error: {resp.text}")
+                raise HTTPException(status_code=resp.status_code, detail=f"Object detection service error: {resp.text}")
             prediction = resp.json()
             print(f"[DEBUG] Local YOLO prediction response: {prediction}")
         except HTTPException:
             raise
         except Exception as e:
-            print(f"[DEBUG] Crime detection service error: {e}")
-            raise HTTPException(status_code=500, detail=f"Crime detection service (port 8003) unreachable: {e}")
+            print(f"[DEBUG] Object detection service error: {e}")
+            raise HTTPException(status_code=500, detail=f"Object detection service (port 8003) unreachable: {e}")
     except HTTPException:
         raise
     except Exception as e:
@@ -2813,37 +3243,9 @@ def run_ai_detect(req: DetectionRequest, request: Request, db: Session = Depends
             except Exception as e:
                 print(f"[DEBUG] Failed to delete temporary file {local_temp_file}: {e}")
 
-    # Calculate image dimensions for percentages
-    try:
-        from PIL import Image
-        with Image.open(local_temp_file) as im:
-            image_width, image_height = float(im.width), float(im.height)
-    except Exception:
-        image_width, image_height = 800.0, 600.0
-
     objects = []
     
-    # ---------------------------------------------------------
-    # Original Code (Alisha) - Roboflow Prediction Parsing:
-    # image_width = float(prediction.get("image", {}).get("width", 1))
-    # image_height = float(prediction.get("image", {}).get("height", 1))
-    # for pred in prediction.get("predictions", []):
-    #     pred_x = float(pred.get("x", 0))
-    #     pred_y = float(pred.get("y", 0))
-    #     pred_w = float(pred.get("width", 0))
-    #     pred_h = float(pred.get("height", 0))
-    #     left_pct = ((pred_x - pred_w/2) / image_width) * 100
-    #     top_pct = ((pred_y - pred_h/2) / image_height) * 100
-    #     w_pct = (pred_w / image_width) * 100
-    #     h_pct = (pred_h / image_height) * 100
-    #     objects.append({
-    #         "label": pred["class"],
-    #         "confidence": pred["confidence"],
-    #         "bbox": [f"{left_pct:.2f}%", f"{top_pct:.2f}%", f"{w_pct:.2f}%", f"{h_pct:.2f}%"]
-    #     })
-    # ---------------------------------------------------------
-
-    # Updated: Parse local YOLOv8 detections format from port 8003
+    # Parse local YOLOv8 detections format from port 8003
     for det in prediction.get("detections", []):
         bbox = det.get("bbox", {})
         if isinstance(bbox, dict):
@@ -2864,7 +3266,8 @@ def run_ai_detect(req: DetectionRequest, request: Request, db: Session = Depends
             })
 
     image_url_full = file_path if is_remote else f"http://localhost:8000/{file_path}"
-    result_data = {"objects": objects, "image_url": image_url_full}
+    # Use data URL for immediate, authenticated frontend display without forbidden /uploads access
+    result_data = {"objects": objects, "image_url": preview_data_url or image_url_full}
 
     # ---------------------------------------------------------
     # Original Code (Alisha) - Cloud Supabase Storage:
@@ -2966,6 +3369,18 @@ def resolve_ocr_evidence_source(evidence: Evidence):
         except requests.RequestException as exc:
             print(f"[OCR] remote evidence retrieval failed: {exc}")
             raise HTTPException(status_code=502, detail="Unable to retrieve the uploaded evidence file") from exc
+
+    url_str = str(file_url).strip()
+    if url_str.startswith("cases/") or (not urlparse(url_str).scheme and "/uploads/" not in url_str):
+        try:
+            provider = get_storage_provider()
+            stream = provider.get(url_str)
+            content = stream.read()
+            stream.close()
+            return bytes(content)
+        except Exception as exc:
+            print(f"[OCR] storage gateway evidence retrieval failed: {exc}")
+            raise HTTPException(status_code=404, detail="Uploaded evidence file was not found") from exc
 
     if "/uploads/" in file_url:
         relative_path = file_url.split("/uploads/", 1)[1].replace("/", os.sep)
@@ -3257,6 +3672,82 @@ def search_ocr(q: str, request: Request, db: Session = Depends(get_db)):
     return {"success": True, "data": list(results.values())}
 
 
+# ====== AUDIO FORENSICS PROXY ENDPOINT ======
+AUDIO_SERVICE_URL = os.getenv("AUDIO_SERVICE_URL", "http://127.0.0.1:8002/audio/analyze")
+
+@app.post("/ai/audio/analyze")
+async def analyze_audio_gateway(
+    request: Request,
+    audio: Optional[UploadFile] = File(None),
+    file: Optional[UploadFile] = File(None),
+    case_id: Optional[str] = Form(None),
+    evidence_id: Optional[str] = Form(None),
+    db: Session = Depends(get_db)
+):
+    """Authenticated gateway proxy for audio forensics. Enforces RBAC, case/evidence authorization, and records audit trail."""
+    user_info = get_current_user_info(request)
+    if not has_permission(user_info, "run_ai_analysis"):
+        raise HTTPException(status_code=403, detail="Forbidden: You do not have permission to run audio analysis.")
+
+    upload_file = audio or file
+    if not upload_file:
+        raise HTTPException(status_code=400, detail="Missing audio file for analysis.")
+
+    clean_case_id = (case_id or "").strip() or None
+    clean_evidence_id = (evidence_id or "").strip() or None
+    target_case_id = clean_case_id
+    evidence_record = None
+
+    if clean_evidence_id:
+        evidence_record = load_evidence_for_user(clean_evidence_id, user_info, db)
+        if clean_case_id:
+            if str(evidence_record.case_id) != clean_case_id:
+                raise HTTPException(
+                    status_code=400,
+                    detail="Specified evidence does not belong to the specified case."
+                )
+        else:
+            target_case_id = str(evidence_record.case_id) if evidence_record.case_id else None
+    elif clean_case_id:
+        check_case_access(clean_case_id, user_info, db)
+
+    try:
+        contents = await upload_file.read()
+        if not contents or len(contents) == 0:
+            raise HTTPException(status_code=400, detail="The uploaded file is empty (0 bytes).")
+
+        resp = requests.post(
+            AUDIO_SERVICE_URL,
+            files={"audio": (upload_file.filename or "audio.wav", contents, upload_file.content_type or "audio/wav")},
+            timeout=180
+        )
+        if resp.status_code != 200:
+            raise HTTPException(status_code=resp.status_code, detail=f"Audio analysis service error: {resp.text}")
+
+        result_data = resp.json()
+        action_name = "Audio Forensics Analysis" if target_case_id else "Audio Forensics Analysis (Ad-hoc)"
+        write_audit_log(
+            user_id=user_info["id"],
+            action=action_name,
+            case_id=target_case_id,
+            metadata={
+                "filename": upload_file.filename,
+                "file_size": len(contents),
+                "evidence_id": str(evidence_record.id) if evidence_record else clean_evidence_id,
+                "duration": result_data.get("duration"),
+                "sample_rate": result_data.get("sample_rate"),
+                "overall_status": result_data.get("overall_status") or result_data.get("audio_status"),
+                "is_adhoc": target_case_id is None
+            },
+            db=db
+        )
+        return result_data
+    except HTTPException:
+        raise
+    except requests.RequestException as e:
+        raise HTTPException(status_code=502, detail=f"Failed to communicate with audio forensics microservice: {str(e)}")
+
+
 
 # ── 6. Real audit log retrieval ───────────────────────────────────────────────
 def get_status_for_action(action: str) -> str:
@@ -3535,7 +4026,10 @@ class BNSStore(BaseModel):
     fir_text: str
 
 @app.post("/bns/predict")
-def bns_predict(payload: BNSRequest):
+def bns_predict(payload: BNSRequest, request: Request):
+    user_info = get_current_user_info(request)
+    if not has_permission(user_info, "run_ai_analysis"):
+        raise HTTPException(status_code=403, detail="Forbidden: You do not have permission to run BNS prediction.")
     try:
         # Proxy request to BNS server on port 8001
         res = requests.post(
@@ -3549,13 +4043,13 @@ def bns_predict(payload: BNSRequest):
         )
         res.raise_for_status()
         raw_data = res.json()
-        
+
         bns_list = []
         for sec in raw_data.get("bns", []):
             sid = str(sec.get("section_id", "Unknown"))
             title = sec.get("title") or sec.get("name") or f"BNS Section {sid}"
             raw_meaning = sec.get("description") or sec.get("meaning", "")
-            
+
             bns_list.append({
                 "section_id": sid,
                 "title": title,
@@ -3575,7 +4069,13 @@ def bns_predict(payload: BNSRequest):
                 "trigger_sentences": sec.get("trigger_sentences", []),
                 "matched_keywords": sec.get("matched_keywords", [])
             })
-            
+
+        write_audit_log(
+            user_id=user_info["id"],
+            action="BNS Section Prediction",
+            metadata={"fir_length": len(payload.fir_text or ""), "sections_count": len(bns_list)}
+        )
+
         return {
             "bns": bns_list,
             "sections": bns_list,
@@ -3584,19 +4084,18 @@ def bns_predict(payload: BNSRequest):
             "total_sections": len(bns_list),
             "threshold_applied": raw_data.get("threshold_applied", payload.threshold or 0.35)
         }
+    except HTTPException:
+        raise
     except requests.RequestException as e:
         raise HTTPException(status_code=502, detail=f"Failed to communicate with BNS server: {str(e)}")
 
 @app.post("/bns/store")
 def bns_store(payload: BNSStore, request: Request, db: Session = Depends(get_db)):
     user_info = get_current_user_info(request)
-    check_case_access(payload.case_id, user_info)
-    
+    check_case_access(payload.case_id, user_info, db)
+
     try:
-        # Delete existing prediction for this case_id
-        db.query(BNSPrediction).filter(BNSPrediction.case_id == uuid.UUID(payload.case_id)).delete()
-        
-        # Insert the new prediction
+        # [PRESERVATION] Append-only: keep historical prediction records rather than destroying them
         db_pred = BNSPrediction(
             id=uuid.uuid4(),
             case_id=uuid.UUID(payload.case_id),
@@ -3615,7 +4114,8 @@ def bns_store(payload: BNSStore, request: Request, db: Session = Depends(get_db)
         user_id=user_info["id"],
         action="BNS Classified",
         case_id=payload.case_id,
-        metadata={"crime_type": payload.crime_type, "sections_count": len(payload.sections)}
+        metadata={"crime_type": payload.crime_type, "sections_count": len(payload.sections)},
+        db=db
     )
     
     data = {
@@ -3967,16 +4467,51 @@ def photogrammetry_trigger(case_id: str, payload: PhotogrammetryRequest, request
         raise HTTPException(status_code=502, detail=f"Failed to communicate with photogrammetry server: {str(e)}")
 
 @app.get("/photogrammetry/status/{case_id}")
-def photogrammetry_status(case_id: str, request: Request):
+def photogrammetry_status(case_id: str, request: Request, evidence_id: Optional[str] = None):
     try:
         user_info = get_current_user_info(request)
+        try:
+            case_uuid = uuid.UUID(case_id)
+        except ValueError as exc:
+            raise HTTPException(status_code=400, detail="case_id must be a valid UUID.") from exc
+
+        evidence_uuid = None
+        if evidence_id:
+            try:
+                evidence_uuid = uuid.UUID(evidence_id)
+            except ValueError as exc:
+                raise HTTPException(status_code=400, detail="evidence_id must be a valid UUID.") from exc
+
         # Keep the microservice private behind this authenticated, case-scoped proxy.
         with SessionLocal() as db:
             check_case_access(case_id, user_info, db)
+            if evidence_uuid:
+                evidence = db.query(Evidence).filter(
+                    Evidence.id == evidence_uuid,
+                    Evidence.case_id == case_uuid
+                ).first()
+                if not evidence:
+                    raise HTTPException(status_code=404, detail="Evidence not found for this case.")
+
         # Proxy request to photogrammetry-backend server on port 8004
-        res = requests.get(f"http://localhost:8004/status/{case_id}", timeout=10)
+        params = {}
+        if evidence_id:
+            params["evidence_id"] = evidence_id
+
+        res = requests.get(f"http://localhost:8004/status/{case_id}", params=params, timeout=10)
+        if res.status_code == 404:
+            detail_msg = "Reconstruction job not found."
+            try:
+                err_json = res.json()
+                if isinstance(err_json, dict) and "detail" in err_json:
+                    detail_msg = err_json["detail"]
+            except Exception:
+                pass
+            raise HTTPException(status_code=404, detail=detail_msg)
         res.raise_for_status()
         return res.json()
+    except HTTPException:
+        raise
     except requests.RequestException as e:
         raise HTTPException(status_code=502, detail=f"Failed to communicate with photogrammetry server: {str(e)}")
 
@@ -4017,6 +4552,111 @@ def photogrammetry_benchmark_comparison(request: Request):
         raise HTTPException(status_code=502, detail=f"Failed to communicate with photogrammetry server: {str(e)}")
 
 
+@app.get("/photogrammetry/model/{job_id}/{fmt}")
+def photogrammetry_get_model(
+    job_id: str,
+    fmt: str,
+    request: Request,
+    download: bool = False,
+    db: Session = Depends(get_db)
+):
+    """
+    Authenticated and case-authorized streaming endpoint for photogrammetry models.
+    Supports fmt='glb' (3D mesh) and fmt='ply' (point cloud).
+    Streams directly from the storage gateway without public URL exposure.
+    """
+    fmt_clean = fmt.lower().strip()
+    if fmt_clean not in ("glb", "ply"):
+        raise HTTPException(status_code=400, detail="Invalid format. Supported formats: 'glb', 'ply'")
+
+    user_info = get_current_user_info(request)
+    try:
+        uuid.UUID(job_id)
+    except ValueError as exc:
+        raise HTTPException(status_code=400, detail="job_id must be a valid UUID.") from exc
+
+    # Query photogrammetry service for job details
+    try:
+        res = requests.get(f"http://localhost:8004/status/job/{job_id}", timeout=10)
+        if res.status_code == 404:
+            raise HTTPException(status_code=404, detail="Photogrammetry reconstruction job was not found.")
+        res.raise_for_status()
+        job_data = res.json()
+    except requests.RequestException as e:
+        raise HTTPException(status_code=502, detail=f"Failed to communicate with photogrammetry server: {str(e)}")
+
+    case_id = job_data.get("case_id")
+    if not case_id:
+        raise HTTPException(status_code=404, detail="Job record does not contain an associated case_id.")
+
+    # Enforce case RBAC / assignment check
+    check_case_access(case_id, user_info, db)
+
+    model_target = job_data.get("model_url") if fmt_clean == "glb" else job_data.get("point_cloud_url")
+    if not model_target or job_data.get("status") != "Completed":
+        raise HTTPException(status_code=404, detail=f"Photogrammetry {fmt_clean.upper()} model is not available yet.")
+
+    media_type = "model/gltf-binary" if fmt_clean == "glb" else "application/octet-stream"
+    disposition = "attachment" if download else "inline"
+    filename = f"{job_id}_model.{fmt_clean}"
+    headers = {"Content-Disposition": f'{disposition}; filename="{filename}"'}
+
+    # Stream from Storage Gateway (or fallback for legacy local/Supabase URLs)
+    provider = get_storage_provider()
+    stream = None
+    target_str = str(model_target).strip()
+
+    # 1. Canonical Storage Gateway key (models/...)
+    if target_str.startswith("models/") or (not urlparse(target_str).scheme and "/uploads/" not in target_str):
+        try:
+            stream = provider.get(target_str)
+        except KeyNotFoundError:
+            # Earlier photogrammetry workers resolved a relative UPLOADS_DIR
+            # from their own CWD and wrote to this legacy root.  Read it as a
+            # fallback only; existing evidence is never moved or modified.
+            legacy_root = os.path.join(os.path.dirname(os.path.abspath(__file__)), "..", "photogrammetry-backend", "uploads")
+            try:
+                stream = LocalStorageProvider(legacy_root).get(target_str)
+                logger.info("Serving legacy photogrammetry artifact from %s", legacy_root)
+            except KeyNotFoundError:
+                raise HTTPException(status_code=404, detail=f"Model artifact '{target_str}' not found in storage.")
+        except StorageUnavailableError as e:
+            raise HTTPException(status_code=502, detail=f"Storage provider unreachable: {e}")
+        except Exception as e:
+            raise HTTPException(status_code=500, detail=f"Storage error reading model: {e}")
+
+    # 2. Local uploads
+    elif "/uploads/" in target_str:
+        local_path = resolve_upload_path(target_str)
+        if not os.path.isfile(local_path):
+            raise HTTPException(status_code=404, detail="Local model file not found.")
+        stream = open(local_path, "rb")
+
+    # 3. Remote URL fallback
+    else:
+        try:
+            req_stream = requests.get(target_str, stream=True, timeout=(5, 60))
+            if req_stream.status_code == 404:
+                raise HTTPException(status_code=404, detail="Model file not found in remote storage.")
+            req_stream.raise_for_status()
+            stream = req_stream.raw
+        except requests.RequestException as e:
+            raise HTTPException(status_code=502, detail=f"Failed to fetch remote model file: {e}")
+
+    write_audit_log(
+        user_id=user_info["id"],
+        action="Photogrammetry Model Downloaded" if download else "Photogrammetry Model Viewed",
+        metadata={
+            "job_id": job_id,
+            "case_id": case_id,
+            "format": fmt_clean,
+            "download": download
+        }
+    )
+
+    return StreamingResponse(stream, media_type=media_type, headers=headers)
+
+
 def ensure_background_services():
     """Auto-detects and launches missing microservices (Ganache, BNS, Audio, Crime Detection, Photogrammetry, Frontend) if their ports are inactive."""
     if not os.environ.get("AUTO_SPAWN_MICROSERVICES", "True").lower() in ("true", "1", "yes"):
@@ -4031,12 +4671,24 @@ def ensure_background_services():
             return s.connect_ex(("127.0.0.1", port)) == 0
 
     base_dir = os.path.dirname(os.path.dirname(os.path.abspath(__file__)))
+    
+    def get_service_python(service_dir: str) -> str:
+        venv_py = os.path.join(service_dir, "venv", "Scripts", "python.exe")
+        if os.path.isfile(venv_py):
+            return venv_py
+        return sys.executable
+
+    bns_dir = os.path.join(base_dir, "bns-backend")
+    audio_dir = os.path.join(base_dir, "audio-backend")
+    crime_dir = os.path.join(base_dir, "best")
+    photo_dir = os.path.join(base_dir, "photogrammetry-backend")
+
     services_to_check = [
         ("Ganache Blockchain", 8545, ["npx", "ganache", "--server.host", "127.0.0.1", "--server.port", "8545", "--chain.chainId", "1337", "--wallet.deterministic", "--database.dbPath", "./ganache-data"], os.path.join(base_dir, "blockchain")),
-        ("BNS ML Service", 8001, ["py", "-3.10", "-m", "uvicorn", "app.main:app", "--port", "8001", "--reload"], os.path.join(base_dir, "bns-backend")),
-        ("Audio Forensics", 8002, ["py", "-3.10", "app.py"], os.path.join(base_dir, "audio-backend")),
-        ("Crime Detection", 8003, ["py", "-3.10", "main.py"], os.path.join(base_dir, "crime-detection")),
-        ("Photogrammetry", 8004, ["py", "-3.10", "app.py"], os.path.join(base_dir, "photogrammetry-backend")),
+        ("BNS ML Service", 8001, [get_service_python(bns_dir), "-m", "uvicorn", "app.main:app", "--port", "8001", "--reload"], bns_dir),
+        ("Audio Forensics", 8002, [get_service_python(audio_dir), "app.py"], audio_dir),
+        ("Object Detection (best)", 8003, [get_service_python(crime_dir), "main.py"], crime_dir),
+        ("Photogrammetry", 8004, [get_service_python(photo_dir), "app.py"], photo_dir),
         ("React Frontend", 5173, ["npm", "run", "dev"], os.path.join(base_dir, "audit-frontend")),
     ]
 

@@ -11,7 +11,9 @@ export default defineConfig({
     port: 5173,
     proxy: {
       '/api': {
-        target: 'http://localhost:8000',
+        // Keep the proxy on IPv4; some local environments resolve localhost
+        // differently from the FastAPI listener.
+        target: 'http://127.0.0.1:8000',
         changeOrigin: true,
         rewrite: (p) => p.replace(/^\/api/, '')
       }

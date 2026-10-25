@@ -40,13 +40,14 @@ class Case(Base):
     case_number = Column(String, unique=True, nullable=True)
     created_by = Column(UUID(as_uuid=True), ForeignKey("users.id", ondelete="SET NULL"), nullable=True)
     created_by_name = Column(String, nullable=True)
+    is_archived = Column(Boolean, server_default="false", default=False, nullable=False)
 
 
 class Evidence(Base):
     __tablename__ = "evidence"
 
     id = Column(UUID(as_uuid=True), primary_key=True, default=uuid.uuid4)
-    case_id = Column(UUID(as_uuid=True), ForeignKey("cases.id", ondelete="CASCADE"), nullable=True)
+    case_id = Column(UUID(as_uuid=True), ForeignKey("cases.id", ondelete="RESTRICT"), nullable=True)
     evidence_type = Column(String, nullable=False)
     description = Column(String, nullable=True)
     file_url = Column(String, nullable=False)
@@ -82,11 +83,11 @@ class EvidenceCustodyRecord(Base):
     __tablename__ = "evidence_custody_records"
 
     id = Column(UUID(as_uuid=True), primary_key=True, default=uuid.uuid4)
-    evidence_id = Column(UUID(as_uuid=True), ForeignKey("evidence.id", ondelete="CASCADE"), nullable=False, index=True)
+    evidence_id = Column(UUID(as_uuid=True), ForeignKey("evidence.id", ondelete="RESTRICT"), nullable=False, index=True)
     officer_id = Column(String, nullable=False)
     action = Column(String, nullable=False)
     occurred_at = Column(DateTime(timezone=True), nullable=False)
-    transaction_hash = Column(String, nullable=True, unique=True)
+    transaction_hash = Column(String, nullable=True, index=True)
     block_number = Column(BigInteger, nullable=True)
     created_at = Column(DateTime(timezone=True), nullable=False, server_default=func.now())
     # "blockchain" for entries mirrored from the contract, "database" for off-chain
@@ -99,7 +100,7 @@ class BlockchainLog(Base):
     __tablename__ = "blockchain_logs"
 
     id = Column(UUID(as_uuid=True), primary_key=True, default=uuid.uuid4)
-    evidence_id = Column(UUID(as_uuid=True), ForeignKey("evidence.id", ondelete="CASCADE"), nullable=True)
+    evidence_id = Column(UUID(as_uuid=True), ForeignKey("evidence.id", ondelete="RESTRICT"), nullable=True)
     event_name = Column(String, nullable=False)
     transaction_hash = Column(String, nullable=True, index=True)
     block_number = Column(BigInteger, nullable=True)
@@ -113,7 +114,7 @@ class AuditLog(Base):
     id = Column(UUID(as_uuid=True), primary_key=True, default=uuid.uuid4)
     user_id = Column(String, nullable=True)
     action = Column(String, nullable=False)
-    case_id = Column(UUID(as_uuid=True), ForeignKey("cases.id", ondelete="CASCADE"), nullable=True)
+    case_id = Column(UUID(as_uuid=True), ForeignKey("cases.id", ondelete="RESTRICT"), nullable=True)
     file_hash = Column(String, nullable=True)
     metadata_ = Column("metadata", JSONB, nullable=True)
     created_at = Column(DateTime(timezone=True), nullable=False, server_default=func.now())
@@ -123,7 +124,7 @@ class OCRResult(Base):
     __tablename__ = "ocr_results"
 
     id = Column(UUID(as_uuid=True), primary_key=True, default=uuid.uuid4)
-    evidence_id = Column(UUID(as_uuid=True), ForeignKey("evidence.id", ondelete="CASCADE"), nullable=True)
+    evidence_id = Column(UUID(as_uuid=True), ForeignKey("evidence.id", ondelete="RESTRICT"), nullable=True)
     extracted_text = Column(String, nullable=False)
     language = Column(String, nullable=False)
     confidence = Column(Float, nullable=True)
@@ -140,7 +141,7 @@ class BNSPrediction(Base):
     __tablename__ = "bns_predictions"
 
     id = Column(UUID(as_uuid=True), primary_key=True, default=uuid.uuid4)
-    case_id = Column(UUID(as_uuid=True), ForeignKey("cases.id", ondelete="CASCADE"), nullable=False)
+    case_id = Column(UUID(as_uuid=True), ForeignKey("cases.id", ondelete="RESTRICT"), nullable=False)
     crime_type = Column(String, nullable=False)
     sections = Column(JSONB, nullable=False)
     fir_text = Column(String, nullable=True)
@@ -162,8 +163,8 @@ class Detection(Base):
     __tablename__ = "detections"
 
     id = Column(UUID(as_uuid=True), primary_key=True, default=uuid.uuid4)
-    case_id = Column(UUID(as_uuid=True), ForeignKey("cases.id", ondelete="CASCADE"), nullable=True)
-    evidence_id = Column(UUID(as_uuid=True), ForeignKey("evidence.id", ondelete="CASCADE"), nullable=True)
+    case_id = Column(UUID(as_uuid=True), ForeignKey("cases.id", ondelete="RESTRICT"), nullable=True)
+    evidence_id = Column(UUID(as_uuid=True), ForeignKey("evidence.id", ondelete="RESTRICT"), nullable=True)
     image_url = Column(String, nullable=True)
     predictions = Column(JSONB, nullable=True)
     created_at = Column(DateTime(timezone=True), nullable=False, server_default=func.now())

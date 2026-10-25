@@ -336,7 +336,11 @@ export default function CreateCase() {
               alignItems: 'center',
               gap: '10px'
             }}>
-              <span>💡</span>
+              <svg width="15" height="15" viewBox="0 0 24 24" fill="none" stroke="var(--blue)" strokeWidth="2.2" strokeLinecap="round" strokeLinejoin="round" style={{ flexShrink: 0 }}>
+                <path d="M12 2a6 6 0 0 0-6 6c0 2.2 1.2 3.8 2 5 .8 1.2 1 2 1 3h6c0-1 .2-1.8 1-3 .8-1.2 2-2.8 2-5a6 6 0 0 0-6-6z"/>
+                <path d="M9 18h6"/>
+                <path d="M10 21h4"/>
+              </svg>
               <span>This narrative feeds directly into the <strong>Bharatiya Nyaya Sanhita (BNS) AI legal classifier</strong> and <strong>Evidence integrity graph</strong>.</span>
             </div>
           </div>
@@ -379,9 +383,18 @@ export default function CreateCase() {
               borderRadius: 'var(--r)',
               fontSize: '12px',
               color: 'var(--amber)',
-              fontWeight: 500
+              fontWeight: 500,
+              display: 'flex',
+              alignItems: 'center',
+              gap: '8px'
             }}>
-              ⚖️ Upon creation, this case will be recorded with an immutable SHA-256 genesis hash and logged to the central audit ledger.
+              <svg width="15" height="15" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2.2" strokeLinecap="round" strokeLinejoin="round" style={{ flexShrink: 0 }}>
+                <path d="M12 3v18"/>
+                <path d="M6 8l-4 6h8l-4-6z"/>
+                <path d="M18 8l-4 6h8l-4-6z"/>
+                <path d="M3 8h18"/>
+              </svg>
+              <span>Upon creation, this case will be recorded with an immutable SHA-256 genesis hash and logged to the central audit ledger.</span>
             </div>
           </div>
         )}

@@ -1,4 +1,5 @@
 import React, { useRef, useState, useMemo, useEffect } from 'react'
+import { useSearchParams } from 'react-router-dom'
 import { AppShell } from '../components/Layout'
 import { Card, CardTitle, CardHeader, Btn, AlertBox, Spinner } from '../components/UI'
 import { api } from '../services/api'
@@ -168,6 +169,14 @@ interface AudioAnalysisReport {
 }
 
 export default function AudioForensicsPage() {
+  const [searchParams] = useSearchParams()
+  const initialCaseId = searchParams.get('case_id') || ''
+  const initialEvidenceId = searchParams.get('evidence_id') || ''
+
+  const [caseId, setCaseId] = useState<string>(initialCaseId)
+  const [evidenceId, setEvidenceId] = useState<string>(initialEvidenceId)
+  const [loadingEvidence, setLoadingEvidence] = useState<boolean>(false)
+
   const [file, setFile] = useState<File | null>(null)
   const [audioUrl, setAudioUrl] = useState<string | null>(null)
   const [isDragOver, setIsDragOver] = useState(false)
@@ -184,6 +193,28 @@ export default function AudioForensicsPage() {
   const [duration, setDuration] = useState(0)
   const [volume, setVolume] = useState(1)
   const [isMuted, setIsMuted] = useState(false)
+
+  // Automatically load evidence file when evidence_id is provided in URL
+  useEffect(() => {
+    if (initialEvidenceId) {
+      setLoadingEvidence(true)
+      setError('')
+      api.downloadEvidence(initialEvidenceId)
+        .then(({ blob }) => {
+          const mime = (blob.type || '').toLowerCase()
+          const ext = mime.includes('mp4') ? 'mp4' : (mime.includes('mpeg') || mime.includes('mp3')) ? 'mp3' : mime.includes('m4a') ? 'm4a' : 'wav'
+          const loadedFile = new File([blob], `evidence_${initialEvidenceId.slice(0, 8)}.${ext}`, { type: blob.type || 'audio/wav' })
+          processSelectedFile(loadedFile)
+        })
+        .catch((err) => {
+          console.warn('Could not load evidence audio file directly:', err)
+          setError(`Could not load evidence file: ${err.response?.data?.detail || err.message}`)
+        })
+        .finally(() => {
+          setLoadingEvidence(false)
+        })
+    }
+  }, [initialEvidenceId])
 
   // Loading steps list
   const loadingSteps = [
@@ -273,7 +304,7 @@ export default function AudioForensicsPage() {
     setError('')
     setReport(null)
     try {
-      const data = await api.analyzeAudio(file)
+      const data = await api.analyzeAudio(file, caseId || undefined, evidenceId || undefined)
       setReport(data)
     } catch (err: any) {
       console.error('Audio analysis error:', err)
@@ -283,7 +314,7 @@ export default function AudioForensicsPage() {
       } else if (Array.isArray(detail)) {
         setError(`Analysis failed: ${detail[0]?.msg || 'Validation error'}`)
       } else {
-        setError(err.message || 'Unable to connect to audio analysis backend service. Please verify the server is running on port 8002.')
+        setError(err.message || 'Unable to connect to audio analysis gateway service. Please verify the main backend is running.')
       }
     } finally {
       setLoading(false)
@@ -577,8 +608,26 @@ export default function AudioForensicsPage() {
         {/* Top Header Banner */}
         <div style={{ background: 'var(--bg2)', border: '1px solid var(--border)', borderRadius: 'var(--r2)', padding: '20px' }}>
           <div style={{ display: 'flex', alignItems: 'center', gap: '10px', marginBottom: '8px', flexWrap: 'wrap' }}>
-            <span style={{ background: 'var(--blue-dim)', color: 'var(--blue)', border: '1px solid var(--blue)', borderRadius: '20px', padding: '3px 12px', fontSize: '11px', fontWeight: 700, letterSpacing: '0.5px' }}>
-              🎙️ AUDIO FORENSICS &amp; ENF MODULE
+            <span style={{
+              background: 'var(--blue-dim)',
+              color: 'var(--blue)',
+              border: '1px solid var(--blue)',
+              borderRadius: '20px',
+              padding: '3px 12px',
+              fontSize: '11px',
+              fontWeight: 700,
+              letterSpacing: '0.5px',
+              display: 'inline-flex',
+              alignItems: 'center',
+              gap: '6px'
+            }}>
+              <svg width="13" height="13" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2.2" strokeLinecap="round" strokeLinejoin="round">
+                <path d="M12 1a3 3 0 0 0-3 3v8a3 3 0 0 0 6 0V4a3 3 0 0 0-3-3z"/>
+                <path d="M19 10v2a7 7 0 0 1-14 0v-2"/>
+                <line x1="12" y1="19" x2="12" y2="23"/>
+                <line x1="8" y1="23" x2="16" y2="23"/>
+              </svg>
+              AUDIO FORENSICS &amp; ENF MODULE
             </span>
             <span style={{ color: 'var(--text3)' }}>•</span>
             <span style={{ color: 'var(--text2)', fontSize: '11px', fontWeight: 600, textTransform: 'uppercase', letterSpacing: '0.5px' }}>
@@ -591,6 +640,40 @@ export default function AudioForensicsPage() {
           <p style={{ fontSize: '12px', color: 'var(--text2)', margin: 0, lineHeight: 1.6 }}>
             Upload digital audio evidence (MP3, MP4, M4A, or WAV) from threat calls, extortion recordings, interrogations, bribery taps, or surveillance clips. Performs automated 50 Hz Electric Network Frequency (ENF) profiling, multi-speaker diarization, timestamped speech transcription, acoustic environment parsing, and multi-indicator tampering detection.
           </p>
+        </div>
+
+        {/* Case & Evidence Authorization Banner */}
+        <div style={{ display: 'flex', alignItems: 'center', gap: '12px', padding: '12px 16px', background: 'var(--bg2)', border: '1px solid var(--border)', borderRadius: 'var(--r2)', fontSize: '12px', flexWrap: 'wrap' }}>
+          <span style={{ fontWeight: 600, color: 'var(--text2)' }}>Authorization Scope:</span>
+          {caseId || evidenceId ? (
+            <div style={{ display: 'flex', alignItems: 'center', gap: '8px', flexWrap: 'wrap' }}>
+              {caseId && (
+                <span style={{ background: 'var(--blue-dim)', color: 'var(--blue)', border: '1px solid var(--blue)', padding: '2px 8px', borderRadius: '4px', fontFamily: 'var(--mono)', fontSize: '11px', fontWeight: 600 }}>
+                  Case: {caseId}
+                </span>
+              )}
+              {evidenceId && (
+                <span style={{ background: 'var(--green-bg)', color: 'var(--green)', border: '1px solid var(--green)', padding: '2px 8px', borderRadius: '4px', fontFamily: 'var(--mono)', fontSize: '11px', fontWeight: 600 }}>
+                  Evidence: {evidenceId}
+                </span>
+              )}
+              <span style={{ color: 'var(--text3)', fontSize: '11px' }}>✓ Enforcing case RBAC and evidence ownership checks</span>
+            </div>
+          ) : (
+            <div style={{ display: 'flex', alignItems: 'center', gap: '8px' }}>
+              <span style={{ background: 'var(--amber-bg)', color: 'var(--amber)', border: '1px solid var(--amber)', padding: '2px 8px', borderRadius: '4px', fontSize: '11px', fontWeight: 600 }}>
+                Ad-hoc Mode
+              </span>
+              <span style={{ color: 'var(--text3)', fontSize: '11px' }}>
+                Unlinked file · Authenticated &amp; audited via gateway proxy
+              </span>
+            </div>
+          )}
+          {loadingEvidence && (
+            <span style={{ marginLeft: 'auto', color: 'var(--blue)', fontSize: '11px', display: 'flex', alignItems: 'center', gap: '6px' }}>
+              <Spinner size={14} /> Loading evidence file...
+            </span>
+          )}
         </div>
 
         {/* Upload Section Card */}
@@ -636,9 +719,19 @@ export default function AudioForensicsPage() {
                 display: 'flex',
                 alignItems: 'center',
                 justifyContent: 'center',
-                fontSize: '22px'
+                color: file ? 'var(--green)' : 'var(--blue)'
               }}>
-                {file ? '🎵' : '📁'}
+                {file ? (
+                  <svg width="22" height="22" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2" strokeLinecap="round" strokeLinejoin="round">
+                    <path d="M9 18V5l12-2v13" />
+                    <circle cx="6" cy="18" r="3" />
+                    <circle cx="18" cy="16" r="3" />
+                  </svg>
+                ) : (
+                  <svg width="22" height="22" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2" strokeLinecap="round" strokeLinejoin="round">
+                    <path d="M22 19a2 2 0 0 1-2 2H4a2 2 0 0 1-2-2V5a2 2 0 0 1 2-2h5l2 3h9a2 2 0 0 1 2 2z" />
+                  </svg>
+                )}
               </div>
 
               {file ? (
@@ -665,8 +758,12 @@ export default function AudioForensicsPage() {
             {/* Action Bar */}
             <div style={{ display: 'flex', justifyContent: 'space-between', alignItems: 'center', flexWrap: 'wrap', gap: '12px' }}>
               {file ? (
-                <Btn variant="danger" size="sm" onClick={handleRemoveFile} style={{ gap: '6px' }}>
-                  🗑️ Remove &amp; Replace File
+                <Btn variant="danger" size="sm" onClick={handleRemoveFile} style={{ gap: '6px', display: 'inline-flex', alignItems: 'center' }}>
+                  <svg width="13" height="13" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2" strokeLinecap="round" strokeLinejoin="round">
+                    <polyline points="3 6 5 6 21 6" />
+                    <path d="M19 6v14a2 2 0 0 1-2 2H7a2 2 0 0 1-2-2V6m3 0V4a2 2 0 0 1 2-2h4a2 2 0 0 1 2 2v2" />
+                  </svg>
+                  Remove &amp; Replace File
                 </Btn>
               ) : (
                 <span style={{ fontSize: '12px', color: 'var(--text3)' }}>No evidence file selected yet.</span>
@@ -677,9 +774,21 @@ export default function AudioForensicsPage() {
                 size="md"
                 onClick={runAnalysis}
                 disabled={loading || !file}
-                style={{ padding: '12px 24px', fontWeight: 700, fontSize: '13px' }}
+                style={{ padding: '12px 24px', fontWeight: 700, fontSize: '13px', display: 'inline-flex', alignItems: 'center', gap: '8px' }}
               >
-                {loading ? '🔍 Examining Evidence...' : '⚡ Analyze Audio Evidence'}
+                {loading ? (
+                  <>
+                    <Spinner size={14} />
+                    Examining Evidence...
+                  </>
+                ) : (
+                  <>
+                    <svg width="14" height="14" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2.5" strokeLinecap="round" strokeLinejoin="round">
+                      <polygon points="13 2 3 14 12 14 11 22 21 10 12 10 13 2" />
+                    </svg>
+                    Analyze Audio Evidence
+                  </>
+                )}
               </Btn>
             </div>
 
@@ -688,8 +797,13 @@ export default function AudioForensicsPage() {
               <AlertBox type="error">
                 <div style={{ display: 'flex', justifyContent: 'space-between', alignItems: 'center', flexWrap: 'wrap', gap: '10px' }}>
                   <span>{error}</span>
-                  <Btn size="xs" variant="primary" onClick={runAnalysis} disabled={!file || loading}>
-                    🔄 Retry Analysis
+                  <Btn size="xs" variant="primary" onClick={runAnalysis} disabled={!file || loading} style={{ display: 'inline-flex', alignItems: 'center', gap: '5px' }}>
+                    <svg width="12" height="12" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2.2" strokeLinecap="round" strokeLinejoin="round">
+                      <polyline points="23 4 23 10 17 10" />
+                      <polyline points="1 20 1 14 7 14" />
+                      <path d="M3.51 9a9 9 0 0 1 14.85-3.36L23 10M1 14l4.64 4.36A9 9 0 0 0 20.49 15" />
+                    </svg>
+                    Retry Analysis
                   </Btn>
                 </div>
               </AlertBox>
@@ -755,8 +869,23 @@ export default function AudioForensicsPage() {
               <div style={{ display: 'flex', flexDirection: 'column', gap: '12px' }}>
                 <div style={{ display: 'flex', justifyContent: 'space-between', alignItems: 'center', flexWrap: 'wrap', gap: '10px' }}>
                   <div style={{ display: 'flex', alignItems: 'center', gap: '10px' }}>
-                    <Btn size="sm" variant="primary" onClick={togglePlayPause} style={{ minWidth: '90px' }}>
-                      {isPlaying ? '⏸️ Pause' : '▶️ Play'}
+                    <Btn size="sm" variant="primary" onClick={togglePlayPause} style={{ minWidth: '90px', display: 'inline-flex', alignItems: 'center', justifyContent: 'center', gap: '6px' }}>
+                      {isPlaying ? (
+                        <>
+                          <svg width="12" height="12" viewBox="0 0 24 24" fill="currentColor">
+                            <rect x="6" y="4" width="4" height="16" rx="1" />
+                            <rect x="14" y="4" width="4" height="16" rx="1" />
+                          </svg>
+                          Pause
+                        </>
+                      ) : (
+                        <>
+                          <svg width="12" height="12" viewBox="0 0 24 24" fill="currentColor">
+                            <polygon points="5 3 19 12 5 21 5 3" />
+                          </svg>
+                          Play
+                        </>
+                      )}
                     </Btn>
                     <div>
                       <div style={{ fontSize: '12px', fontWeight: 700, color: 'var(--text)' }}>
@@ -785,8 +914,14 @@ export default function AudioForensicsPage() {
                       {statusTheme.label} ({report.enf_analysis?.confidence_score ?? report.confidence_score}%)
                     </span>
 
-                    <Btn variant="green" size="sm" onClick={downloadPdfReport} style={{ fontWeight: 600 }}>
-                      📄 Download Report
+                    <Btn variant="green" size="sm" onClick={downloadPdfReport} style={{ fontWeight: 600, display: 'inline-flex', alignItems: 'center', gap: '6px' }}>
+                      <svg width="13" height="13" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2" strokeLinecap="round" strokeLinejoin="round">
+                        <path d="M14 2H6a2 2 0 0 0-2 2v16a2 2 0 0 0 2 2h12a2 2 0 0 0 2-2V8z" />
+                        <polyline points="14 2 14 8 20 8" />
+                        <line x1="12" y1="18" x2="12" y2="12" />
+                        <polyline points="9 15 12 18 15 15" />
+                      </svg>
+                      Download Report
                     </Btn>
                   </div>
                 </div>
@@ -807,8 +942,19 @@ export default function AudioForensicsPage() {
 
                   {/* Volume Control */}
                   <div style={{ display: 'flex', alignItems: 'center', gap: '6px', marginLeft: '10px' }}>
-                    <button onClick={toggleMute} style={{ background: 'none', border: 'none', cursor: 'pointer', color: 'var(--text2)', fontSize: '14px' }}>
-                      {isMuted || volume === 0 ? '🔇' : '🔊'}
+                    <button onClick={toggleMute} style={{ background: 'none', border: 'none', cursor: 'pointer', color: 'var(--text2)', display: 'inline-flex', alignItems: 'center', padding: '2px' }} title={isMuted ? 'Unmute' : 'Mute'}>
+                      {isMuted || volume === 0 ? (
+                        <svg width="15" height="15" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2" strokeLinecap="round" strokeLinejoin="round">
+                          <polygon points="11 5 6 9 2 9 2 15 6 15 11 19 11 5" />
+                          <line x1="23" y1="9" x2="17" y2="15" />
+                          <line x1="17" y1="9" x2="23" y2="15" />
+                        </svg>
+                      ) : (
+                        <svg width="15" height="15" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2" strokeLinecap="round" strokeLinejoin="round">
+                          <polygon points="11 5 6 9 2 9 2 15 6 15 11 19 11 5" />
+                          <path d="M19.07 4.93a10 10 0 0 1 0 14.14M15.54 8.46a5 5 0 0 1 0 7.07" />
+                        </svg>
+                      )}
                     </button>
                     <input
                       type="range"
@@ -829,8 +975,12 @@ export default function AudioForensicsPage() {
               <CardTitle>1. Audio Technical Information</CardTitle>
               <div style={{ display: 'grid', gridTemplateColumns: 'repeat(auto-fit, minmax(140px, 1fr))', gap: '12px' }}>
                 <div style={{ background: 'var(--bg3)', border: '1px solid var(--border)', borderRadius: 'var(--r)', padding: '10px 12px' }}>
-                  <div style={{ fontSize: '10px', color: 'var(--text3)', textTransform: 'uppercase', display: 'flex', alignItems: 'center', gap: '4px' }}>
-                    📄 File Name
+                  <div style={{ fontSize: '10px', color: 'var(--text3)', textTransform: 'uppercase', display: 'flex', alignItems: 'center', gap: '5px' }}>
+                    <svg width="12" height="12" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2" strokeLinecap="round" strokeLinejoin="round">
+                      <path d="M13 2H6a2 2 0 0 0-2 2v16a2 2 0 0 0 2 2h12a2 2 0 0 0 2-2V9z" />
+                      <polyline points="13 2 13 9 20 9" />
+                    </svg>
+                    File Name
                   </div>
                   <div style={{ fontSize: '12px', fontWeight: 600, color: 'var(--text)', marginTop: '4px', whiteSpace: 'nowrap', overflow: 'hidden', textOverflow: 'ellipsis' }}>
                     {report.metadata?.file_name || report.file_name}
@@ -838,8 +988,13 @@ export default function AudioForensicsPage() {
                 </div>
 
                 <div style={{ background: 'var(--bg3)', border: '1px solid var(--border)', borderRadius: 'var(--r)', padding: '10px 12px' }}>
-                  <div style={{ fontSize: '10px', color: 'var(--text3)', textTransform: 'uppercase', display: 'flex', alignItems: 'center', gap: '4px' }}>
-                    🎵 Format
+                  <div style={{ fontSize: '10px', color: 'var(--text3)', textTransform: 'uppercase', display: 'flex', alignItems: 'center', gap: '5px' }}>
+                    <svg width="12" height="12" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2" strokeLinecap="round" strokeLinejoin="round">
+                      <path d="M9 18V5l12-2v13" />
+                      <circle cx="6" cy="18" r="3" />
+                      <circle cx="18" cy="16" r="3" />
+                    </svg>
+                    Format
                   </div>
                   <div style={{ fontSize: '12px', fontWeight: 700, color: 'var(--blue)', marginTop: '4px' }}>
                     {report.metadata?.format || 'WAV'}
@@ -847,8 +1002,12 @@ export default function AudioForensicsPage() {
                 </div>
 
                 <div style={{ background: 'var(--bg3)', border: '1px solid var(--border)', borderRadius: 'var(--r)', padding: '10px 12px' }}>
-                  <div style={{ fontSize: '10px', color: 'var(--text3)', textTransform: 'uppercase', display: 'flex', alignItems: 'center', gap: '4px' }}>
-                    ⏱️ Duration
+                  <div style={{ fontSize: '10px', color: 'var(--text3)', textTransform: 'uppercase', display: 'flex', alignItems: 'center', gap: '5px' }}>
+                    <svg width="12" height="12" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2" strokeLinecap="round" strokeLinejoin="round">
+                      <circle cx="12" cy="12" r="10" />
+                      <polyline points="12 6 12 12 16 14" />
+                    </svg>
+                    Duration
                   </div>
                   <div style={{ fontSize: '12px', fontWeight: 600, color: 'var(--text)', marginTop: '4px' }}>
                     {report.metadata?.duration || 'N/A'}
@@ -856,8 +1015,11 @@ export default function AudioForensicsPage() {
                 </div>
 
                 <div style={{ background: 'var(--bg3)', border: '1px solid var(--border)', borderRadius: 'var(--r)', padding: '10px 12px' }}>
-                  <div style={{ fontSize: '10px', color: 'var(--text3)', textTransform: 'uppercase', display: 'flex', alignItems: 'center', gap: '4px' }}>
-                    📊 Sample Rate
+                  <div style={{ fontSize: '10px', color: 'var(--text3)', textTransform: 'uppercase', display: 'flex', alignItems: 'center', gap: '5px' }}>
+                    <svg width="12" height="12" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2" strokeLinecap="round" strokeLinejoin="round">
+                      <polyline points="22 12 18 12 15 21 9 3 6 12 2 12" />
+                    </svg>
+                    Sample Rate
                   </div>
                   <div style={{ fontSize: '12px', fontWeight: 600, color: 'var(--text)', marginTop: '4px' }}>
                     {report.metadata?.sample_rate || 'N/A'}
@@ -865,8 +1027,12 @@ export default function AudioForensicsPage() {
                 </div>
 
                 <div style={{ background: 'var(--bg3)', border: '1px solid var(--border)', borderRadius: 'var(--r)', padding: '10px 12px' }}>
-                  <div style={{ fontSize: '10px', color: 'var(--text3)', textTransform: 'uppercase', display: 'flex', alignItems: 'center', gap: '4px' }}>
-                    🔊 Channels
+                  <div style={{ fontSize: '10px', color: 'var(--text3)', textTransform: 'uppercase', display: 'flex', alignItems: 'center', gap: '5px' }}>
+                    <svg width="12" height="12" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2" strokeLinecap="round" strokeLinejoin="round">
+                      <polygon points="11 5 6 9 2 9 2 15 6 15 11 19 11 5" />
+                      <path d="M15.54 8.46a5 5 0 0 1 0 7.07" />
+                    </svg>
+                    Channels
                   </div>
                   <div style={{ fontSize: '12px', fontWeight: 600, color: 'var(--text)', marginTop: '4px' }}>
                     {report.metadata?.channels || 'Mono'}
@@ -874,8 +1040,13 @@ export default function AudioForensicsPage() {
                 </div>
 
                 <div style={{ background: 'var(--bg3)', border: '1px solid var(--border)', borderRadius: 'var(--r)', padding: '10px 12px' }}>
-                  <div style={{ fontSize: '10px', color: 'var(--text3)', textTransform: 'uppercase', display: 'flex', alignItems: 'center', gap: '4px' }}>
-                    💾 File Size
+                  <div style={{ fontSize: '10px', color: 'var(--text3)', textTransform: 'uppercase', display: 'flex', alignItems: 'center', gap: '5px' }}>
+                    <svg width="12" height="12" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2" strokeLinecap="round" strokeLinejoin="round">
+                      <ellipse cx="12" cy="5" rx="9" ry="3" />
+                      <path d="M21 12c0 1.66-4 3-9 3s-9-1.34-9-3" />
+                      <path d="M3 5v14c0 1.66 4 3 9 3s9-1.34 9-3V5" />
+                    </svg>
+                    File Size
                   </div>
                   <div style={{ fontSize: '12px', fontWeight: 600, color: 'var(--text)', marginTop: '4px' }}>
                     {report.metadata?.file_size || 'N/A'}
@@ -988,10 +1159,17 @@ export default function AudioForensicsPage() {
                                 borderRadius: '6px',
                                 fontSize: '12px',
                                 fontWeight: 700,
-                                letterSpacing: '0.2px'
+                                letterSpacing: '0.2px',
+                                display: 'inline-flex',
+                                alignItems: 'center',
+                                gap: '5px'
                               }}
                             >
-                              🗣️ {seg.speaker}
+                              <svg width="12" height="12" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2.2" strokeLinecap="round" strokeLinejoin="round">
+                                <path d="M20 21v-2a4 4 0 0 0-4-4H8a4 4 0 0 0-4 4v2" />
+                                <circle cx="12" cy="7" r="4" />
+                              </svg>
+                              {seg.speaker}
                             </span>
                             <button
                               onClick={() => seekToTime(seg.start || parseTimestampSeconds(seg.timestamp))}
@@ -1007,11 +1185,15 @@ export default function AudioForensicsPage() {
                                 cursor: 'pointer',
                                 display: 'flex',
                                 alignItems: 'center',
-                                gap: '4px'
+                                gap: '5px'
                               }}
                               title="Seek audio to start of speaker block"
                             >
-                              ⏱️ {seg.timestamp || `${seg.start_timestamp}–${seg.end_timestamp}`}
+                              <svg width="11" height="11" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2.2" strokeLinecap="round" strokeLinejoin="round">
+                                <circle cx="12" cy="12" r="10" />
+                                <polyline points="12 6 12 12 16 14" />
+                              </svg>
+                              {seg.timestamp || `${seg.start_timestamp}–${seg.end_timestamp}`}
                             </button>
                           </div>
                           <div style={{ fontSize: '13px', color: 'var(--text)', lineHeight: 1.6, marginTop: '2px', fontWeight: 400 }}>
@@ -1047,7 +1229,14 @@ export default function AudioForensicsPage() {
                 </div>
                 {report.speaker_identification?.unknown_speaker_alert && (
                   <AlertBox type="warning">
-                    ⚠️ Sudden acoustic variance detected mid-recording. A new speaker enters the conversation timeline.
+                    <span style={{ display: 'inline-flex', alignItems: 'center', gap: '6px' }}>
+                      <svg width="14" height="14" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2.2" strokeLinecap="round" strokeLinejoin="round">
+                        <path d="M10.29 3.86L1.82 18a2 2 0 0 0 1.71 3h16.94a2 2 0 0 0 1.71-3L13.71 3.86a2 2 0 0 0-3.42 0z" />
+                        <line x1="12" y1="9" x2="12" y2="13" />
+                        <line x1="12" y1="17" x2="12.01" y2="17" />
+                      </svg>
+                      Sudden acoustic variance detected mid-recording. A new speaker enters the conversation timeline.
+                    </span>
                   </AlertBox>
                 )}
                 {/* Speaker Timeline list */}
@@ -1061,12 +1250,19 @@ export default function AudioForensicsPage() {
                           <div key={idx} style={{ display: 'flex', justifyContent: 'space-between', alignItems: 'center', padding: '10px 12px', borderBottom: idx < (report.speaker_identification?.timeline?.length || 0) - 1 ? '1px solid var(--border)' : 'none', background: 'var(--bg3)', fontSize: '12px' }}>
                             <div style={{ display: 'flex', gap: '10px', alignItems: 'center' }}>
                               <span style={{ fontFamily: 'var(--mono)', color: 'var(--blue)', fontWeight: 700 }}>{item.timestamp}</span>
-                              <span style={{ padding: '2px 8px', borderRadius: '4px', background: spkStyle.bg, color: spkStyle.color, border: `1px solid ${spkStyle.border}`, fontWeight: 700, fontSize: '11px' }}>
+                              <span style={{ padding: '2px 8px', borderRadius: '4px', background: spkStyle.bg, color: spkStyle.color, border: `1px solid ${spkStyle.border}`, fontWeight: 700, fontSize: '11px', display: 'inline-flex', alignItems: 'center', gap: '4px' }}>
+                                <svg width="10" height="10" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2">
+                                  <path d="M20 21v-2a4 4 0 0 0-4-4H8a4 4 0 0 0-4 4v2" />
+                                  <circle cx="12" cy="7" r="4" />
+                                </svg>
                                 {item.speaker}
                               </span>
                             </div>
-                            <button onClick={() => seekToTime(parseTimestampSeconds(item.start))} style={{ background: 'transparent', border: 'none', color: 'var(--blue)', fontSize: '11px', cursor: 'pointer', fontWeight: 600 }}>
-                              ▶️ Seek
+                            <button onClick={() => seekToTime(parseTimestampSeconds(item.start))} style={{ background: 'transparent', border: 'none', color: 'var(--blue)', fontSize: '11px', cursor: 'pointer', fontWeight: 600, display: 'inline-flex', alignItems: 'center', gap: '4px' }}>
+                              <svg width="9" height="9" viewBox="0 0 24 24" fill="currentColor">
+                                <polygon points="5 3 19 12 5 21 5 3" />
+                              </svg>
+                              Seek
                             </button>
                           </div>
                         )
@@ -1112,8 +1308,11 @@ export default function AudioForensicsPage() {
                         <strong style={{ fontFamily: 'var(--mono)' }}>{shift.timestamp}: </strong>
                         {shift.description || shift.reason}
                       </div>
-                      <Btn size="xs" variant="default" onClick={() => seekToTime(shift.start || parseTimestampSeconds(shift.timestamp))}>
-                        ▶️ Seek
+                      <Btn size="xs" variant="default" onClick={() => seekToTime(shift.start || parseTimestampSeconds(shift.timestamp))} style={{ display: 'inline-flex', alignItems: 'center', gap: '4px' }}>
+                        <svg width="9" height="9" viewBox="0 0 24 24" fill="currentColor">
+                          <polygon points="5 3 19 12 5 21 5 3" />
+                        </svg>
+                        Seek
                       </Btn>
                     </div>
                   ))}
@@ -1147,7 +1346,11 @@ export default function AudioForensicsPage() {
                         gap: '6px'
                       }}
                     >
-                      <span>🏷️ {kw}</span>
+                      <svg width="11" height="11" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2.2" strokeLinecap="round" strokeLinejoin="round">
+                        <path d="M20.59 13.41l-7.17 7.17a2 2 0 0 1-2.83 0L2 12V2h10l8.59 8.59a2 2 0 0 1 0 2.82z" />
+                        <line x1="7" y1="7" x2="7.01" y2="7" />
+                      </svg>
+                      {kw}
                     </span>
                   ))}
                 </div>
@@ -1193,8 +1396,11 @@ export default function AudioForensicsPage() {
                           <td style={{ padding: '10px', color: 'var(--text2)' }}>{seg.reason}</td>
                           <td style={{ padding: '10px', fontWeight: 700, color: 'var(--text)' }}>{seg.confidence || 94}%</td>
                           <td style={{ padding: '10px', textAlign: 'right' }}>
-                            <Btn size="xs" onClick={() => seekToTime(seg.start || parseTimestampSeconds(seg.start_timestamp || '00:00'))}>
-                              ▶️ Seek
+                            <Btn size="xs" onClick={() => seekToTime(seg.start || parseTimestampSeconds(seg.start_timestamp || '00:00'))} style={{ display: 'inline-flex', alignItems: 'center', gap: '4px' }}>
+                              <svg width="9" height="9" viewBox="0 0 24 24" fill="currentColor">
+                                <polygon points="5 3 19 12 5 21 5 3" />
+                              </svg>
+                              Seek
                             </Btn>
                           </td>
                         </tr>
