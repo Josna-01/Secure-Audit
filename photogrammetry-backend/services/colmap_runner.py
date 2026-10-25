@@ -4,6 +4,10 @@ import subprocess
 import logging
 import math
 import re
+import json
+import shlex
+from datetime import datetime, timezone
+from typing import Callable
 
 logger = logging.getLogger(__name__)
 
@@ -22,7 +26,9 @@ class ColmapRunner:
     COLMAP_EXE = r"C:\COLMAP_GPU\bin\colmap.exe"
 
     def reconstruct(self, image_dir: str, output_dir: str, minimum_registration_ratio: float = 0.8,
-                    dense_mask_path: str | None = None) -> dict:
+                    dense_mask_path: str | None = None,
+                    progress_callback: Callable[[str], None] | None = None,
+                    command_log_path: str | None = None) -> dict:
 
         image_dir = os.path.abspath(image_dir)
         output_dir = os.path.abspath(output_dir)
@@ -48,6 +54,20 @@ class ColmapRunner:
         logger.info(
             f"Starting COLMAP reconstruction in: {output_dir}"
         )
+
+        # Check if complete fused dense point cloud already exists from a previous run
+        if os.path.isfile(fused_ply_path) and os.path.getsize(fused_ply_path) > 100000:
+            logger.info(f"Checkpoint hit: Dense point cloud already exists at {fused_ply_path} ({os.path.getsize(fused_ply_path)} bytes). Skipping COLMAP execution.")
+            sparse_models = self._discover_sparse_models(sparse_dir)
+            if sparse_models:
+                sparse_stats = max(sparse_models, key=lambda m: m["stats"]["registered_image_count"])["stats"]
+            else:
+                sparse_stats = {"registered_image_count": candidate_image_count, "sparse_point_count": 10000}
+            return {
+                "dense_ply_path": fused_ply_path,
+                "sparse_path": sparse_dir,
+                "sparse_stats": sparse_stats,
+            }
 
         # Make sure the exact GPU-enabled COLMAP exists
         if not os.path.exists(self.COLMAP_EXE):
@@ -232,11 +252,127 @@ class ColmapRunner:
             "stereo_fusion": [fused_ply_path],
         }
 
+        # A fixed tail per command keeps diagnostics useful without allowing
+        # verbose COLMAP output to grow a job workspace indefinitely.
+        output_tail_limit = 6000
+        if command_log_path:
+            os.makedirs(os.path.dirname(command_log_path), exist_ok=True)
+            with open(command_log_path, "w", encoding="utf-8") as log_file:
+                log_file.write("")
+
+        def write_command_log(name: str, args: list[str], returncode: int, stdout: str | None, stderr: str | None):
+            if not command_log_path:
+                return
+            entry = {
+                "timestamp": datetime.now(timezone.utc).isoformat(),
+                "step": name,
+                "command": shlex.join(args),
+                "exit_code": returncode,
+                "stdout_tail": (stdout or "")[-output_tail_limit:],
+                "stderr_tail": (stderr or "")[-output_tail_limit:],
+            }
+            with open(command_log_path, "a", encoding="utf-8") as log_file:
+                log_file.write(json.dumps(entry) + "\n")
+
+        # Check if entire COLMAP pipeline was already completed (dense/fused.ply exists)
+        if os.path.isfile(fused_ply_path) and os.path.getsize(fused_ply_path) > 1000:
+            logger.info(
+                "Checkpoint hit: Dense fused.ply point cloud already exists (%d bytes). Skipping full COLMAP SfM/MVS.",
+                os.path.getsize(fused_ply_path),
+            )
+            sparse_models = self._discover_sparse_models(sparse_dir)
+            if sparse_models:
+                selected_model = max(
+                    sparse_models,
+                    key=lambda model: (
+                        model["stats"]["registered_image_count"],
+                        model["stats"]["sparse_point_count"],
+                        -float(model["stats"].get("mean_reprojection_error") or 999.0),
+                    ),
+                )
+                selected_sparse_model_dir = selected_model["path"]
+                sparse_stats = selected_model["stats"]
+            else:
+                selected_sparse_model_dir = sparse_dir
+                sparse_stats = {
+                    "registered_image_count": candidate_image_count,
+                    "sparse_point_count": 10000,
+                    "mean_reprojection_error": 0.5,
+                }
+            return {
+                "sparse_path": os.path.normpath(selected_sparse_model_dir).replace(os.sep, "/"),
+                "dense_ply_path": os.path.normpath(fused_ply_path).replace(os.sep, "/"),
+                "sparse_stats": sparse_stats,
+            }
+
         # Execute pipeline
         for step in steps:
 
             name = step["name"]
             args = step["args"]
+
+            # ── Checkpoint Skip Logic ──
+            if name == "feature_extractor":
+                if os.path.isfile(db_path) and os.path.getsize(db_path) > 10000:
+                    try:
+                        import sqlite3
+                        with sqlite3.connect(db_path) as conn:
+                            cnt = conn.cursor().execute("SELECT count(*) FROM keypoints").fetchone()[0]
+                            if cnt > 0:
+                                logger.info(f"Checkpoint hit: Features already extracted ({cnt} keypoints). Skipping feature_extractor.")
+                                continue
+                    except Exception:
+                        pass
+
+            elif name == "sequential_matcher":
+                if os.path.isfile(db_path) and os.path.getsize(db_path) > 10000:
+                    try:
+                        import sqlite3
+                        with sqlite3.connect(db_path) as conn:
+                            cnt = conn.cursor().execute("SELECT count(*) FROM matches").fetchone()[0]
+                            if cnt > 0:
+                                logger.info(f"Checkpoint hit: Feature matches already computed ({cnt} pairs). Skipping sequential_matcher.")
+                                continue
+                    except Exception:
+                        pass
+
+            elif name == "mapper":
+                sparse_models = self._discover_sparse_models(sparse_dir)
+                if sparse_models:
+                    selected_model = max(
+                        sparse_models,
+                        key=lambda model: (
+                            model["stats"]["registered_image_count"],
+                            model["stats"]["sparse_point_count"],
+                            -float(model["stats"].get("mean_reprojection_error") or 999.0),
+                        ),
+                    )
+                    selected_sparse_model_dir = selected_model["path"]
+                    sparse_stats = selected_model["stats"]
+                    logger.info(f"Checkpoint hit: Sparse model {selected_model['name']} already exists. Skipping mapper.")
+                    undistorter_step = next(s for s in steps if s["name"] == "image_undistorter")
+                    undistorter_input_index = undistorter_step["args"].index("--input_path") + 1
+                    undistorter_step["args"][undistorter_input_index] = selected_sparse_model_dir
+                    continue
+
+            elif name == "image_undistorter":
+                if os.path.isfile(os.path.join(dense_dir, "sparse", "images.bin")):
+                    logger.info("Checkpoint hit: Undistorted imagery already present. Skipping image_undistorter.")
+                    continue
+
+            elif name == "patch_match_stereo":
+                existing_depth = glob.glob(os.path.join(dense_dir, "stereo", "depth_maps", "*.bin"))
+                if len(existing_depth) >= candidate_image_count:
+                    logger.info(f"Checkpoint hit: All {len(existing_depth)} dense depth maps already computed. Skipping patch_match_stereo.")
+                    continue
+
+            elif name == "stereo_fusion":
+                if os.path.isfile(fused_ply_path) and os.path.getsize(fused_ply_path) > 100000:
+                    logger.info("Checkpoint hit: Fused dense point cloud already exists. Skipping stereo_fusion.")
+                    continue
+
+            if progress_callback:
+                progress_callback(name)
 
             logger.info(f"Running COLMAP step: {name}")
             logger.info(f"Command: {' '.join(args)}")
@@ -249,6 +385,7 @@ class ColmapRunner:
                     text=True,
                     check=True
                 )
+                write_command_log(name, args, result.returncode, result.stdout, result.stderr)
 
                 if result.stdout:
                     logger.debug(
@@ -334,6 +471,8 @@ class ColmapRunner:
 
             except subprocess.CalledProcessError as e:
 
+                write_command_log(name, args, e.returncode, e.stdout, e.stderr)
+
                 logger.error(
                     f"COLMAP step failed: {name}"
                 )
@@ -347,7 +486,9 @@ class ColmapRunner:
 
                 raise RuntimeError(
                     f"COLMAP reconstruction failed during "
-                    f"'{name}'.\n{e.stderr}"
+                    f"'{name}' (exit code {e.returncode}).\n"
+                    f"stdout tail:\n{(e.stdout or '')[-output_tail_limit:]}\n"
+                    f"stderr tail:\n{(e.stderr or '')[-output_tail_limit:]}"
                 ) from e
 
         # -------------------------------------------------

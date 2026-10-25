@@ -33,6 +33,9 @@ REASONS = {
     "BLOCKCHAIN_UNAVAILABLE": "The blockchain node could not be reached; integrity was not checked.",
     "STORAGE_UNAVAILABLE": "Evidence storage could not be read; integrity was not checked.",
     "TRANSACTION_FAILED": "The verification transaction could not be completed.",
+    "BYTE_HASH_MISMATCH": "The calculated SHA-256 of the actual evidence bytes differs from the expected hash.",
+    "METADATA_MISMATCH": "The hash reported by storage metadata differs from the calculated byte hash.",
+    "OBJECT_UNREADABLE": "The evidence object in storage could not be read or streamed.",
 }
 
 # ── Audit actions ──────────────────────────────────────────────────────────────
@@ -161,3 +164,239 @@ def integrity_summary(checks: list[dict]) -> str:
     if any(c["severity"] == "critical" for c in failed):
         return "Inconsistent"
     return "Warning" if failed else "Consistent"
+
+
+def deep_integrity_verification(
+    evidence: Any,
+    calculated_byte_hash: str | None,
+    total_bytes: int | None = None,
+    storage_metadata_hash: str | None = None,
+    registration: dict | None = None,
+    receipt: dict | None = None,
+    duplicate_ids: list[str] | None = None,
+    blockchain_available: bool = True,
+    is_missing: bool = False,
+    is_unreadable: bool = False,
+    receipt_known: bool = True,
+    error_detail: str | None = None,
+) -> dict:
+    """
+    Perform deep forensic integrity verification of an evidence exhibit by comparing:
+    1. Calculated byte-stream SHA-256 (read directly from object bytes)
+    2. Stored database hash (evidence.file_hash)
+    3. Storage provider metadata hash (e.g. x-amz-meta-sha256 in R2/S3), where available
+    4. Blockchain on-chain registration hash, where available
+
+    Explicitly distinguishes:
+    - Missing objects (does not exist in storage)
+    - Unreadable objects (I/O, network, or storage stream errors)
+    - Hash mismatches (tampered bytes, corrupted files, or DB alterations)
+    - Unavailable blockchain verification (node unreachable, status unchanged)
+    - Unregistered evidence (intact in storage, but no on-chain anchor)
+    - Verified evidence (all cryptographic layers match)
+    """
+    duplicate_ids = duplicate_ids or []
+    checks: list[IntegrityCheck] = []
+    warnings: list[str] = []
+
+    db_hash = (getattr(evidence, "file_hash", "") or "").lower() if getattr(evidence, "file_hash", None) else None
+    meta_hash = storage_metadata_hash.lower() if storage_metadata_hash else None
+    byte_hash = calculated_byte_hash.lower() if calculated_byte_hash else None
+    chain_hash = registration.get("sha256Hash", "").lower() if registration and registration.get("sha256Hash") else None
+
+    # Object existence check
+    checks.append(IntegrityCheck(
+        code="OBJECT_EXISTS",
+        ok=not is_missing,
+        severity="critical",
+        message="Evidence object exists in storage" if not is_missing else "Evidence object is missing from storage"
+    ))
+
+    # Object readability check
+    checks.append(IntegrityCheck(
+        code="OBJECT_READABLE",
+        ok=(not is_missing) and (not is_unreadable),
+        severity="critical",
+        message="Evidence object bytes readable and streamable" if (not is_missing and not is_unreadable)
+        else f"Evidence object could not be read: {error_detail or 'Storage stream error'}"
+    ))
+
+    # Missing outcome
+    if is_missing:
+        return {
+            "status": MISSING,
+            "reason": "EVIDENCE_MISSING",
+            "reason_text": REASONS["EVIDENCE_MISSING"],
+            "calculated_byte_hash": None,
+            "total_bytes": None,
+            "database_hash": db_hash,
+            "storage_metadata_hash": meta_hash,
+            "blockchain_hash": chain_hash,
+            "db_matches_bytes": False,
+            "metadata_matches_bytes": None,
+            "chain_matches_bytes": None,
+            "blockchain_available": blockchain_available,
+            "is_missing": True,
+            "is_unreadable": False,
+            "checks": [asdict(c) for c in checks],
+            "warnings": ["Evidence file is missing from storage."],
+        }
+
+    # Unreadable outcome
+    if is_unreadable:
+        return {
+            "status": VERIFICATION_FAILED,
+            "reason": "STORAGE_UNAVAILABLE",
+            "reason_text": REASONS["STORAGE_UNAVAILABLE"],
+            "calculated_byte_hash": None,
+            "total_bytes": None,
+            "database_hash": db_hash,
+            "storage_metadata_hash": meta_hash,
+            "blockchain_hash": chain_hash,
+            "db_matches_bytes": False,
+            "metadata_matches_bytes": None,
+            "chain_matches_bytes": None,
+            "blockchain_available": blockchain_available,
+            "is_missing": False,
+            "is_unreadable": True,
+            "checks": [asdict(c) for c in checks],
+            "warnings": [f"Storage read error: {error_detail or 'Unreadable'}"],
+        }
+
+    # Format verification
+    checks.append(IntegrityCheck(
+        code="DB_HASH_FORMAT",
+        ok=is_sha256_hex(db_hash),
+        severity="critical",
+        message="Database hash is a valid SHA-256 digest" if is_sha256_hex(db_hash)
+        else "Database hash is missing or not a valid SHA-256 digest"
+    ))
+
+    # Deep byte comparison against database
+    db_matches_bytes = (db_hash is not None and byte_hash is not None and db_hash == byte_hash)
+    checks.append(IntegrityCheck(
+        code="DB_MATCHES_BYTES",
+        ok=db_matches_bytes,
+        severity="critical",
+        message="Database recorded hash matches freshly computed byte-stream hash" if db_matches_bytes
+        else "Database recorded hash does NOT match calculated byte-stream hash (tampering detected)"
+    ))
+
+    # Deep byte comparison against storage metadata (if provider metadata exists)
+    metadata_matches_bytes: bool | None = None
+    if meta_hash is not None:
+        metadata_matches_bytes = (meta_hash == byte_hash)
+        checks.append(IntegrityCheck(
+            code="METADATA_MATCHES_BYTES",
+            ok=metadata_matches_bytes,
+            severity="warning" if metadata_matches_bytes else "critical",
+            message="Storage metadata SHA-256 matches computed byte-stream hash" if metadata_matches_bytes
+            else "Storage metadata SHA-256 differs from computed byte-stream hash (bit rot or out-of-band modification)"
+        ))
+        if not metadata_matches_bytes:
+            warnings.append(
+                f"Storage metadata hash ({meta_hash[:16]}...) does not match true byte hash ({byte_hash[:16]}...)."
+            )
+
+    # Blockchain evaluation
+    chain_matches_bytes: bool | None = None
+    if not blockchain_available:
+        status = VERIFICATION_FAILED
+        reason = "BLOCKCHAIN_UNAVAILABLE"
+        warnings.append("Blockchain node unavailable; deep integrity checked against storage and DB only.")
+    elif registration is None:
+        status = UNREGISTERED
+        reason = "NOT_REGISTERED"
+        checks.append(IntegrityCheck(
+            code="REGISTERED",
+            ok=False,
+            severity="critical",
+            message="No registration exists on the blockchain"
+        ))
+    else:
+        checks.append(IntegrityCheck(
+            code="REGISTERED",
+            ok=True,
+            severity="info",
+            message="Evidence is registered on the blockchain"
+        ))
+        chain_matches_bytes = (chain_hash is not None and byte_hash is not None and chain_hash == byte_hash)
+        db_matches_chain = (db_hash is not None and chain_hash is not None and db_hash == chain_hash)
+
+        checks.append(IntegrityCheck(
+            code="FILE_MATCHES_CHAIN",
+            ok=chain_matches_bytes,
+            severity="critical",
+            message="Calculated byte hash matches on-chain registration" if chain_matches_bytes
+            else "Calculated byte hash differs from on-chain registration (evidence tampered)"
+        ))
+
+        checks.append(IntegrityCheck(
+            code="DB_MATCHES_CHAIN",
+            ok=db_matches_chain,
+            severity="critical",
+            message="Database hash matches on-chain registration" if db_matches_chain
+            else "Database hash differs from on-chain registration (database altered)"
+        ))
+
+        same_name = (getattr(evidence, "file_name", "") or "") == registration.get("fileName", "")
+        same_case = str(getattr(evidence, "case_id", "") or "") == registration.get("caseId", "")
+        checks.append(IntegrityCheck(
+            code="DB_RECORD_UNCHANGED",
+            ok=same_name and same_case,
+            severity="critical",
+            message="File name and case match the on-chain registration" if same_name and same_case
+            else "File name or case in the database differ from the on-chain registration"
+        ))
+
+        if chain_matches_bytes and db_matches_bytes and (metadata_matches_bytes is not False):
+            status = VERIFIED
+            reason = "HASH_MATCH"
+        else:
+            status = TAMPERED
+            reason = "HASH_MISMATCH"
+            if not chain_matches_bytes:
+                warnings.append("Calculated byte-stream hash differs from on-chain registered digest.")
+            if not db_matches_bytes:
+                warnings.append("Calculated byte-stream hash differs from database recorded digest.")
+            if metadata_matches_bytes is False:
+                warnings.append("Storage metadata hash differs from freshly computed byte digest.")
+
+    # Unique hash check
+    checks.append(IntegrityCheck(
+        code="UNIQUE_HASH",
+        ok=not duplicate_ids,
+        severity="warning",
+        message="No other evidence item shares this SHA-256" if not duplicate_ids
+        else f"{len(duplicate_ids)} other evidence item(s) share this SHA-256"
+    ))
+
+    # Transaction metadata check
+    if getattr(evidence, "blockchain_tx_hash", None) and receipt_known:
+        found = receipt is not None
+        checks.append(IntegrityCheck(
+            code="TRANSACTION_ON_CHAIN",
+            ok=found,
+            severity="critical",
+            message="Registration transaction exists on the blockchain" if found
+            else "Registration transaction recorded in the database is not on the blockchain"
+        ))
+
+    return {
+        "status": status,
+        "reason": reason,
+        "reason_text": REASONS.get(reason, reason),
+        "calculated_byte_hash": byte_hash,
+        "total_bytes": total_bytes,
+        "database_hash": db_hash,
+        "storage_metadata_hash": meta_hash,
+        "blockchain_hash": chain_hash,
+        "db_matches_bytes": db_matches_bytes,
+        "metadata_matches_bytes": metadata_matches_bytes,
+        "chain_matches_bytes": chain_matches_bytes,
+        "blockchain_available": blockchain_available,
+        "is_missing": False,
+        "is_unreadable": False,
+        "checks": [asdict(c) for c in checks],
+        "warnings": warnings,
+    }

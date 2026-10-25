@@ -213,11 +213,8 @@ export function Sidebar() {
           </svg>
         </div>
         <div>
-          <div style={{ fontSize: '14.5px', fontWeight: 800, color: 'var(--text)', letterSpacing: '-0.02em', lineHeight: 1.15 }}>
+          <div style={{ fontSize: '15px', fontWeight: 800, color: 'var(--text)', letterSpacing: '-0.02em', lineHeight: 1.15 }}>
             Secure Audit
-          </div>
-          <div style={{ fontSize: '10.5px', fontWeight: 600, color: 'var(--text3)', textTransform: 'uppercase', letterSpacing: '0.06em', marginTop: '2px' }}>
-            Forensic Platform
           </div>
         </div>
       </div>
@@ -356,10 +353,8 @@ export function Topbar({ title, onNewCase }: { title: string; onNewCase: () => v
         zIndex: 10,
         boxShadow: 'var(--shadow-xs)'
       }}>
-        {/* Page Title & Breadcrumb Indicator */}
+        {/* Page Title */}
         <div style={{ display: 'flex', alignItems: 'center', gap: '8px' }}>
-          <span style={{ fontSize: '12px', color: 'var(--text3)', fontWeight: 500 }}>Forensic Hub</span>
-          <span style={{ fontSize: '12px', color: 'var(--text3)' }}>/</span>
           <h1 style={{ fontSize: '15px', fontWeight: 700, color: 'var(--text)', letterSpacing: '-0.01em', margin: 0 }}>
             {title}
           </h1>

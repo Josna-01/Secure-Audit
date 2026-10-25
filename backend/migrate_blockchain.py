@@ -25,8 +25,10 @@ STATEMENTS = [
     """CREATE TABLE IF NOT EXISTS evidence_custody_records (
         id UUID PRIMARY KEY, evidence_id UUID NOT NULL REFERENCES evidence(id) ON DELETE CASCADE,
         officer_id VARCHAR NOT NULL, action VARCHAR NOT NULL, occurred_at TIMESTAMPTZ NOT NULL,
-        transaction_hash VARCHAR UNIQUE, block_number BIGINT, created_at TIMESTAMPTZ DEFAULT now())""",
+        transaction_hash VARCHAR, block_number BIGINT, created_at TIMESTAMPTZ DEFAULT now())""",
+    "ALTER TABLE evidence_custody_records DROP CONSTRAINT IF EXISTS evidence_custody_records_transaction_hash_key",
     "CREATE INDEX IF NOT EXISTS ix_evidence_custody_records_evidence_id ON evidence_custody_records(evidence_id)",
+    "CREATE INDEX IF NOT EXISTS ix_evidence_custody_records_transaction_hash ON evidence_custody_records(transaction_hash)",
     "ALTER TABLE evidence_custody_records ADD COLUMN IF NOT EXISTS source VARCHAR DEFAULT 'blockchain'",
     "ALTER TABLE evidence_custody_records ADD COLUMN IF NOT EXISTS details JSONB",
     # One transaction can emit several events (EvidenceVerified + EvidenceTampered),

@@ -40,8 +40,8 @@ SERVICES = [
     },
     {
         "name": "5. Crime Object Detection (Port 8003)",
-        "cmd": [os.path.join(BASE_DIR, "crime-detection", "venv", "Scripts", "python.exe"), "main.py"],
-        "cwd": os.path.join(BASE_DIR, "crime-detection"),
+        "cmd": [os.path.join(BASE_DIR, "best", "venv", "Scripts", "python.exe"), "main.py"],
+        "cwd": os.path.join(BASE_DIR, "best"),
     },
     {
         "name": "6. Photogrammetry 3D Service (Port 8004)",

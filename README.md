@@ -1,10 +1,10 @@
-# Secure Audit — Digital Evidence and Investigation Support System
+# Secure Audit — Digital Forensics & Investigation Support System
 
 [![React](https://img.shields.io/badge/Frontend-React%2018%20%7C%20Vite-blue?logo=react)](audit-frontend/)
 [![FastAPI](https://img.shields.io/badge/Backend-FastAPI%20%7C%20Python%203.10-009688?logo=fastapi)](backend/)
 [![Blockchain](https://img.shields.io/badge/Blockchain-Ethereum%20%7C%20Solidity%200.8.28-3C3C3D?logo=ethereum)](blockchain/)
 [![PostgreSQL](https://img.shields.io/badge/Database-PostgreSQL%2015-336791?logo=postgresql)](docs/)
-[![AI-Vision](https://img.shields.io/badge/AI-YOLOv8%20%7C%20COLMAP%203D-FF6F00)](crime-detection/)
+[![AI-Vision](https://img.shields.io/badge/AI-YOLOv8%20%7C%20COLMAP%203D-FF6F00)](best/)
 [![AI-NLP](https://img.shields.io/badge/NLP-Legal--BERT%20%7C%20HGAT%20%7C%20BNS-8E24AA)](bns-backend/)
 [![License](https://img.shields.io/badge/License-MIT-green.svg)](LICENSE)
 
@@ -39,7 +39,7 @@ An enterprise-grade, multi-service digital forensics and investigation managemen
 
 ## 1. Project Title
 
-**Secure Audit** — *Digital Evidence and Investigation Support System*
+**Secure Audit** — *DIGITAL EVEIDENCE AND INVESTIGATION SUPPORT SYSTEM *
 
 ---
 
@@ -217,9 +217,10 @@ Secure Audit/
 │   ├── app.py                  # Job queue and execution lifecycle API
 │   └── models.py               # 3D job database models
 │
-├── crime-detection/            # YOLOv8 Weapon & Crime Vision Service (Port 8003)
-│   ├── model/                  # YOLOv8 weights (crime_best.pt, yolov8n.pt)
-│   └── main.py                 # Real-time frame & image inference endpoint
+├── best/                       # YOLOv8 Weapon & Crime Vision Service (Port 8003)
+│   ├── best.pt                 # Fine-tuned YOLOv8 model weights
+│   ├── app.py                  # FastAPI detection endpoints
+│   └── main.py                 # Real-time frame & image inference server
 │
 ├── audio-backend/              # Speech & Audio Forensics Service (Port 8004)
 │   ├── services/               # WhisperX transcriber, pyannote diarizer, deepfake scorer
@@ -313,7 +314,7 @@ ightarrow$ COLMAP Structure-from-Motion (SfM) $
 ightarrow$ Open3D Poisson surface reconstruction $
 ightarrow$ web-optimized `.glb` export.
 
-### Crime Object Detection (`crime-detection/`)
+### Crime Object Detection (`best/`)
 A high-throughput computer vision service utilizing YOLOv8. Scans uploaded crime scene photos and CCTV stills to locate, classify, and score confidence for lethal weapons (firearms, knives), contraband, and forensic artifacts.
 
 ### Audio Forensics Service (`audio-backend/`)
@@ -519,8 +520,8 @@ cd ..
 # BNS Backend:
 cd bns-backend && pip install -r requirements.txt && cd ..
 
-# Crime Detection:
-cd crime-detection && pip install -r requirements.txt && cd ..
+# Object Detection:
+cd best && pip install -r requirements.txt && cd ..
 
 # Photogrammetry Backend:
 cd photogrammetry-backend && pip install -r requirements.txt && cd ..
@@ -548,7 +549,7 @@ Start all microservices in separate terminal windows:
 | **Core Backend Gateway** | `cd backend && python app.py` | `http://127.0.0.1:8000` |
 | **BNS Legal Backend** | `cd bns-backend && python -m uvicorn app.main:app --port 8001 --reload` | `http://127.0.0.1:8001` |
 | **Photogrammetry 3D** | `cd photogrammetry-backend && python app.py` | `http://127.0.0.1:8002` |
-| **Crime Detection** | `cd crime-detection && python main.py` | `http://127.0.0.1:8003` |
+| **Object Detection** | `cd best && .\venv\Scripts\python.exe main.py` | `http://127.0.0.1:8003` |
 | **Audio Forensics** | `cd audio-backend && python app.py` | `http://127.0.0.1:8004` |
 | **React Frontend** | `cd audit-frontend && npm run dev` | `http://localhost:5173` |
 
