@@ -30,6 +30,9 @@ from services.storage_gateway import (
     ObjectNotFoundError,
     build_storage_key,
     sanitize_filename,
+    storage_diagnostics,
+    validate_storage_configuration,
+    StorageConfigurationError,
 )
 from scripts.storage_migration_dryrun import (
     classify_url,
@@ -118,6 +121,61 @@ class TestStorageGateway(unittest.TestCase):
         self.assertEqual(sanitize_filename("../../etc/passwd"), "passwd")
         self.assertEqual(sanitize_filename("my#file$*&.txt"), "my_file___.txt")
         self.assertEqual(sanitize_filename(""), "unnamed_evidence")
+
+
+class TestStorageConfiguration(unittest.TestCase):
+    def test_local_mode_requires_no_cloud_configuration(self):
+        info = validate_storage_configuration("local", environ={"USE_LOCAL_STORAGE": "true"})
+        self.assertEqual(info["active_backend"], "local")
+        self.assertEqual(info["storage_mode"], "local")
+        self.assertTrue(info["local_storage_enabled"])
+
+    def test_cloud_mode_missing_settings_is_actionable_and_secret_safe(self):
+        secret = "should-never-appear-in-an-error"
+        with self.assertRaises(StorageConfigurationError) as raised:
+            validate_storage_configuration("s3", environ={"S3_SECRET_ACCESS_KEY": secret})
+        message = str(raised.exception)
+        self.assertIn("S3_BUCKET_NAME", message)
+        self.assertIn("S3_ENDPOINT_URL", message)
+        self.assertIn("S3_ACCESS_KEY_ID", message)
+        self.assertNotIn(secret, message)
+
+    def test_cloud_mode_rejects_unsafe_endpoint_without_echoing_it(self):
+        endpoint = "http://key:secret@unsafe.example.invalid/?token=secret"
+        env = {
+            "S3_BUCKET_NAME": "private-bucket",
+            "S3_ENDPOINT_URL": endpoint,
+            "S3_REGION": "auto",
+            "S3_ACCESS_KEY_ID": "access-key",
+            "S3_SECRET_ACCESS_KEY": "secret-key",
+        }
+        with self.assertRaises(StorageConfigurationError) as raised:
+            validate_storage_configuration("s3", environ=env)
+        self.assertIn("HTTPS", str(raised.exception))
+        self.assertNotIn(endpoint, str(raised.exception))
+
+    def test_diagnostics_reveal_presence_not_values(self):
+        env = {
+            "STORAGE_BACKEND": "s3",
+            "USE_LOCAL_STORAGE": "false",
+            "S3_BUCKET_NAME": "private-bucket-name",
+            "S3_ENDPOINT_URL": "https://account-id.r2.cloudflarestorage.com",
+            "S3_REGION": "auto",
+            "S3_ACCESS_KEY_ID": "access-key-value",
+            "S3_SECRET_ACCESS_KEY": "secret-key-value",
+        }
+        info = storage_diagnostics(environ=env)
+        self.assertEqual(info["active_backend"], "s3")
+        self.assertTrue(info["r2_endpoint_detected"])
+        self.assertTrue(all(info["required_settings"].values()))
+        rendered = str(info)
+        for value in (
+            env["S3_BUCKET_NAME"],
+            env["S3_ENDPOINT_URL"],
+            env["S3_ACCESS_KEY_ID"],
+            env["S3_SECRET_ACCESS_KEY"],
+        ):
+            self.assertNotIn(value, rendered)
 
 
 

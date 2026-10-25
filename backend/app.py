@@ -54,6 +54,7 @@ from services.storage_gateway import (
     StoragePermissionError,
     StorageUnavailableError,
     StorageIntegrityError,
+    storage_diagnostics,
 )
 from migrate_blockchain import STATEMENTS as BLOCKCHAIN_SCHEMA_STATEMENTS
 
@@ -3014,6 +3015,14 @@ def health_check():
         },
     }
     return JSONResponse(status_code=200 if database_ok else 503, content=make_json_safe(body))
+
+
+@app.get("/admin/storage/diagnostics")
+def storage_configuration_diagnostics(request: Request):
+    """Admin-only, non-secret storage configuration diagnostic."""
+    user_info = get_current_user_info(request)
+    require_admin(user_info, request, "storage.diagnostics")
+    return {"data": storage_diagnostics(), "success": True}
 
 
 @app.post("/admin/blockchain/redeploy")

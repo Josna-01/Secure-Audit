@@ -242,6 +242,28 @@ class TestR2UploadIntegration(unittest.TestCase):
         self.assertEqual(args[1], str(self.case_id))
         self.assertEqual(args[3], expected_hash)
 
+    @patch("app.require_admin")
+    def test_storage_diagnostics_are_admin_guarded_and_secret_free(self, mock_require_admin):
+        env = {
+            "STORAGE_BACKEND": "s3",
+            "S3_BUCKET_NAME": "bucket-must-not-be-returned",
+            "S3_ENDPOINT_URL": "https://account-must-not-be-returned.r2.cloudflarestorage.com",
+            "S3_REGION": "auto",
+            "S3_ACCESS_KEY_ID": "access-must-not-be-returned",
+            "S3_SECRET_ACCESS_KEY": "secret-must-not-be-returned",
+        }
+        with patch.dict(os.environ, env, clear=False):
+            response = self.client.get("/admin/storage/diagnostics")
+
+        self.assertEqual(response.status_code, 200)
+        mock_require_admin.assert_called_once()
+        body = response.json()
+        self.assertEqual(body["data"]["active_backend"], "s3")
+        self.assertTrue(body["data"]["r2_endpoint_detected"])
+        rendered = response.text
+        for value in env.values():
+            self.assertNotIn(value, rendered)
+
     def test_local_mode_upload_regression(self):
         """When STORAGE_BACKEND=local, legacy local disk upload remains 100% active."""
         payload_bytes = b"LOCAL EVIDENCE ARTIFACT"

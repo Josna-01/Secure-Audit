@@ -15,6 +15,7 @@ import os
 import re
 import uuid
 import hashlib
+from urllib.parse import urlparse
 from abc import ABC, abstractmethod
 from dataclasses import dataclass
 from datetime import datetime, timezone
@@ -23,6 +24,8 @@ from typing import Any, BinaryIO, Optional, Union
 
 # RegEx for filename sanitization (strict alphanumeric plus dot, underscore, parens, space, hyphen)
 _UNSAFE_FILENAME_CHARS = re.compile(r"[^A-Za-z0-9._() \-]")
+_CLOUD_BACKENDS = ("s3", "cloud")
+_R2_HOST_SUFFIX = ".r2.cloudflarestorage.com"
 
 
 class StorageError(Exception):
@@ -66,6 +69,80 @@ class StorageUnavailableError(StorageError):
 class StorageIntegrityError(StorageError):
     """Raised when cryptographic verification detects a hash or byte mismatch."""
     pass
+
+
+def _configured(value: Optional[str]) -> bool:
+    """Return whether an environment value is present without ever returning it."""
+    return bool((value or "").strip())
+
+
+def _is_r2_endpoint(endpoint: Optional[str]) -> bool:
+    """Identify a Cloudflare R2 endpoint without exposing its account identifier."""
+    try:
+        return (urlparse((endpoint or "").strip()).hostname or "").lower().endswith(_R2_HOST_SUFFIX)
+    except ValueError:
+        return False
+
+
+def storage_diagnostics(backend: Optional[str] = None, environ: Optional[dict] = None) -> dict[str, Any]:
+    """Return non-secret storage configuration state suitable for an admin diagnostic.
+
+    Values, URLs, bucket names and credentials are deliberately omitted. This is
+    configuration inspection only; it never contacts a storage provider.
+    """
+    source = environ if environ is not None else os.environ
+    selected = (backend or source.get("STORAGE_BACKEND") or "local").strip().lower()
+    cloud = selected in _CLOUD_BACKENDS
+    endpoint = source.get("S3_ENDPOINT_URL") or ""
+    return {
+        "active_backend": selected,
+        "storage_mode": "cloud" if cloud else ("local" if selected == "local" else "unsupported"),
+        "r2_endpoint_detected": _is_r2_endpoint(endpoint),
+        "local_storage_enabled": (source.get("USE_LOCAL_STORAGE") or "false").strip().lower() in ("true", "1", "yes"),
+        "required_settings": {
+            "S3_BUCKET_NAME": _configured(source.get("S3_BUCKET_NAME")),
+            "S3_ENDPOINT_URL": _configured(endpoint),
+            "S3_REGION": _configured(source.get("S3_REGION")) or _is_r2_endpoint(endpoint),
+            "S3_ACCESS_KEY_ID": _configured(source.get("S3_ACCESS_KEY_ID")),
+            "S3_SECRET_ACCESS_KEY": _configured(source.get("S3_SECRET_ACCESS_KEY")),
+        },
+    }
+
+
+def validate_storage_configuration(backend: Optional[str] = None, environ: Optional[dict] = None) -> dict[str, Any]:
+    """Validate the selected provider without logging or returning secret values.
+
+    Local storage intentionally remains valid with no cloud configuration. Cloud
+    configuration is validated before a boto client is created so deployment
+    mistakes fail with an actionable error rather than falling back to ambient
+    credentials or an unexpected endpoint.
+    """
+    source = environ if environ is not None else os.environ
+    info = storage_diagnostics(backend=backend, environ=source)
+    selected = info["active_backend"]
+    if selected == "local":
+        return info
+    if selected not in _CLOUD_BACKENDS:
+        raise StorageConfigurationError(
+            f"Unsupported storage backend '{selected}'. Supported backends are 'local', 's3', and 'cloud'."
+        )
+
+    missing = [name for name, present in info["required_settings"].items() if not present]
+    if missing:
+        raise StorageConfigurationError(
+            "Cloud storage configuration is incomplete. Set: " + ", ".join(missing) + "."
+        )
+
+    endpoint = (source.get("S3_ENDPOINT_URL") or "").strip()
+    try:
+        parsed = urlparse(endpoint)
+    except ValueError as exc:
+        raise StorageConfigurationError("S3_ENDPOINT_URL must be a valid HTTPS URL.") from exc
+    if parsed.scheme != "https" or not parsed.hostname or parsed.username or parsed.password or parsed.query or parsed.fragment:
+        raise StorageConfigurationError("S3_ENDPOINT_URL must be an HTTPS endpoint URL without embedded credentials.")
+    if any(marker in endpoint for marker in ("<", ">", "your_", "example")):
+        raise StorageConfigurationError("S3_ENDPOINT_URL contains a placeholder; configure the Cloudflare R2 S3 endpoint.")
+    return info
 
 
 @dataclass(frozen=True)
@@ -360,6 +437,9 @@ class S3StorageProvider(StorageProvider):
     ) -> StoredObject:
         validate_storage_key(key)
 
+        # This preflight gives a useful collision error, but is not the
+        # concurrency guarantee. The conditional request below rejects a key
+        # created after this check.
         if self.exists(key):
             raise KeyAlreadyExistsError(f"Storage key already exists in bucket '{self.bucket_name}': {key}")
 
@@ -388,6 +468,10 @@ class S3StorageProvider(StorageProvider):
                 "sha256": computed_sha256,
                 "verified_size": str(total_size),
             },
+            # S3-compatible providers that support conditional puts (including
+            # Cloudflare R2) reject a concurrent write instead of overwriting
+            # an evidence object. Do not rely on the preceding exists() call.
+            "IfNoneMatch": "*",
         }
         if self.server_side_encryption:
             put_kwargs["ServerSideEncryption"] = self.server_side_encryption
@@ -544,6 +628,7 @@ def get_storage_provider(backend: Optional[str] = None) -> StorageProvider:
     Defaults to LocalStorageProvider rooted at backend/uploads.
     """
     provider_name = (backend or os.getenv("STORAGE_BACKEND", "local")).strip().lower()
+    validate_storage_configuration(provider_name)
     if provider_name == "local":
         backend_dir = os.path.dirname(os.path.dirname(os.path.abspath(__file__)))
         uploads_dir = os.getenv("UPLOADS_DIR", "uploads")
@@ -552,7 +637,7 @@ def get_storage_provider(backend: Optional[str] = None) -> StorageProvider:
         if not os.path.isabs(uploads_dir):
             uploads_dir = os.path.join(backend_dir, uploads_dir)
         return LocalStorageProvider(uploads_dir)
-    elif provider_name in ("s3", "cloud"):
+    elif provider_name in _CLOUD_BACKENDS:
         return S3StorageProvider()
     else:
         raise StorageConfigurationError(
