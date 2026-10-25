@@ -1,5 +1,6 @@
 import uuid
-from sqlalchemy import Column, String, Date, Time, DateTime, ForeignKey, BigInteger, Float, Integer, Boolean
+from sqlalchemy import (Column, String, Date, Time, DateTime, ForeignKey, BigInteger, Float, Integer, Boolean,
+                        CheckConstraint, Index, text)
 from sqlalchemy.dialects.postgresql import UUID, JSONB
 from sqlalchemy.sql import func
 from db import Base
@@ -168,4 +169,34 @@ class Detection(Base):
     image_url = Column(String, nullable=True)
     predictions = Column(JSONB, nullable=True)
     created_at = Column(DateTime(timezone=True), nullable=False, server_default=func.now())
+
+
+class Notification(Base):
+    """In-app alert for exactly one recipient (added by migrate_notifications.py).
+
+    Complements the audit log, never replaces it: rows are created only after the event's
+    own database work and audit entry have been written.
+    """
+    __tablename__ = "notifications"
+    __table_args__ = (
+        CheckConstraint("severity IN ('info', 'warning', 'critical')", name="chk_notifications_severity"),
+        Index("idx_notifications_recipient_created", "recipient_id", "created_at"),
+        # At most one unread alert per recipient and event fingerprint (duplicate prevention).
+        Index("uq_notifications_unread_fingerprint", "recipient_id", "fingerprint", unique=True,
+              postgresql_where=text("is_read = false AND fingerprint IS NOT NULL")),
+    )
+
+    id = Column(UUID(as_uuid=True), primary_key=True, default=uuid.uuid4)
+    recipient_id = Column(UUID(as_uuid=True), ForeignKey("users.id", ondelete="CASCADE"), nullable=False)
+    case_id = Column(UUID(as_uuid=True), ForeignKey("cases.id", ondelete="RESTRICT"), nullable=True)
+    evidence_id = Column(UUID(as_uuid=True), ForeignKey("evidence.id", ondelete="RESTRICT"), nullable=True)
+    type = Column(String, nullable=False)  # tamper | system | upload | yolo | bns | custody
+    title = Column(String, nullable=False)
+    description = Column(String, nullable=False)
+    severity = Column(String, nullable=False, server_default="info", default="info")  # info | warning | critical
+    # Event identity, e.g. "tamper:<evidence>:HASH_MISMATCH:<sha256>"; NULL disables de-duplication.
+    fingerprint = Column(String, nullable=True)
+    is_read = Column(Boolean, nullable=False, server_default="false", default=False)
+    created_at = Column(DateTime(timezone=True), nullable=False, server_default=func.now())
+    read_at = Column(DateTime(timezone=True), nullable=True)
 

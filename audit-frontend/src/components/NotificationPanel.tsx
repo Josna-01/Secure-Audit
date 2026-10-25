@@ -5,20 +5,26 @@ import type { Notification } from '../types'
 import { Btn } from './UI'
 
 const TYPE_META: Record<string, { icon: string; color: string }> = {
-  tamper: { icon: '[!]', color: 'var(--red)'    },
-  bns:    { icon: '[=]', color: 'var(--purple)'  },
-  upload: { icon: '[^]', color: 'var(--blue)'    },
-  yolo:   { icon: '[*]', color: 'var(--amber)'   },
-  system: { icon: '[i]', color: 'var(--text3)'   }
+  tamper:  { icon: '[!]', color: 'var(--red)'    },
+  bns:     { icon: '[=]', color: 'var(--purple)'  },
+  upload:  { icon: '[^]', color: 'var(--blue)'    },
+  yolo:    { icon: '[*]', color: 'var(--amber)'   },
+  custody: { icon: '[>]', color: 'var(--blue)'    },
+  system:  { icon: '[i]', color: 'var(--text3)'   }
 }
 
+const SEVERITY_COLOR: Record<string, string> = {
+  critical: 'var(--red)', warning: 'var(--amber)', info: 'var(--blue)'
+}
+
+// Fallback when a notification has no link of its own
 const TYPE_ROUTE: Record<string, string> = {
-  tamper: '/evidence', bns: '/bns', upload: '/evidence', yolo: '/detection', system: '/audit'
+  tamper: '/evidence', bns: '/bns', upload: '/evidence', yolo: '/detection', custody: '/evidence', system: '/audit'
 }
 
-interface Props { open: boolean; onClose: () => void }
+interface Props { open: boolean; onClose: () => void; onUnreadChange?: (count: number) => void }
 
-export default function NotificationPanel({ open, onClose }: Props) {
+export default function NotificationPanel({ open, onClose, onUnreadChange }: Props) {
   const navigate = useNavigate()
   const [notifications, setNotifications] = useState<Notification[]>([])
   const [loading, setLoading] = useState(false)
@@ -27,7 +33,10 @@ export default function NotificationPanel({ open, onClose }: Props) {
     if (!open) return
     setLoading(true)
     api.getNotifications()
-      .then((res) => setNotifications(res.data))
+      .then((res) => {
+        setNotifications(res.data)
+        onUnreadChange?.(res.data.filter((n) => !n.read).length)
+      })
       .catch(() => {})
       .finally(() => setLoading(false))
   }, [open])
@@ -35,17 +44,18 @@ export default function NotificationPanel({ open, onClose }: Props) {
   const handleClick = async (n: Notification) => {
     if (!n.read) {
       await api.markNotificationRead(n.id).catch(() => {})
-      setNotifications((prev) => prev.map((x) => x.id === n.id ? { ...x, read: true } : x))
+      const next = notifications.map((x) => x.id === n.id ? { ...x, read: true } : x)
+      setNotifications(next)
+      onUnreadChange?.(next.filter((x) => !x.read).length)
     }
     onClose()
-    navigate(TYPE_ROUTE[n.type] || '/dashboard')
+    navigate(n.link || TYPE_ROUTE[n.type] || '/dashboard')
   }
 
   const markAll = async () => {
     await api.markAllNotificationsRead().catch(() => {})
     setNotifications((prev) => prev.map((x) => ({ ...x, read: true })))
-    const dot = document.getElementById('notif-dot')
-    if (dot) dot.style.display = 'none'
+    onUnreadChange?.(0)
   }
 
   if (!open) return null
@@ -82,7 +92,7 @@ export default function NotificationPanel({ open, onClose }: Props) {
                 style={{
                   padding: '12px 14px', borderBottom: '1px solid var(--border)', cursor: 'pointer',
                   transition: 'background .12s',
-                  borderLeft: !n.read ? `3px solid ${n.type === 'tamper' ? 'var(--red)' : 'var(--blue)'}` : 'none'
+                  borderLeft: !n.read ? `3px solid ${SEVERITY_COLOR[n.severity] || 'var(--blue)'}` : 'none'
                 }}
                 onMouseEnter={(e) => { e.currentTarget.style.background = 'var(--bg3)' }}
                 onMouseLeave={(e) => { e.currentTarget.style.background = 'transparent' }}
@@ -97,7 +107,7 @@ export default function NotificationPanel({ open, onClose }: Props) {
                     <div style={{ fontSize: '11px', color: 'var(--text2)', lineHeight: 1.4, marginBottom: '3px', whiteSpace: 'pre-line' }}>{n.description}</div>
                     <div style={{ display: 'flex', alignItems: 'center', gap: '8px', fontSize: '10px', color: 'var(--text3)' }}>
                       <span>{new Date(n.created_at).toLocaleString('en-IN', { day: '2-digit', month: 'short', hour: '2-digit', minute: '2-digit' })}</span>
-                      {n.case_id && <span style={{ fontFamily: 'var(--mono)', color: 'var(--blue)' }}>{n.case_id}</span>}
+                      {n.case_id && <span style={{ fontFamily: 'var(--mono)', color: 'var(--blue)' }}>{n.case_number || n.case_id}</span>}
                     </div>
                   </div>
                 </div>

@@ -337,8 +337,13 @@ class ApiService {
     return data
   }
 
+  async getUnreadNotificationCount() {
+    const { data } = await this.client.get<ApiResponse<{ count: number }>>('/notifications/unread-count')
+    return data
+  }
+
   async markNotificationRead(id: string) {
-    const { data } = await this.client.patch<ApiResponse<{ message: string }>>(`/notifications/${id}/read`)
+    const { data } = await this.client.patch<ApiResponse<Notification>>(`/notifications/${id}/read`)
     return data
   }
 

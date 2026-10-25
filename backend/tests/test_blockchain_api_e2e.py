@@ -36,10 +36,9 @@ class _NoSupabase:
 class BlockchainApiEndToEndTest(unittest.TestCase):
     @classmethod
     def setUpClass(cls):
-        cls.node = GanacheNode().start()
+        cls.node = GanacheNode()
         cls.tmp = tempfile.TemporaryDirectory()
         deployment = Path(cls.tmp.name) / "deployment.json"
-        cls.node.deploy(deployment)
         os.environ.update({
             "DATABASE_URL": TEST_DATABASE_URL,
             "ETHEREUM_RPC_URL": cls.node.url,
@@ -52,8 +51,12 @@ class BlockchainApiEndToEndTest(unittest.TestCase):
         for name in ("EVIDENCE_REGISTRY_ADDRESS", "ETHEREUM_SENDER_ADDRESS", "ETHEREUM_PRIVATE_KEY", "BLOCKCHAIN_NETWORK_NAME"):
             os.environ[name] = ""
 
+        # Import the app (and with it numpy/OpenCV) before spawning Ganache: on Windows,
+        # loading numpy's extension after the child process starts occasionally stalls.
         import app as backend  # imported only now, so it picks up the test configuration
-        backend.blockchain_service.__init__()  # re-read config if another test imported the service first
+        cls.node.start()
+        cls.node.deploy(deployment)
+        backend.blockchain_service.__init__()  # re-read config (node URL, deployment) now that they exist
         from db import Base, engine, SessionLocal
         from fastapi.testclient import TestClient
         cls.backend, cls.SessionLocal = backend, SessionLocal
@@ -153,6 +156,12 @@ class BlockchainApiEndToEndTest(unittest.TestCase):
         self.assertEqual(res.json()["data"]["status"], "Tampered")
         self.assertEqual(res.json()["data"]["reason"], "HASH_MISMATCH")
         self.assertIn("Tamper Detected", self.audit_actions(ev1["id"]))
+        # Critical tamper alert for the case owner and administrators, never other investigators.
+        for headers in (inv1, admin):
+            alerts = [n for n in client.get("/notifications", headers=headers).json()["data"]
+                      if n["type"] == "tamper" and n["evidence_id"] == ev1["id"]]
+            self.assertEqual([n["severity"] for n in alerts], ["critical"])
+        self.assertEqual(client.get("/notifications", headers=inv2).json()["data"], [])
 
         # Regression: a caller-supplied correct hash + the event listener must not
         # flip a tampered item back to Verified.
@@ -245,6 +254,13 @@ class BlockchainApiEndToEndTest(unittest.TestCase):
         row = self.evidence_row(ev_dup["id"])
         self.assertEqual(row.status, "Verified")
         self.assertEqual(row.last_verification_result, "Verification Failed")
+        # The outage is a warning for administrators, not a tamper alert.
+        admin_alerts = client.get("/notifications", headers=admin).json()["data"]
+        self.assertEqual([(n["type"], n["severity"]) for n in admin_alerts if n["evidence_id"] == ev_dup["id"]],
+                         [("system", "warning")])
+        self.assertFalse([n for n in client.get("/notifications", headers=inv1).json()["data"] if n["type"] == "system"])
+        # Custody was transferred to inv2, who cannot access the case: nothing about it was disclosed.
+        self.assertEqual(client.get("/notifications", headers=inv2).json()["data"], [])
 
         files_before = set(os.listdir(os.path.join(self.backend.UPLOADS_DIR, "cases", self.case_id)))
         self.assertEqual(self.upload(b"new file while chain is down").status_code, 503)

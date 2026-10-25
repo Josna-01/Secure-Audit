@@ -269,16 +269,22 @@ export interface AuditLog {
 }
 
 // ── NOTIFICATIONS ─────────────────────────────────────────────────────────
-export type NotificationType = 'tamper' | 'bns' | 'upload' | 'yolo' | 'system'
+export type NotificationType = 'tamper' | 'bns' | 'upload' | 'yolo' | 'system' | 'custody'
+export type NotificationSeverity = 'info' | 'warning' | 'critical'
 
 export interface Notification {
   id: string
   type: NotificationType
+  severity: NotificationSeverity
   title: string
   description: string
   case_id?: string
+  case_number?: string
+  evidence_id?: string
+  link?: string        // in-app route, e.g. /evidence?evidence_id=…&case_id=…
   read: boolean
   created_at: string
+  read_at?: string
 }
 
 // ── PERSONAL NOTES ────────────────────────────────────────────────────────

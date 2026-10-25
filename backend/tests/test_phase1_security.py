@@ -10,7 +10,10 @@ import sys
 import json
 import unittest
 import uuid
+from types import SimpleNamespace
 from unittest.mock import MagicMock, patch
+
+from fastapi import HTTPException
 
 sys.path.insert(0, os.path.dirname(os.path.dirname(os.path.abspath(__file__))))
 
@@ -128,6 +131,42 @@ class ServerSideRoleEnforcementTest(unittest.TestCase):
         self.assertTrue(main_app.has_permission(admin_info, "manage_users"))
         self.assertTrue(main_app.has_permission(admin_info, "upload_evidence"))
         self.assertTrue(main_app.is_admin(admin_info))
+
+
+class DetectionEvidenceScopeTest(unittest.TestCase):
+    """/ai/detect: access to the requested case must not open evidence held in another case."""
+
+    def setUp(self):
+        self.own_case, self.other_case = uuid.uuid4(), uuid.uuid4()
+        self.evidence = SimpleNamespace(id=uuid.uuid4(), case_id=self.other_case)
+        self.db = MagicMock()
+        self.db.query.return_value.filter.return_value.first.return_value = self.evidence
+
+    def run_detect(self, role, case_access, case_id=None):
+        req = main_app.DetectionRequest(evidence_id=str(self.evidence.id), case_id=case_id or str(self.own_case))
+        with patch.object(main_app, "get_current_user_info", return_value={"id": str(uuid.uuid4()), "role": role}), \
+                patch.object(main_app, "check_case_access", side_effect=case_access), \
+                patch.object(main_app.requests, "post") as detect_service, \
+                patch.object(main_app, "create_notification") as notify:
+            with self.assertRaises(HTTPException) as ctx:
+                main_app.run_ai_detect(req, MagicMock(), self.db)
+        detect_service.assert_not_called()
+        notify.assert_not_called()
+        self.db.commit.assert_not_called()
+        return ctx.exception.status_code
+
+    def test_investigator_cannot_reach_another_cases_evidence_through_own_case(self):
+        def own_case_only(case_id, user_info, db=None):
+            if case_id != str(self.own_case):
+                raise HTTPException(status_code=403, detail="Forbidden")
+            return True
+        self.assertEqual(self.run_detect("Investigator", own_case_only), 403)
+
+    def test_evidence_must_belong_to_requested_case_even_for_admin(self):
+        self.assertEqual(self.run_detect("Admin", lambda *args, **kwargs: True), 404)
+
+    def test_invalid_case_id_is_rejected(self):
+        self.assertEqual(self.run_detect("Admin", lambda *args, **kwargs: True, case_id="not-a-uuid"), 400)
 
 
 if __name__ == "__main__":

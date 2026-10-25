@@ -242,3 +242,32 @@ CREATE TABLE IF NOT EXISTS photogrammetry_models (
 
 CREATE INDEX IF NOT EXISTS idx_photogrammetry_models_case_id ON photogrammetry_models(case_id);
 CREATE INDEX IF NOT EXISTS idx_photogrammetry_models_evidence_id ON photogrammetry_models(evidence_id);
+
+-- ============================================================================
+-- 12. NOTIFICATIONS TABLE (as per backend/migrate_notifications.py)
+-- ============================================================================
+-- One row per recipient. Complements audit_logs; it never replaces them.
+CREATE TABLE IF NOT EXISTS notifications (
+    id UUID NOT NULL DEFAULT gen_random_uuid(),
+    recipient_id UUID NOT NULL,
+    case_id UUID,
+    evidence_id UUID,
+    type TEXT NOT NULL, -- tamper | system | upload | yolo | bns | custody
+    title TEXT NOT NULL,
+    description TEXT NOT NULL,
+    severity TEXT NOT NULL DEFAULT 'info',
+    fingerprint TEXT, -- event identity used for duplicate prevention
+    is_read BOOLEAN NOT NULL DEFAULT FALSE,
+    created_at TIMESTAMPTZ NOT NULL DEFAULT now(),
+    read_at TIMESTAMPTZ,
+    CONSTRAINT pk_notifications PRIMARY KEY (id),
+    CONSTRAINT fk_notifications_recipient_id FOREIGN KEY (recipient_id) REFERENCES users(id) ON DELETE CASCADE,
+    CONSTRAINT fk_notifications_case_id FOREIGN KEY (case_id) REFERENCES cases(id) ON DELETE RESTRICT,
+    CONSTRAINT fk_notifications_evidence_id FOREIGN KEY (evidence_id) REFERENCES evidence(id) ON DELETE RESTRICT,
+    CONSTRAINT chk_notifications_severity CHECK (severity IN ('info', 'warning', 'critical'))
+);
+
+CREATE INDEX IF NOT EXISTS idx_notifications_recipient_created ON notifications(recipient_id, created_at);
+-- At most one unread notification per recipient and event fingerprint.
+CREATE UNIQUE INDEX IF NOT EXISTS uq_notifications_unread_fingerprint
+    ON notifications(recipient_id, fingerprint) WHERE is_read = FALSE AND fingerprint IS NOT NULL;
