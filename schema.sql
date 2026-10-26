@@ -20,6 +20,11 @@ CREATE TABLE IF NOT EXISTS users (
     CONSTRAINT uq_users_email UNIQUE (email)
 );
 
+-- Existing installations are not changed by CREATE TABLE IF NOT EXISTS, so
+-- keep legacy user tables compatible with the current backend model.
+ALTER TABLE users ADD COLUMN IF NOT EXISTS can_create_case BOOLEAN DEFAULT TRUE;
+ALTER TABLE users ADD COLUMN IF NOT EXISTS last_login TIMESTAMPTZ;
+
 -- ============================================================================
 -- 2. CASES TABLE
 -- ============================================================================

@@ -13,6 +13,7 @@ import logging
 import subprocess
 import threading
 import time
+import queue
 from pathlib import Path
 from email.mime.text import MIMEText
 from email.mime.multipart import MIMEMultipart
@@ -34,7 +35,7 @@ from sqlalchemy import text
 from sqlalchemy.dialects.postgresql import insert as pg_insert
 from sqlalchemy.orm import Session
 from db import get_db, SessionLocal
-from models import User, Case, Evidence, AuditLog, OCRResult, BNSPrediction, OTPToken, EvidenceCustodyRecord, BlockchainLog, Detection, Notification
+from models import User, Case, Evidence, AuditLog, OCRResult, BNSPrediction, OTPToken, EvidenceCustodyRecord, BlockchainLog, Detection, AudioForensicsResult, Notification
 from services.ocr_service import OCRServiceError, build_document_result, ocr_service
 from services.ocr_text import UNKNOWN_LANGUAGE, detect_languages
 from services.translation_service import (TARGET_LANGUAGES, TranslationError,
@@ -59,6 +60,8 @@ from services.storage_gateway import (
 )
 from migrate_blockchain import STATEMENTS as BLOCKCHAIN_SCHEMA_STATEMENTS
 from migrate_notifications import STATEMENTS as NOTIFICATION_SCHEMA_STATEMENTS
+from migrate_analysis_results import STATEMENTS as ANALYSIS_RESULTS_SCHEMA_STATEMENTS
+from migrate_users import STATEMENTS as USER_SCHEMA_STATEMENTS
 
 load_dotenv()
 logger = logging.getLogger("secure_audit.application")
@@ -261,6 +264,18 @@ def blockchain_event_listener() -> None:
 
 
 @app.on_event("startup")
+def ensure_user_columns() -> None:
+    """Add columns required by the current User model to legacy databases."""
+    try:
+        with SessionLocal() as session:
+            for statement in USER_SCHEMA_STATEMENTS:
+                session.execute(text(statement))
+            session.commit()
+    except Exception as exc:
+        logger.error("users.schema_check_failed error=%s (run migrate_users.py)", exc)
+
+
+@app.on_event("startup")
 def ensure_blockchain_columns() -> None:
     """Apply the additive blockchain schema (same statements as migrate_blockchain.py).
 
@@ -286,6 +301,18 @@ def ensure_notifications_table() -> None:
             session.commit()
     except Exception as exc:
         logger.error("notifications.schema_check_failed error=%s (run migrate_notifications.py)", exc)
+
+
+@app.on_event("startup")
+def ensure_analysis_results_table() -> None:
+    """Create durable analysis-result tables if they do not already exist."""
+    try:
+        with SessionLocal() as session:
+            for statement in ANALYSIS_RESULTS_SCHEMA_STATEMENTS:
+                session.execute(text(statement))
+            session.commit()
+    except Exception as exc:
+        logger.error("analysis_results.schema_check_failed error=%s (run migrate_analysis_results.py)", exc)
 
 
 @app.on_event("startup")
@@ -1305,8 +1332,24 @@ def apply_registration_receipt(evidence, receipt: dict) -> None:
 
 
 # ====== NOTIFICATION HELPER ======
-NOTIFICATION_TYPES = ("tamper", "system", "upload", "yolo", "bns", "custody")
+NOTIFICATION_TYPES = ("tamper", "system", "upload", "yolo", "bns", "audio", "custody")
 NOTIFICATION_SEVERITIES = ("info", "warning", "critical")
+
+# A connected browser has one queue.  Database rows remain the source of truth;
+# this only tells an already-open browser to refresh immediately.
+_notification_subscribers: Dict[uuid.UUID, List[queue.Queue]] = {}
+_notification_subscribers_lock = threading.Lock()
+
+
+def publish_notification_event(recipient_ids: List[uuid.UUID]) -> None:
+    """Wake open notification streams after their rows have committed."""
+    with _notification_subscribers_lock:
+        for recipient_id in recipient_ids:
+            for subscriber in list(_notification_subscribers.get(recipient_id, [])):
+                try:
+                    subscriber.put_nowait("notification")
+                except queue.Full:
+                    pass
 
 
 def _optional_uuid(value) -> Optional[uuid.UUID]:
@@ -1385,6 +1428,9 @@ def create_notification(type_: str, title: str, description: str, *, severity: s
             index_where=text("is_read = false AND fingerprint IS NOT NULL"))
         created = session.execute(statement).rowcount
         session.commit()
+        # A duplicate unread fingerprint may create zero rows, but refreshing is
+        # harmless and keeps any connected client consistent with the database.
+        publish_notification_event(recipient_ids)
         logger.info("notifications.created type=%s severity=%s count=%s case=%s evidence=%s",
                     type_, severity, created, case_uuid, evidence_uuid)
         return created
@@ -1434,7 +1480,7 @@ def notify_analysis_failed(type_: str, label: str, user_info: dict, *, case_id=N
     create_notification(
         type_, f"{label} failed", f"{label}{subject} did not complete; no results were saved.",
         severity="warning", case_id=case_id, evidence_id=evidence.id if evidence is not None else None,
-        recipients=[user_info["id"]],
+        recipients=[user_info["id"]], admins=True,
         fingerprint=f"{type_}:{evidence.id if evidence is not None else case_id or '-'}:FAILED")
 
 
@@ -1497,6 +1543,42 @@ def get_unread_notification_count(request: Request, db: Session = Depends(get_db
     user_info = get_current_user_info(request)
     count = visible_notifications_query(db, user_info).filter(Notification.is_read.is_(False)).count()
     return {"data": {"count": count}, "success": True}
+
+
+@app.get("/notifications/stream")
+def stream_notifications(request: Request):
+    """Authenticated server-sent stream that wakes the current user's browser immediately.
+
+    Notification records are always read through the normal API.  The stream contains
+    no case or evidence data, so a reconnect cannot disclose another user's alert.
+    """
+    user_info = get_current_user_info(request)
+    user_id = parse_uuid(user_info["id"], "user ID")
+    subscriber: queue.Queue = queue.Queue(maxsize=4)
+    with _notification_subscribers_lock:
+        _notification_subscribers.setdefault(user_id, []).append(subscriber)
+
+    def events():
+        try:
+            yield "event: ready\ndata: connected\n\n"
+            while True:
+                try:
+                    subscriber.get(timeout=20)
+                    yield "event: notification\ndata: refresh\n\n"
+                except queue.Empty:
+                    yield ": keepalive\n\n"
+        finally:
+            with _notification_subscribers_lock:
+                subscribers = _notification_subscribers.get(user_id, [])
+                if subscriber in subscribers:
+                    subscribers.remove(subscriber)
+                if not subscribers:
+                    _notification_subscribers.pop(user_id, None)
+
+    return StreamingResponse(events(), media_type="text/event-stream", headers={
+        "Cache-Control": "no-cache, no-transform",
+        "X-Accel-Buffering": "no",
+    })
 
 
 @app.patch("/notifications/read-all")
@@ -1625,11 +1707,15 @@ def get_cases(request: Request, search: str = None, db: Session = Depends(get_db
 
         cases = query.order_by(Case.created_at.desc()).all()
 
+        creator_ids = {case.created_by for case in cases if case.created_by}
+        creator_roles = dict(db.query(User.id, User.role).filter(User.id.in_(creator_ids)).all()) if creator_ids else {}
+
         serialized_cases = []
         for case in cases:
             row = serialize_case(case)
             row["case_number"] = row.get("case_number") or f'SA-{row["id"][:4].upper()}'
             row["status"] = "Archived" if case.is_archived else "Open"
+            row["created_by_role"] = creator_roles.get(case.created_by) or "Unassigned"
             serialized_cases.append(row)
 
         return {"data": serialized_cases}
@@ -2002,8 +2088,10 @@ def upload_evidence(
         evidence_row["duplicateOf"] = other_cases
     create_notification(
         "upload", "Evidence uploaded",
-        f"{user_info['name']} uploaded '{original_filename}' ({evidence_type}); its SHA-256 is registered on the blockchain.",
-        case_id=case_uuid, evidence_id=db_evidence.id, case_owner=True, exclude=[user_info["id"]],
+        f"{user_info['name']} uploaded '{original_filename}' ({evidence_type}).",
+        # The uploader receives confirmation; Administrators receive every system
+        # event.  The recipient selector de-duplicates a user who is both owner/admin.
+        case_id=case_uuid, evidence_id=db_evidence.id, recipients=[user_info["id"]], case_owner=True, admins=True,
         fingerprint=f"upload:{db_evidence.id}")
     logger.info("evidence.registered id=%s tx=%s", db_evidence.id, registration["transactionHash"])
     return {"data": evidence_row, "success": True}
@@ -2849,8 +2937,8 @@ def transfer_evidence_custody(evidence_id: str, body: CustodyTransferRequest, re
                         exclude=[user_info["id"]], fingerprint=fingerprint)
     create_notification("custody", "Evidence custody transferred",
                         f"{user_info['name']} transferred custody of '{file_name}' to {officer.full_name}.",
-                        case_id=evidence.case_id, evidence_id=evidence.id, case_owner=True,
-                        exclude=[user_info["id"], officer_id], fingerprint=fingerprint)
+                        case_id=evidence.case_id, evidence_id=evidence.id, recipients=[user_info["id"]],
+                        case_owner=True, admins=True, exclude=[officer_id], fingerprint=fingerprint)
     return {"data": make_json_safe(result), "success": True}
 
 
@@ -3524,8 +3612,9 @@ def run_ai_detect(req: DetectionRequest, request: Request, db: Session = Depends
         notify_analysis_failed("yolo", "Object detection", user_info, case_id=evidence_obj.case_id, evidence=evidence_obj)
         raise HTTPException(status_code=500, detail=f"Detection failed: {e}")
     finally:
-        # Always clean up temporary file if it was downloaded from storage
-        if is_remote and is_remote_download and local_temp_file and os.path.exists(local_temp_file):
+        # Always clean up a temporary copy downloaded from either legacy remote
+        # storage or the configured StorageProvider.
+        if is_remote_download and local_temp_file and os.path.exists(local_temp_file):
             try:
                 os.remove(local_temp_file)
             except Exception as e:
@@ -3553,37 +3642,53 @@ def run_ai_detect(req: DetectionRequest, request: Request, db: Session = Depends
                 "bbox": [f"{left_pct:.2f}%", f"{top_pct:.2f}%", f"{w_pct:.2f}%", f"{h_pct:.2f}%"]
             })
 
-    image_url_full = file_path if is_remote else f"http://localhost:8000/{file_path}"
-    # Use data URL for immediate, authenticated frontend display without forbidden /uploads access
-    result_data = {"objects": objects, "image_url": preview_data_url or image_url_full}
-
-    # ---------------------------------------------------------
-    # Original Code (Alisha) - Cloud Supabase Storage:
-    # det_record = {
-    #     "case_id": req.case_id,
-    #     "evidence_id": req.evidence_id,
-    #     "image_url": image_url_full,
-    #     "predictions": {"objects": objects}
-    # }
-    # supabase_admin.table("detections").insert(det_record).execute()
-    # ---------------------------------------------------------
-    # Updated: Save to local PostgreSQL database
+    # The detection microservice creates an annotated image in its transient
+    # ``best/outputs`` directory.  Copy it immediately into the configured
+    # append-only provider (R2 in cloud mode); a browser must never depend on a
+    # file remaining on a developer's laptop.
     try:
+        output_path = str(prediction.get("output_image_url") or "")
+        if not output_path.startswith("/outputs/") or ".." in output_path:
+            raise ValueError("Detection service did not return a safe annotated-output path")
+        detection_base_url = CRIME_DETECTION_SERVICE_URL.rsplit("/detect/", 1)[0]
+        annotated_response = requests.get(f"{detection_base_url}{output_path}", timeout=30)
+        if annotated_response.status_code != 200 or not annotated_response.content:
+            raise ValueError("Annotated detection output could not be read from the detection service")
+
         cid = uuid.UUID(req.case_id) if isinstance(req.case_id, str) else req.case_id
         eid = uuid.UUID(req.evidence_id) if isinstance(req.evidence_id, str) else req.evidence_id
+        analysis_key = build_storage_key(
+            cid,
+            f"analysis_detection_{uuid.uuid4().hex}.jpg",
+            uuid.uuid4(),
+        )
+        stored_output = get_storage_provider().put(
+            analysis_key,
+            annotated_response.content,
+            content_type="image/jpeg",
+        )
+        if stored_output.size != len(annotated_response.content):
+            raise ValueError("Stored annotated output size does not match the generated file")
         det_obj = Detection(
             case_id=cid,
             evidence_id=eid,
-            image_url=image_url_full,
-            predictions={"objects": objects}
+            image_url=analysis_key,
+            predictions={"objects": objects, "annotated_sha256": stored_output.sha256}
         )
         db.add(det_obj)
         db.commit()
-        detection_saved = True
+        db.refresh(det_obj)
     except Exception as e:
         db.rollback()
-        detection_saved = False
-        print(f"[WARN] Failed to save detection record to local DB: {e}")
+        logger.exception("detection.persistence_failed evidence=%s", req.evidence_id)
+        raise HTTPException(status_code=502, detail=f"Detection completed but its result could not be durably stored: {e}")
+
+    result_data = {
+        "id": str(det_obj.id),
+        "objects": objects,
+        "image_url": f"/analysis-output/detection/{det_obj.id}",
+        "processed_at": det_obj.created_at.isoformat().replace("+00:00", "Z") if det_obj.created_at else None,
+    }
 
     # Audit log for successful detection
     write_audit_log(
@@ -3593,13 +3698,33 @@ def run_ai_detect(req: DetectionRequest, request: Request, db: Session = Depends
         metadata={"evidence_id": req.evidence_id, "objects_found": len(objects)},
         db=db
     )
-    if detection_saved:
-        create_notification("yolo", "Object detection complete",
-                            f"YOLO analysis of '{evidence_obj.file_name or 'Evidence'}' found {len(objects)} object(s).",
-                            case_id=evidence_obj.case_id, evidence_id=evidence_obj.id,
-                            recipients=[user_info["id"]], case_owner=True)
+    create_notification("yolo", "Object detection complete",
+                        f"YOLO analysis of '{evidence_obj.file_name or 'Evidence'}' found {len(objects)} object(s).",
+                        case_id=evidence_obj.case_id, evidence_id=evidence_obj.id,
+                        recipients=[user_info["id"]], case_owner=True, admins=True)
 
     return {"data": result_data}
+
+
+@app.get("/analysis-output/detection/{detection_id}")
+def download_detection_output(detection_id: str, request: Request, db: Session = Depends(get_db)):
+    """Return a stored annotated image only to users authorised for its case."""
+    user_info = get_current_user_info(request)
+    record = db.query(Detection).filter(Detection.id == parse_uuid(detection_id, "detection ID")).first()
+    if not record:
+        raise HTTPException(status_code=404, detail="Detection result not found")
+    if record.case_id:
+        check_case_access(str(record.case_id), user_info, db)
+    elif not is_admin(user_info):
+        raise HTTPException(status_code=403, detail="Administrator access required")
+    try:
+        stream = get_storage_provider().get(record.image_url)
+        image = stream.read()
+        stream.close()
+    except Exception as exc:
+        logger.error("detection.output_read_failed detection=%s error=%s", detection_id, exc)
+        raise HTTPException(status_code=502, detail="Stored annotated output is unavailable")
+    return Response(content=image, media_type="image/jpeg")
 
 @app.get("/ai/detect/case/{case_id}")
 def get_case_detections(case_id: str, request: Request, db: Session = Depends(get_db)):
@@ -4020,6 +4145,30 @@ async def analyze_audio_gateway(
             raise HTTPException(status_code=resp.status_code, detail=f"Audio analysis service error: {resp.text}")
 
         result_data = resp.json()
+        # Persist the complete structured result, not merely its audit summary.
+        # This intentionally happens before the response is sent: an analysis is
+        # not considered complete unless its outcome is retained for the case.
+        audio_result = AudioForensicsResult(
+            case_id=uuid.UUID(target_case_id) if target_case_id else None,
+            evidence_id=evidence_record.id if evidence_record else None,
+            analysed_by=_optional_uuid(user_info.get("id")),
+            filename=upload_file.filename or "audio.wav",
+            content_type=upload_file.content_type,
+            source_sha256=hashlib.sha256(contents).hexdigest(),
+            result=result_data,
+            overall_status=result_data.get("overall_status") or result_data.get("audio_status"),
+            duration_seconds=result_data.get("duration"),
+            sample_rate=result_data.get("sample_rate"),
+        )
+        try:
+            db.add(audio_result)
+            db.commit()
+            db.refresh(audio_result)
+        except Exception as exc:
+            db.rollback()
+            logger.exception("audio.persistence_failed evidence=%s", clean_evidence_id)
+            raise HTTPException(status_code=502, detail=f"Audio analysis completed but its result could not be durably stored: {exc}")
+
         action_name = "Audio Forensics Analysis" if target_case_id else "Audio Forensics Analysis (Ad-hoc)"
         write_audit_log(
             user_id=user_info["id"],
@@ -4036,11 +4185,38 @@ async def analyze_audio_gateway(
             },
             db=db
         )
-        return result_data
+        create_notification(
+            "audio", "Audio analysis complete",
+            f"Audio analysis of '{audio_result.filename}' was saved to the case.",
+            case_id=audio_result.case_id, evidence_id=audio_result.evidence_id,
+            recipients=[user_info["id"]], case_owner=bool(audio_result.case_id), admins=True,
+        )
+        return {**result_data, "result_id": str(audio_result.id), "stored": True}
     except HTTPException:
         raise
     except requests.RequestException as e:
         raise HTTPException(status_code=502, detail=f"Failed to communicate with audio forensics microservice: {str(e)}")
+
+
+@app.get("/ai/audio/case/{case_id}")
+def get_case_audio_results(case_id: str, request: Request, db: Session = Depends(get_db)):
+    """Return prior durable audio-analysis results for an authorised case user."""
+    user_info = get_current_user_info(request)
+    case_uuid = parse_uuid(case_id, "case ID")
+    check_case_access(str(case_uuid), user_info, db)
+    rows = (db.query(AudioForensicsResult)
+            .filter(AudioForensicsResult.case_id == case_uuid)
+            .order_by(AudioForensicsResult.created_at.desc())
+            .all())
+    return {"data": [{
+        "id": str(row.id), "case_id": str(row.case_id) if row.case_id else None,
+        "evidence_id": str(row.evidence_id) if row.evidence_id else None,
+        "filename": row.filename, "content_type": row.content_type,
+        "source_sha256": row.source_sha256, "overall_status": row.overall_status,
+        "duration_seconds": row.duration_seconds, "sample_rate": row.sample_rate,
+        "result": row.result,
+        "created_at": row.created_at.isoformat().replace("+00:00", "Z") if row.created_at else None,
+    } for row in rows], "success": True}
 
 
 
@@ -4415,7 +4591,7 @@ def bns_store(payload: BNSStore, request: Request, db: Session = Depends(get_db)
     )
     create_notification("bns", "BNS classification complete",
                         f"{payload.crime_type}: {len(payload.sections)} BNS section(s) saved to the case.",
-                        case_id=db_pred.case_id, recipients=[user_info["id"]], case_owner=True)
+                        case_id=db_pred.case_id, recipients=[user_info["id"]], case_owner=True, admins=True)
 
     data = {
         "id": str(db_pred.id),

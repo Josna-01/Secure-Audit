@@ -102,21 +102,19 @@ export default function Dashboard() {
       label: 'Active Investigations',
       value: stats?.active ?? '—',
       sub: 'In progress',
-      trend: '+12.5%',
+      trend: 'Live total',
       color: 'var(--blue)',
       icon: 'folder',
       page: '/cases',
-      percent: 75
     },
     {
       label: 'Evidence Chain Assets',
       value: stats?.total_evidence ?? '—',
       sub: 'Cryptographically registered',
-      trend: '+8.2%',
+      trend: 'Live total',
       color: 'var(--green)',
       icon: 'cube',
       page: '/evidence',
-      percent: 92
     },
     {
       label: 'Tamper Alerts',
@@ -126,17 +124,15 @@ export default function Dashboard() {
       color: (stats?.tamper_alerts ?? 0) > 0 ? 'var(--red)' : 'var(--green)',
       icon: 'shield',
       page: (stats?.tamper_alerts ?? 0) > 0 ? '/evidence' : '_notif',
-      percent: (stats?.tamper_alerts ?? 0) > 0 ? 100 : 0
     },
     {
       label: 'BNS Legal Predictions',
       value: stats?.bns_classified ?? '—',
       sub: 'AI Statutory classifications',
-      trend: '+15.3%',
+      trend: 'Live total',
       color: 'var(--purple)',
       icon: 'law',
       page: '/bns',
-      percent: 68
     }
   ] : [
     {
@@ -383,7 +379,6 @@ export default function Dashboard() {
             </div>
 
             <div>
-              <ProgressBar value={s.percent} color={s.color} height={4} />
               <div style={{ fontSize: '11px', color: 'var(--text3)', marginTop: '8px' }}>{s.sub}</div>
             </div>
           </div>

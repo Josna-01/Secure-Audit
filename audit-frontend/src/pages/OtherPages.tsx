@@ -13,6 +13,30 @@ import * as THREE from 'three'
 import { OrbitControls } from 'three/examples/jsm/controls/OrbitControls.js'
 import { GLTFLoader } from 'three/examples/jsm/loaders/GLTFLoader.js'
 
+const CASE_ROLE_OPTIONS = ['All Roles', 'Admin', 'Investigator', 'Unassigned']
+
+function filterCasesByCreatorRole(cases: Case[], role: string) {
+  return role === 'All Roles' ? cases : cases.filter((item) => (item.created_by_role || 'Unassigned') === role)
+}
+
+function CaseCreatorRoleFilter({ value, onChange }: { value: string; onChange: (value: string) => void }) {
+  const { user } = useAuth()
+  if (user?.role?.toLowerCase() !== 'admin') return null
+  return <div style={{ marginBottom: '8px' }}>
+    <label style={{ fontSize: '10px', color: 'var(--text3)', display: 'block', marginBottom: '4px', textTransform: 'uppercase', letterSpacing: '.4px' }}>Creator Role</label>
+    <select value={value} onChange={(event) => onChange(event.target.value)} style={{ width: '100%', background: 'var(--bg3)', border: '1px solid var(--border)', borderRadius: 'var(--r)', padding: '7px 10px', fontSize: '12px', color: 'var(--text)', fontFamily: 'var(--font)', outline: 'none' }}>
+      {CASE_ROLE_OPTIONS.map((role) => <option key={role}>{role}</option>)}
+    </select>
+  </div>
+}
+
+function CaseSearchResult({ item }: { item: Case }) {
+  return <>
+    <span style={{ fontFamily: 'var(--mono)', color: 'var(--blue)', fontWeight: 600 }}>{item.case_number}</span> — {item.title}
+    <div style={{ marginTop: '2px', fontSize: '10px', color: 'var(--text3)' }}>{item.created_by_role || 'Unassigned'} · {item.created_by_name || 'Unknown user'}</div>
+  </>
+}
+
 // ── EVIDENCE ──────────────────────────────────────────────────────────────
 export function EvidencePage() {
   const navigate = useNavigate()
@@ -24,6 +48,7 @@ export function EvidencePage() {
   const [caseSearch, setCaseSearch] = useState('')
   const [selectedCase, setSelectedCase] = useState<Case | null>(null)
   const [caseResults, setCaseResults] = useState<Case[]>([])
+  const [caseRoleFilter, setCaseRoleFilter] = useState('All Roles')
   const [evidenceType, setEvidenceType] = useState('Image')
   const [language, setLanguage] = useState('auto')
   const [description, setDescription] = useState('')
@@ -34,6 +59,7 @@ export function EvidencePage() {
   const [err, setErr] = useState('')
   const [verifyResult, setVerifyResult] = useState<Record<string, string>>({})
   const fileRef = useRef<HTMLInputElement>(null)
+  const visibleCaseResults = filterCasesByCreatorRole(caseResults, caseRoleFilter)
 
   const searchCases = async (q: string) => {
     if (q.length < 2) { setCaseResults([]); return }
@@ -105,6 +131,7 @@ export function EvidencePage() {
             {/* Case search */}
             <div style={{ marginBottom: '12px' }}>
               <label style={{ fontSize: '11px', color: 'var(--text3)', display: 'block', marginBottom: '4px', textTransform: 'uppercase', letterSpacing: '.4px' }}>Search / Link to Case</label>
+              <CaseCreatorRoleFilter value={caseRoleFilter} onChange={setCaseRoleFilter} />
               <div style={{ position: 'relative' }}>
                 <input
                   value={caseSearch}
@@ -113,14 +140,14 @@ export function EvidencePage() {
                   style={{ width: '100%', paddingLeft: '10px', background: 'var(--bg3)', border: '1px solid var(--border)', borderRadius: 'var(--r)', padding: '7px 10px', fontSize: '13px', color: 'var(--text)', fontFamily: 'var(--font)', outline: 'none' }}
                 />
               </div>
-              {caseResults.length > 0 && !selectedCase && (
+              {visibleCaseResults.length > 0 && !selectedCase && (
                 <div style={{ background: 'var(--bg2)', border: '1px solid var(--border)', borderRadius: 'var(--r)', marginTop: '4px', overflow: 'hidden' }}>
-                  {caseResults.map((c) => (
+                  {visibleCaseResults.map((c) => (
                     <div key={c.id} onClick={() => { setSelectedCase(c); setCaseSearch(''); setCaseResults([]) }}
                       style={{ padding: '8px 10px', cursor: 'pointer', fontSize: '12px', borderBottom: '1px solid var(--border)' }}
                       onMouseEnter={(e) => { e.currentTarget.style.background = 'var(--bg3)' }}
                       onMouseLeave={(e) => { e.currentTarget.style.background = 'transparent' }}>
-                      <span style={{ fontFamily: 'var(--mono)', color: 'var(--blue)' }}>{c.case_number}</span> — {c.title}
+                      <CaseSearchResult item={c} />
                     </div>
                   ))}
                 </div>
@@ -213,6 +240,7 @@ export function DetectionPage() {
   const [selectedCase, setSelectedCase] = useState<Case | null>(null)
   const [caseSearch, setCaseSearch] = useState('')
   const [caseResults, setCaseResults] = useState<Case[]>([])
+  const [caseRoleFilter, setCaseRoleFilter] = useState('All Roles')
   const [evidenceFiles, setEvidenceFiles] = useState<Evidence[]>([])
   const [selectedEvidence, setSelectedEvidence] = useState<string>('')
   const [imgSource, setImgSource] = useState<'upload' | 'evidence'>('upload')
@@ -221,6 +249,7 @@ export function DetectionPage() {
   const [result, setResult] = useState<import('../types').DetectionResult | null>(null)
   const [err, setErr] = useState('')
   const fileRef = useRef<HTMLInputElement>(null)
+  const visibleCaseResults = filterCasesByCreatorRole(caseResults, caseRoleFilter)
 
   const searchCases = async (q: string) => {
     if (q.length < 2) { setCaseResults([]); return }
@@ -246,7 +275,15 @@ export function DetectionPage() {
         evId = upRes.data.id
       }
       const res = await api.runDetection(evId, selectedCase.id)
-      setResult(res.data)
+      // The annotated image is stored in R2 and requires the current JWT to
+      // retrieve it. Turn the authenticated response into a temporary browser
+      // URL for preview; the permanent R2 key remains in PostgreSQL.
+      let storedPreviewUrl = res.data.image_url
+      if (res.data.id) {
+        const annotatedImage = await api.downloadDetectionOutput(res.data.id)
+        storedPreviewUrl = URL.createObjectURL(annotatedImage)
+      }
+      setResult({ ...res.data, image_url: storedPreviewUrl })
     } catch (error: any) {
       console.error("[DEBUG] Detection API Error:", error.response?.data || error)
       const errorDetail = error.response?.data?.detail || error.message || 'Unknown error'
@@ -266,10 +303,11 @@ export function DetectionPage() {
             {/* Case link */}
             <div style={{ marginBottom: '12px' }}>
               <label style={{ fontSize: '11px', color: 'var(--text3)', display: 'block', marginBottom: '4px', textTransform: 'uppercase', letterSpacing: '.4px' }}>Case</label>
+              <CaseCreatorRoleFilter value={caseRoleFilter} onChange={setCaseRoleFilter} />
               <input value={caseSearch} onChange={(e) => { setCaseSearch(e.target.value); searchCases(e.target.value) }} placeholder="Search case..." style={{ width: '100%', background: 'var(--bg3)', border: '1px solid var(--border)', borderRadius: 'var(--r)', padding: '7px 10px', fontSize: '13px', color: 'var(--text)', fontFamily: 'var(--font)', outline: 'none' }} />
-              {caseResults.length > 0 && !selectedCase && (
+              {visibleCaseResults.length > 0 && !selectedCase && (
                 <div style={{ background: 'var(--bg2)', border: '1px solid var(--border)', borderRadius: 'var(--r)', marginTop: '4px' }}>
-                  {caseResults.map((c) => <div key={c.id} onClick={() => selectCase(c)} style={{ padding: '8px 10px', cursor: 'pointer', fontSize: '12px', borderBottom: '1px solid var(--border)' }} onMouseEnter={(e) => { e.currentTarget.style.background = 'var(--bg3)' }} onMouseLeave={(e) => { e.currentTarget.style.background = 'transparent' }}><span style={{ fontFamily: 'var(--mono)', color: 'var(--blue)' }}>{c.case_number}</span> — {c.title}</div>)}
+                  {visibleCaseResults.map((c) => <div key={c.id} onClick={() => selectCase(c)} style={{ padding: '8px 10px', cursor: 'pointer', fontSize: '12px', borderBottom: '1px solid var(--border)' }} onMouseEnter={(e) => { e.currentTarget.style.background = 'var(--bg3)' }} onMouseLeave={(e) => { e.currentTarget.style.background = 'transparent' }}><CaseSearchResult item={c} /></div>)}
                 </div>
               )}
               {selectedCase && <div style={{ marginTop: '6px', fontSize: '12px', color: 'var(--blue)', fontWeight: 500 }}>{selectedCase.case_number} — {selectedCase.title}</div>}
@@ -402,6 +440,7 @@ export function BNSPage() {
   const [caseSearch, setCaseSearch] = useState('')
   const [selectedCase, setSelectedCase] = useState<Case | null>(null)
   const [caseResults, setCaseResults] = useState<Case[]>([])
+  const [caseRoleFilter, setCaseRoleFilter] = useState('All Roles')
   const [firText, setFirText] = useState('')
   const [threshold, setThreshold] = useState<number>(0.35)
   const [language, setLanguage] = useState('auto')
@@ -411,6 +450,7 @@ export function BNSPage() {
   const [filterCategory, setFilterCategory] = useState<string>('all')
   const [accepted, setAccepted] = useState(false)
   const [err, setErr] = useState('')
+  const visibleCaseResults = filterCasesByCreatorRole(caseResults, caseRoleFilter)
 
   const searchCases = async (q: string) => {
     if (q.length < 2) { setCaseResults([]); return }
@@ -485,15 +525,16 @@ export function BNSPage() {
 
             <div style={{ marginBottom: '12px' }}>
               <label style={{ fontSize: '11px', color: 'var(--text3)', display: 'block', marginBottom: '4px', textTransform: 'uppercase', letterSpacing: '.4px' }}>Case Reference</label>
+              <CaseCreatorRoleFilter value={caseRoleFilter} onChange={setCaseRoleFilter} />
               <input
                 value={caseSearch}
                 onChange={(e) => { setCaseSearch(e.target.value); searchCases(e.target.value) }}
                 placeholder="Search case number or title to auto-fill FIR..."
                 style={{ width: '100%', boxSizing: 'border-box', background: 'var(--bg3)', border: '1px solid var(--border)', borderRadius: 'var(--r)', padding: '8px 12px', fontSize: '13px', color: 'var(--text)', fontFamily: 'var(--font)', outline: 'none' }}
               />
-              {caseResults.length > 0 && !selectedCase && (
+              {visibleCaseResults.length > 0 && !selectedCase && (
                 <div style={{ background: 'var(--bg2)', border: '1px solid var(--border)', borderRadius: 'var(--r)', marginTop: '4px', maxHeight: '180px', overflowY: 'auto' }}>
-                  {caseResults.map((c) => (
+                  {visibleCaseResults.map((c) => (
                     <div
                       key={c.id}
                       onClick={() => selectCase(c)}
@@ -501,7 +542,7 @@ export function BNSPage() {
                       onMouseEnter={(e) => { e.currentTarget.style.background = 'var(--bg3)' }}
                       onMouseLeave={(e) => { e.currentTarget.style.background = 'transparent' }}
                     >
-                      <span style={{ fontFamily: 'var(--mono)', color: 'var(--blue)', fontWeight: 600 }}>{c.case_number}</span> — {c.title}
+                      <CaseSearchResult item={c} />
                     </div>
                   ))}
                 </div>
@@ -923,6 +964,8 @@ export function OCRPage() {
   const [caseSearch, setCaseSearch] = useState('')
   const [selectedCase, setSelectedCase] = useState<Case | null>(null)
   const [caseResults, setCaseResults] = useState<Case[]>([])
+  const [caseRoleFilter, setCaseRoleFilter] = useState('All Roles')
+  const visibleCaseResults = filterCasesByCreatorRole(caseResults, caseRoleFilter)
 
 
   // Search Tab States
@@ -1034,15 +1077,16 @@ export function OCRPage() {
 
               <div style={{ marginBottom: '12px' }}>
                 <label style={{ fontSize: '11px', color: 'var(--text3)', display: 'block', marginBottom: '4px', textTransform: 'uppercase', letterSpacing: '.4px' }}>Case Reference</label>
+                <CaseCreatorRoleFilter value={caseRoleFilter} onChange={setCaseRoleFilter} />
                 <input
                   value={caseSearch}
                   onChange={(e) => { setCaseSearch(e.target.value); searchCases(e.target.value) }}
                   placeholder="Search case by title or number..."
                   style={{ width: '100%', background: 'var(--bg3)', border: '1px solid var(--border)', borderRadius: 'var(--r)', padding: '7px 10px', fontSize: '13px', color: 'var(--text)', fontFamily: 'var(--font)', outline: 'none' }}
                 />
-                {caseResults.length > 0 && !selectedCase && (
+                {visibleCaseResults.length > 0 && !selectedCase && (
                   <div style={{ background: 'var(--bg2)', border: '1px solid var(--border)', borderRadius: 'var(--r)', marginTop: '4px' }}>
-                    {caseResults.map((c) => (
+                    {visibleCaseResults.map((c) => (
                       <div
                         key={c.id}
                         onClick={() => { setSelectedCase(c); setCaseSearch(''); setCaseResults([]) }}
@@ -1050,7 +1094,7 @@ export function OCRPage() {
                         onMouseEnter={(e) => { e.currentTarget.style.background = 'var(--bg3)' }}
                         onMouseLeave={(e) => { e.currentTarget.style.background = 'transparent' }}
                       >
-                        <span style={{ fontFamily: 'var(--mono)', color: 'var(--blue)' }}>{c.case_number}</span> — {c.title}
+                        <CaseSearchResult item={c} />
                       </div>
                     ))}
                   </div>
@@ -1381,11 +1425,14 @@ function GLBViewer({ modelUrl, jobId, wireframe, resetKey }: { modelUrl?: string
 
 // ── 3D SCENE RECONSTRUCTION (PHOTOGRAMMETRY) PAGE ────────────────────────
 export function Photo3DPage() {
+  const { user } = useAuth()
+  const isAdmin = user?.role?.toLowerCase() === 'admin'
   const [searchParams] = useSearchParams()
   const urlCaseId = searchParams.get('case_id')
   const urlEvidenceId = searchParams.get('evidence_id')
 
   const [cases, setCases] = useState<Case[]>([])
+  const [caseRoleFilter, setCaseRoleFilter] = useState('All Roles')
   const [selectedCaseId, setSelectedCaseId] = useState<string>('')
   const [evidenceList, setEvidenceList] = useState<Evidence[]>([])
   const [selectedEvidenceId, setSelectedEvidenceId] = useState<string>('')
@@ -1418,6 +1465,18 @@ export function Photo3DPage() {
     window.addEventListener('keydown', handleKeyDown)
     return () => window.removeEventListener('keydown', handleKeyDown)
   }, [])
+
+  const caseRoles = Array.from(new Set(cases.map((item) => item.created_by_role || 'Unassigned'))).sort()
+  const visibleCases = !isAdmin || caseRoleFilter === 'All Roles'
+    ? cases
+    : cases.filter((item) => (item.created_by_role || 'Unassigned') === caseRoleFilter)
+
+  useEffect(() => {
+    if (!isAdmin || caseRoleFilter === 'All Roles') return
+    if (!visibleCases.some((item) => item.id === selectedCaseId)) {
+      setSelectedCaseId(visibleCases[0]?.id || '')
+    }
+  }, [caseRoleFilter, cases, isAdmin])
 
   useEffect(() => {
     if (isExpanded) {
@@ -1818,7 +1877,20 @@ export function Photo3DPage() {
       {/* SECTION 3 — SELECT EVIDENCE */}
       <Card style={{ marginBottom: '24px' }}>
         <CardTitle>Select Evidence</CardTitle>
-        <div style={{ display: 'grid', gridTemplateColumns: '1fr 1fr', gap: '16px', marginBottom: '16px' }}>
+        <div style={{ display: 'grid', gridTemplateColumns: isAdmin ? '0.7fr 1.3fr 1.3fr' : '1fr 1fr', gap: '16px', marginBottom: '16px' }}>
+          {isAdmin && <div>
+            <label style={{ fontSize: '11px', color: 'var(--text3)', display: 'block', marginBottom: '4px', textTransform: 'uppercase', letterSpacing: '.4px' }}>
+              Creator Role
+            </label>
+            <select
+              value={caseRoleFilter}
+              onChange={(e) => setCaseRoleFilter(e.target.value)}
+              style={{ width: '100%', background: 'var(--bg3)', border: '1px solid var(--border)', borderRadius: 'var(--r)', padding: '8px 12px', fontSize: '13px', color: 'var(--text)', outline: 'none' }}
+            >
+              <option>All Roles</option>
+              {caseRoles.map((role) => <option key={role}>{role}</option>)}
+            </select>
+          </div>}
           <div>
             <label style={{ fontSize: '11px', color: 'var(--text3)', display: 'block', marginBottom: '4px', textTransform: 'uppercase', letterSpacing: '.4px' }}>
               Select Case
@@ -1831,10 +1903,10 @@ export function Photo3DPage() {
                 borderRadius: 'var(--r)', padding: '8px 12px', fontSize: '13px', color: 'var(--text)', outline: 'none'
               }}
             >
-              {cases.length === 0 ? (
+              {visibleCases.length === 0 ? (
                 <option value="">No cases found</option>
               ) : (
-                cases.map(c => <option key={c.id} value={c.id}>{c.case_number} — {c.title}</option>)
+                visibleCases.map(c => <option key={c.id} value={c.id}>{c.case_number} — {c.title} — {c.created_by_role || 'Unassigned'}: {c.created_by_name || 'Unknown user'}</option>)
               )}
             </select>
           </div>
@@ -3116,6 +3188,8 @@ export function GraphPage() {
   const [loading, setLoading] = useState(true)
   const [caseSearch, setCaseSearch] = useState('')
   const [caseResults, setCaseResults] = useState<import('../types').Case[]>([])
+  const [caseRoleFilter, setCaseRoleFilter] = useState('All Roles')
+  const visibleCaseResults = filterCasesByCreatorRole(caseResults, caseRoleFilter)
 
   const searchCases = async (q: string) => {
     if (q.length < 2) { setCaseResults([]); return }
@@ -3141,17 +3215,18 @@ export function GraphPage() {
     <AppShell title="POLE Relationship Graph">
       {!routeId && (
         <div style={{ marginBottom: '16px', position: 'relative', zIndex: 10 }}>
+          <CaseCreatorRoleFilter value={caseRoleFilter} onChange={setCaseRoleFilter} />
           <input
             value={caseSearch}
             onChange={(e) => { setCaseSearch(e.target.value); searchCases(e.target.value) }}
             placeholder="Search case by ID, title, or victim name to view graph..."
             style={{ width: '100%', background: 'var(--bg2)', border: '1px solid var(--border)', borderRadius: 'var(--r)', padding: '10px 14px', fontSize: '13px', color: 'var(--text)', fontFamily: 'var(--font)', outline: 'none' }}
           />
-          {caseResults.length > 0 && (
+          {visibleCaseResults.length > 0 && (
             <div style={{ position: 'absolute', top: '100%', left: 0, right: 0, background: 'var(--bg3)', border: '1px solid var(--border)', borderRadius: 'var(--r)', marginTop: '4px', overflow: 'hidden' }}>
-              {caseResults.map((c) => (
+              {visibleCaseResults.map((c) => (
                 <div key={c.id} onClick={() => { setSelectedCaseId(c.id); setCaseSearch(''); setCaseResults([]) }} style={{ padding: '8px 14px', cursor: 'pointer', fontSize: '12px', borderBottom: '1px solid var(--border)' }} onMouseEnter={(e) => { e.currentTarget.style.background = 'var(--bg4)' }} onMouseLeave={(e) => { e.currentTarget.style.background = 'transparent' }}>
-                  <span style={{ fontFamily: 'var(--mono)', color: 'var(--blue)' }}>{c.case_number}</span> — {c.title}
+                  <CaseSearchResult item={c} />
                 </div>
               ))}
             </div>

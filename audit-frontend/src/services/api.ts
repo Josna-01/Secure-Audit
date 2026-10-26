@@ -211,6 +211,12 @@ class ApiService {
     return data
   }
 
+  /** Fetch an R2-backed annotated image through the authenticated API gateway. */
+  async downloadDetectionOutput(detectionId: string) {
+    const res = await this.client.get<Blob>(`/analysis-output/detection/${detectionId}`, { responseType: 'blob' })
+    return res.data
+  }
+
   // ── GRAPH ───────────────────────────────────────────────────────────────
   async getCaseGraph(caseId: string) {
     const { data } = await this.client.get<any>(`/cases/${caseId}/graph`)
@@ -332,14 +338,55 @@ class ApiService {
   }
 
   // ── NOTIFICATIONS ────────────────────────────────────────────────────────
-  async getNotifications() {
-    const { data } = await this.client.get<ApiResponse<Notification[]>>('/notifications')
+  async getNotifications(unreadOnly = false) {
+    const { data } = await this.client.get<ApiResponse<Notification[]>>('/notifications', {
+      params: unreadOnly ? { unread_only: true } : undefined
+    })
     return data
   }
 
   async getUnreadNotificationCount() {
     const { data } = await this.client.get<ApiResponse<{ count: number }>>('/notifications/unread-count')
     return data
+  }
+
+  // Fetch streaming is used rather than EventSource because the API requires the
+  // existing Bearer token.  The stream only signals that the normal notification
+  // endpoints should be refreshed; it never carries sensitive case data.
+  subscribeToNotificationEvents(onNotification: () => void) {
+    const controller = new AbortController()
+
+    const listen = async () => {
+      while (!controller.signal.aborted) {
+        try {
+          const token = localStorage.getItem('sa_token')
+          const response = await fetch(`${BASE_URL}/notifications/stream`, {
+            headers: token ? { Authorization: `Bearer ${token}` } : {},
+            signal: controller.signal,
+          })
+          if (!response.ok || !response.body) throw new Error('Notification stream unavailable')
+
+          const reader = response.body.getReader()
+          const decoder = new TextDecoder()
+          let pending = ''
+          while (!controller.signal.aborted) {
+            const { done, value } = await reader.read()
+            if (done) break
+            pending += decoder.decode(value, { stream: true })
+            const messages = pending.split('\n\n')
+            pending = messages.pop() || ''
+            if (messages.some((message) => message.includes('event: notification'))) onNotification()
+          }
+        } catch {
+          // A temporary disconnection is retried; the ordinary polling fallback
+          // continues to keep the bell correct while reconnecting.
+        }
+        if (!controller.signal.aborted) await new Promise((resolve) => window.setTimeout(resolve, 1000))
+      }
+    }
+
+    void listen()
+    return () => controller.abort()
   }
 
   async markNotificationRead(id: string) {

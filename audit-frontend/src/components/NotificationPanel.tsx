@@ -10,6 +10,7 @@ const TYPE_META: Record<string, { icon: string; color: string }> = {
   upload:  { icon: '[^]', color: 'var(--blue)'    },
   yolo:    { icon: '[*]', color: 'var(--amber)'   },
   custody: { icon: '[>]', color: 'var(--blue)'    },
+  audio:   { icon: '[~]', color: 'var(--purple)'  },
   system:  { icon: '[i]', color: 'var(--text3)'   }
 }
 
@@ -19,12 +20,32 @@ const SEVERITY_COLOR: Record<string, string> = {
 
 // Fallback when a notification has no link of its own
 const TYPE_ROUTE: Record<string, string> = {
-  tamper: '/evidence', bns: '/bns', upload: '/evidence', yolo: '/detection', custody: '/evidence', system: '/audit'
+  tamper: '/evidence', bns: '/bns', upload: '/evidence', yolo: '/detection', custody: '/evidence', audio: '/audio', system: '/audit'
 }
 
-interface Props { open: boolean; onClose: () => void; onUnreadChange?: (count: number) => void }
+function notificationUser(notification: Notification) {
+  const match = notification.description.match(/^(.+?)\s+(uploaded|transferred)\b/i)
+  return match?.[1] || (notification.type === 'system' || notification.type === 'tamper' ? 'System' : 'Forensic service')
+}
 
-export default function NotificationPanel({ open, onClose, onUnreadChange }: Props) {
+function notificationDetails(notification: Notification) {
+  if (notification.type === 'upload') {
+    const file = notification.description.match(/'([^']+)'\s*\(([^)]+)\)/)
+    if (file) return `${file[1]} · ${file[2]}`
+  }
+  return notification.description
+}
+
+function notificationDate(value: string) {
+  return new Date(value).toLocaleString('en-IN', {
+    day: '2-digit', month: 'short', year: 'numeric',
+    hour: '2-digit', minute: '2-digit', second: '2-digit'
+  })
+}
+
+interface Props { open: boolean; refreshKey: number; onClose: () => void; onUnreadChange?: (count: number) => void }
+
+export default function NotificationPanel({ open, refreshKey, onClose, onUnreadChange }: Props) {
   const navigate = useNavigate()
   const [notifications, setNotifications] = useState<Notification[]>([])
   const [loading, setLoading] = useState(false)
@@ -32,29 +53,37 @@ export default function NotificationPanel({ open, onClose, onUnreadChange }: Pro
   useEffect(() => {
     if (!open) return
     setLoading(true)
-    api.getNotifications()
+    api.getNotifications(true)
       .then((res) => {
         setNotifications(res.data)
         onUnreadChange?.(res.data.filter((n) => !n.read).length)
       })
       .catch(() => {})
       .finally(() => setLoading(false))
-  }, [open])
+  }, [open, refreshKey])
 
   const handleClick = async (n: Notification) => {
     if (!n.read) {
-      await api.markNotificationRead(n.id).catch(() => {})
-      const next = notifications.map((x) => x.id === n.id ? { ...x, read: true } : x)
+      try {
+        await api.markNotificationRead(n.id)
+      } catch {
+        return
+      }
+      const next = notifications.filter((x) => x.id !== n.id)
       setNotifications(next)
-      onUnreadChange?.(next.filter((x) => !x.read).length)
+      onUnreadChange?.(next.length)
     }
     onClose()
     navigate(n.link || TYPE_ROUTE[n.type] || '/dashboard')
   }
 
   const markAll = async () => {
-    await api.markAllNotificationsRead().catch(() => {})
-    setNotifications((prev) => prev.map((x) => ({ ...x, read: true })))
+    try {
+      await api.markAllNotificationsRead()
+    } catch {
+      return
+    }
+    setNotifications([])
     onUnreadChange?.(0)
   }
 
@@ -63,7 +92,7 @@ export default function NotificationPanel({ open, onClose, onUnreadChange }: Pro
   return (
     <>
       <div style={{ position: 'fixed', inset: 0, zIndex: 140 }} onClick={onClose} />
-      <div style={{ position: 'fixed', top: '56px', right: '16px', width: '360px', background: 'var(--bg2)', border: '1px solid var(--border)', borderRadius: 'var(--r2)', zIndex: 150, boxShadow: '0 8px 24px rgba(0,0,0,.3)', maxHeight: '520px', overflow: 'hidden', display: 'flex', flexDirection: 'column' }}>
+      <div style={{ position: 'fixed', top: '84px', right: '16px', width: 'min(440px, calc(100vw - 32px))', background: 'var(--bg2)', border: '1px solid var(--border)', borderRadius: 'var(--r2)', zIndex: 150, boxShadow: '0 8px 24px rgba(0,0,0,.3)', maxHeight: '560px', overflow: 'hidden', display: 'flex', flexDirection: 'column' }}>
         {/* Header */}
         <div style={{ padding: '12px 14px', borderBottom: '1px solid var(--border)', display: 'flex', justifyContent: 'space-between', alignItems: 'center', flexShrink: 0 }}>
           <div style={{ display: 'flex', alignItems: 'center', gap: '8px' }}>
@@ -104,10 +133,19 @@ export default function NotificationPanel({ open, onClose, onUnreadChange }: Pro
                       <span style={{ fontSize: '12px', fontWeight: !n.read ? 600 : 400, color: 'var(--text)' }}>{n.title}</span>
                       {!n.read && <div style={{ width: '7px', height: '7px', borderRadius: '50%', background: 'var(--blue)', flexShrink: 0 }} />}
                     </div>
-                    <div style={{ fontSize: '11px', color: 'var(--text2)', lineHeight: 1.4, marginBottom: '3px', whiteSpace: 'pre-line' }}>{n.description}</div>
-                    <div style={{ display: 'flex', alignItems: 'center', gap: '8px', fontSize: '10px', color: 'var(--text3)' }}>
-                      <span>{new Date(n.created_at).toLocaleString('en-IN', { day: '2-digit', month: 'short', hour: '2-digit', minute: '2-digit' })}</span>
-                      {n.case_id && <span style={{ fontFamily: 'var(--mono)', color: 'var(--blue)' }}>{n.case_number || n.case_id}</span>}
+                    <div style={{ display: 'grid', gridTemplateColumns: '76px minmax(0, 1fr)', gap: '4px 8px', marginTop: '7px', fontSize: '11px', lineHeight: 1.4 }}>
+                      <span style={{ color: 'var(--text3)' }}>User</span>
+                      <span style={{ color: 'var(--text)', fontWeight: 500 }}>{notificationUser(n)}</span>
+                      <span style={{ color: 'var(--text3)' }}>Operation</span>
+                      <span style={{ color: 'var(--text2)' }}>{n.title}</span>
+                      {n.case_id && <>
+                        <span style={{ color: 'var(--text3)' }}>Case number</span>
+                        <span style={{ fontFamily: 'var(--mono)', color: 'var(--blue)', overflowWrap: 'anywhere' }}>{n.case_number || n.case_id}</span>
+                      </>}
+                      <span style={{ color: 'var(--text3)' }}>Date &amp; time</span>
+                      <span style={{ color: 'var(--text2)' }}>{notificationDate(n.created_at)}</span>
+                      <span style={{ color: 'var(--text3)' }}>Details</span>
+                      <span style={{ color: 'var(--text2)', overflowWrap: 'anywhere' }}>{notificationDetails(n)}</span>
                     </div>
                   </div>
                 </div>

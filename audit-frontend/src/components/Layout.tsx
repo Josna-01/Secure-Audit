@@ -6,8 +6,8 @@ import { api } from '../services/api'
 import { Btn } from './UI'
 import NotificationPanel from './NotificationPanel'
 
-// Bell badge refresh interval. Notifications are polled, not pushed (no WebSockets yet).
-const NOTIFICATION_POLL_MS = 60_000
+// Backup for when a live stream reconnects or a network briefly drops.
+const NOTIFICATION_POLL_MS = 10_000
 
 const NAV = [
   { section: 'Main Operations' },
@@ -342,6 +342,7 @@ export function Topbar({ title, onNewCase }: { title: string; onNewCase: () => v
   const { theme, toggleTheme } = useTheme()
   const [notifOpen, setNotifOpen] = useState(false)
   const [unreadCount, setUnreadCount] = useState(0)
+  const [notificationRevision, setNotificationRevision] = useState(0)
   const { user } = useAuth()
 
   useEffect(() => {
@@ -352,14 +353,24 @@ export function Topbar({ title, onNewCase }: { title: string; onNewCase: () => v
         .catch(() => {})
     }
     refresh()
+    const unsubscribe = api.subscribeToNotificationEvents(() => {
+      refresh()
+      setNotificationRevision((value) => value + 1)
+    })
     const timer = window.setInterval(refresh, NOTIFICATION_POLL_MS)
-    return () => { active = false; window.clearInterval(timer) }
+    return () => {
+      active = false
+      unsubscribe()
+      window.clearInterval(timer)
+    }
   }, [])
 
   return (
     <>
       <header style={{
-        height: '58px',
+        // Match the 38px logo plus the sidebar brand area's 18px top/bottom
+        // padding, so the header and sidebar navigation begin on one line.
+        height: '74px',
         background: 'var(--bg2)',
         borderBottom: '1px solid var(--border)',
         display: 'flex',
@@ -462,7 +473,7 @@ export function Topbar({ title, onNewCase }: { title: string; onNewCase: () => v
           )}
         </div>
       </header>
-      <NotificationPanel open={notifOpen} onClose={() => setNotifOpen(false)} onUnreadChange={setUnreadCount} />
+      <NotificationPanel open={notifOpen} refreshKey={notificationRevision} onClose={() => setNotifOpen(false)} onUnreadChange={setUnreadCount} />
     </>
   )
 }

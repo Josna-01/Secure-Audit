@@ -119,12 +119,13 @@ class NotificationHelperUnitTest(unittest.TestCase):
         self.assertEqual(kwargs["evidence_id"], evidence.id)
         self.assertEqual(kwargs["fingerprint"], f"tamper:{evidence.id}:HASH_MISMATCH:{'ab' * 32}")
 
-    def test_analysis_failure_goes_to_requester_only(self):
+    def test_analysis_failure_goes_to_requester_and_administrators(self):
         with patch.object(main_app, "create_notification") as create:
             main_app.notify_analysis_failed("bns", "BNS classification", {"id": "u1"})
         args, kwargs = create.call_args
         self.assertEqual((args[0], kwargs["severity"], kwargs["recipients"]), ("bns", "warning", ["u1"]))
-        self.assertFalse(kwargs.get("case_owner") or kwargs.get("admins"))
+        self.assertTrue(kwargs["admins"])
+        self.assertFalse(kwargs.get("case_owner", False))
         self.assertIsNone(kwargs["case_id"])
 
 
@@ -368,15 +369,16 @@ class NotificationApiTest(unittest.TestCase):
                 db.commit()
 
     # ------------------------------------------------------------------ event flows
-    def test_upload_notifies_case_owner_but_not_the_uploader(self):
+    def test_upload_notifies_uploader_case_owner_and_administrator(self):
         ev = self.upload(b"admin upload " + uuid.uuid4().bytes, self.admin)
         rows = self.notifications(self.inv1_id, type="upload")
         self.assertEqual(len(rows), 1)
         self.assertEqual((rows[0].severity, str(rows[0].evidence_id)), ("info", ev["id"]))
-        self.assertEqual(self.notifications(self.admin_id), [])
+        self.assertEqual(len(self.notifications(self.admin_id, type="upload")), 1)
         self.assertEqual(self.notifications(self.inv2_id), [])
         self.upload(b"own upload " + uuid.uuid4().bytes, self.inv1)
-        self.assertEqual(len(self.notifications(self.inv1_id, type="upload")), 1)  # own upload: no alert
+        self.assertEqual(len(self.notifications(self.inv1_id, type="upload")), 2)
+        self.assertEqual(len(self.notifications(self.admin_id, type="upload")), 2)
 
     def test_upload_rejected_by_blockchain_outage_is_a_system_warning(self):
         with patch.object(main_app.blockchain_service, "register_evidence",
@@ -518,7 +520,7 @@ class NotificationApiTest(unittest.TestCase):
         self.assertEqual(res.status_code, 500)
         failed = self.notifications(self.inv1_id, title="Object detection failed")
         self.assertEqual([r.severity for r in failed], ["warning"])
-        self.assertEqual(self.notifications(self.admin_id, title="Object detection failed"), [])
+        self.assertEqual([r.severity for r in self.notifications(self.admin_id, title="Object detection failed")], ["warning"])
 
         with open(self.stored_path(ev["id"]), "wb") as f:
             f.write(b"altered image")

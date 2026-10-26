@@ -171,6 +171,28 @@ class Detection(Base):
     created_at = Column(DateTime(timezone=True), nullable=False, server_default=func.now())
 
 
+class AudioForensicsResult(Base):
+    """Immutable stored outcome of one audio-forensics run.
+
+    The analysed source remains the evidence object; this table keeps the full
+    machine-readable finding, rather than only a brief audit-log summary.
+    """
+    __tablename__ = "audio_forensics_results"
+
+    id = Column(UUID(as_uuid=True), primary_key=True, default=uuid.uuid4)
+    case_id = Column(UUID(as_uuid=True), ForeignKey("cases.id", ondelete="RESTRICT"), nullable=True, index=True)
+    evidence_id = Column(UUID(as_uuid=True), ForeignKey("evidence.id", ondelete="RESTRICT"), nullable=True, index=True)
+    analysed_by = Column(UUID(as_uuid=True), ForeignKey("users.id", ondelete="SET NULL"), nullable=True)
+    filename = Column(String, nullable=True)
+    content_type = Column(String, nullable=True)
+    source_sha256 = Column(String, nullable=False)
+    result = Column(JSONB, nullable=False)
+    overall_status = Column(String, nullable=True)
+    duration_seconds = Column(Float, nullable=True)
+    sample_rate = Column(Integer, nullable=True)
+    created_at = Column(DateTime(timezone=True), nullable=False, server_default=func.now())
+
+
 class Notification(Base):
     """In-app alert for exactly one recipient (added by migrate_notifications.py).
 
