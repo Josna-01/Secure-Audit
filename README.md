@@ -1,5 +1,179 @@
 # Secure Audit — Digital Evidence & Investigation Support System
 
+> **Authoritative public-submission guide:** The following section describes exactly what is included in this repository. Private AI services, models, datasets, evidence uploads, backups, local runtime output, and real configuration values are not included.
+
+## Public project overview
+
+Secure Audit is a digital-evidence management application. Its submitted core lets authorised users create cases, upload evidence, compute SHA-256 hashes, register/verify evidence through a local Ethereum ledger, perform multilingual OCR, and view audit logs and notifications.
+
+### Included workflow
+
+1. Sign in and create a case.
+2. Upload evidence and link it to that case.
+3. Generate a SHA-256 evidence digest.
+4. Register or verify the digest against the local blockchain ledger.
+5. Run OCR on eligible image/document evidence.
+6. Search OCR text and review audit history.
+
+### Included technologies
+
+| Area | Technology |
+| --- | --- |
+| Frontend | React 18, TypeScript, Vite, React Router, Axios |
+| Backend | Python 3.10, FastAPI, Uvicorn, SQLAlchemy |
+| Database | PostgreSQL or Supabase PostgreSQL |
+| Integrity | SHA-256 |
+| Blockchain | Solidity, Web3.py, Hardhat, Ganache |
+| OCR | PaddleOCR, Tesseract, PyMuPDF, pdf2image |
+
+## Exact public structure
+
+```text
+Secure-Audit/
+├── .gitignore                        # Ignores secrets, generated data, and private modules
+├── README.md                         # This documentation
+├── schema.sql                        # PostgreSQL schema for a fresh installation
+├── audit-frontend/                   # React/Vite frontend
+│   ├── .env.example                  # Safe frontend configuration template
+│   ├── package.json / package-lock.json
+│   ├── vite.config.ts / tsconfig.json
+│   ├── public/logo.png
+│   ├── scripts/                      # GLTF/GLB helper scripts
+│   └── src/
+│       ├── main.tsx                  # React entry point
+│       ├── App.tsx                   # Routes and role protection
+│       ├── components/               # Layout, UI, alerts, OCR viewer
+│       ├── context/                  # Authentication and theme state
+│       ├── pages/                    # Login, dashboard, cases, evidence, users, ledger
+│       ├── services/                 # FastAPI and optional Supabase clients
+│       ├── styles/globals.css
+│       └── types/index.ts
+├── backend/                           # FastAPI core application
+│   ├── .env.example                  # Safe backend configuration template
+│   ├── app.py                        # API routes and application startup
+│   ├── db.py                         # Database connection/session setup
+│   ├── models.py                     # SQLAlchemy models
+│   ├── requirements.txt              # Python dependencies
+│   ├── services/
+│   │   ├── blockchain_service.py     # EvidenceRegistry/Web3 integration
+│   │   ├── evidence_integrity.py     # SHA-256 verification helpers
+│   │   ├── ocr_service.py            # PaddleOCR processing
+│   │   ├── ocr_text.py               # OCR normalisation
+│   │   ├── tesseract_engine.py       # Tesseract fallback
+│   │   ├── translation_service.py    # OCR translation wrapper
+│   │   └── storage_gateway.py        # Local/S3-compatible storage
+│   ├── tests/                        # Automated backend checks
+│   ├── scripts/                      # Administration/storage utilities
+│   ├── setup_tessdata.py             # Tesseract language-data setup
+│   └── migrate_*.py                  # Older-database upgrade helpers
+└── blockchain/                        # Local Ethereum evidence ledger
+    ├── contracts/EvidenceRegistry.sol # Solidity contract
+    ├── scripts/deploy.js             # Local deployment script
+    ├── deployments/localhost.json    # Local deployment metadata
+    ├── package.json / package-lock.json
+    ├── hardhat.config.ts
+    └── start-ganache.ps1
+```
+
+## Database and migrations
+
+`schema.sql` creates the fresh database. It includes users, cases, evidence, OCR results, custody records, blockchain logs, audit logs, OTP tokens, and notifications.
+
+The `migrate_*` files are for upgrading old databases. They do not run during normal use. For a new database, use `schema.sql`. Review and back up an existing database before applying a migration.
+
+## Installation
+
+### Prerequisites
+
+- Node.js 18+
+- Python 3.10
+- PostgreSQL 15 or a Supabase PostgreSQL project
+- Tesseract and Poppler when OCR fallback/PDF OCR is required
+
+### Configure local values
+
+```powershell
+Copy-Item backend\.env.example backend\.env
+Copy-Item audit-frontend\.env.example audit-frontend\.env
+```
+
+Do not commit those `.env` files. At minimum configure the database settings in `backend/.env` and set `VITE_API_BASE_URL=http://localhost:8000` in the frontend configuration.
+
+### Install dependencies
+
+```powershell
+cd backend
+py -3.10 -m venv venv
+.\venv\Scripts\python.exe -m pip install -r requirements.txt
+cd ..
+
+cd audit-frontend
+npm install
+cd ..
+
+cd blockchain
+npm install
+cd ..
+```
+
+### Initialise and run
+
+Import `schema.sql` into an empty PostgreSQL database, then use three PowerShell terminals:
+
+```powershell
+# Terminal 1: blockchain
+cd blockchain
+npm run chain
+```
+
+```powershell
+# Terminal 2: backend
+cd backend
+.\venv\Scripts\python.exe app.py
+```
+
+```powershell
+# Terminal 3: frontend
+cd audit-frontend
+npm run dev
+```
+
+Open `http://localhost:5173`. The API documentation is at `http://127.0.0.1:8000/docs`.
+
+To deploy the local evidence contract after starting Ganache:
+
+```powershell
+cd blockchain
+npx hardhat compile
+node scripts/deploy.js
+```
+
+## API groups
+
+| Group | Core routes |
+| --- | --- |
+| Authentication | `/auth/send-otp`, `/auth/verify-otp`, `/auth/me` |
+| Cases | `/cases`, `/cases/{case_id}`, `/cases/stats` |
+| Evidence | `/evidence/upload`, `/evidence`, `/evidence/{id}/verify` |
+| OCR | `/ai/ocr`, `/ocr/search` |
+| Blockchain | `/blockchain/status`, `/blockchain/register`, `/blockchain/verify` |
+| Notifications | `/notifications`, `/notifications/stream` |
+| Audit | `/audit` |
+| Users | `/users` |
+
+## Security and Git policy
+
+The root `.gitignore` prevents publishing real configuration values, keys, credentials, uploads, backups, logs, caches, virtual environments, `node_modules`, blockchain runtime data, build artifacts, and private modules. Only safe `.env.example` templates are version-controlled.
+
+## Excluded local modules
+
+The following remain local-only and are not part of the public repository: `audio-backend/`, `best/` (object detection), `bns-backend/`, `photogrammetry-backend/`, `backups/`, local uploads, models, datasets, and generated outputs.
+
+<details>
+<summary>Legacy full-development reference — not part of the public submission</summary>
+
+
+
 [![React](https://img.shields.io/badge/Frontend-React%2018%20%7C%20Vite-blue?logo=react)](audit-frontend/)
 [![FastAPI](https://img.shields.io/badge/Backend-FastAPI%20%7C%20Python%203.10-009688?logo=fastapi)](backend/)
 [![Blockchain](https://img.shields.io/badge/Blockchain-Ethereum%20%7C%20Solidity-3C3C3D?logo=ethereum)](blockchain/)
@@ -540,3 +714,5 @@ The backend uses local evidence storage by default (`STORAGE_BACKEND=local`). Co
 ## 19. Contributors
 
 Secure Audit was developed by the project team as an academic digital-forensics project.
+
+</details>
