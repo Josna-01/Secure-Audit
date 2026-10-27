@@ -198,8 +198,7 @@ The main frontend and backend contain integration routes for these optional loca
 - Apeksha A Govekar (`4SO23CS031`)
 - Alisha Anton Fernandis (`4SO23CS017`)
 
-<details>
-<summary>Legacy full-development reference — not part of the public submission</summary>
+<!-- Legacy README material below is retained only in file history and hidden from rendering.
 
 
 
@@ -740,4 +739,4 @@ The backend uses local evidence storage by default (`STORAGE_BACKEND=local`). Co
 
 
 
-</details>
+-->
