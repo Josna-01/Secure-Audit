@@ -5,6 +5,22 @@ import { api } from '../services/api'
 import { Btn, AlertBox } from '../components/UI'
 import type { User } from '../types'
 
+const loginLightTheme = {
+  '--bg': '#f8fafc',
+  '--bg2': '#ffffff',
+  '--bg3': '#f1f5f9',
+  '--bg4': '#e2e8f0',
+  '--bg5': '#cbd5e1',
+  '--border': '#dbe4f0',
+  '--border2': '#cbd5e1',
+  '--text': '#0f172a',
+  '--text2': '#475569',
+  '--text3': '#64748b',
+  '--blue': '#2563eb',
+  '--blue-bg': '#eff6ff',
+  '--blue-dim': '#dbeafe',
+} as React.CSSProperties
+
 export default function AuthPage() {
   const navigate = useNavigate()
   const { login, isAuthenticated } = useAuth()
@@ -132,12 +148,13 @@ export default function AuthPage() {
 
   return (
     <div style={{
+      ...loginLightTheme,
       display: 'flex',
       flexDirection: 'column',
       justifyContent: 'center',
       alignItems: 'center',
       minHeight: '100vh',
-      background: '#080c10',
+      background: '#f8fafc',
       color: 'var(--text)',
       fontFamily: 'var(--font)',
       padding: '40px 20px',
@@ -154,7 +171,7 @@ export default function AuthPage() {
         bottom: 0,
         backgroundImage: 'radial-gradient(var(--border) 1px, transparent 1px)',
         backgroundSize: '24px 24px',
-        opacity: 0.15,
+        opacity: 0.55,
         pointerEvents: 'none'
       }} />
 
@@ -205,11 +222,11 @@ export default function AuthPage() {
       <div style={{
         width: '460px',
         maxWidth: '100%',
-        background: '#161b27',
+        background: '#ffffff',
         border: '1px solid var(--border)',
         borderRadius: 'var(--r3)',
         padding: '36px 40px',
-        boxShadow: '0 20px 50px rgba(0,0,0,0.5)',
+        boxShadow: '0 20px 50px rgba(15, 23, 42, 0.12)',
         backdropFilter: 'blur(10px)',
         position: 'relative',
         zIndex: 5,
