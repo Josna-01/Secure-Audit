@@ -356,7 +356,7 @@ export default function CreateCase() {
               border: '1px solid var(--border)'
             }}>
               <div style={{ fontSize: '14px', fontWeight: 700, color: 'var(--text)', marginBottom: '14px' }}>
-                Case Dossier Summary
+                Case Summary
               </div>
               {[
                 ['Investigation Title', title],
@@ -419,14 +419,14 @@ export default function CreateCase() {
               ✓
             </div>
             <h3 style={{ fontSize: '20px', fontWeight: 800, color: 'var(--text)', marginBottom: '8px' }}>
-              Investigation Dossier Created
+              Investigation Created
             </h3>
             <p style={{ fontSize: '13px', color: 'var(--text3)', maxWidth: '440px', margin: '0 auto 28px' }}>
               Case has been officially indexed in PostgreSQL and timestamped in the security audit trail.
             </p>
             <div style={{ display: 'flex', gap: '12px', justifyContent: 'center', flexWrap: 'wrap' }}>
               <Btn variant="primary" size="lg" onClick={() => navigate(`/cases/${createdCaseId}`)}>
-                Open Case Dossier
+                Open Case
               </Btn>
               <Btn size="lg" variant="default" onClick={() => navigate('/evidence')}>
                 Upload Evidence Files

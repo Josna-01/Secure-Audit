@@ -914,6 +914,12 @@ def verify_otp(req: VerifyOTPRequest, db: Session = Depends(get_db)):
         action="Login Successful",
         metadata={"email": user["email"], "role": user["role"], "full_name": user["full_name"]}
     )
+    create_notification(
+        "login",
+        "User logged in",
+        f"{user['full_name']} ({user['email']}) signed in.",
+        admins=True,
+    )
 
     return {
         "success": True,
@@ -1332,7 +1338,7 @@ def apply_registration_receipt(evidence, receipt: dict) -> None:
 
 
 # ====== NOTIFICATION HELPER ======
-NOTIFICATION_TYPES = ("tamper", "system", "upload", "yolo", "bns", "audio", "custody")
+NOTIFICATION_TYPES = ("tamper", "system", "upload", "yolo", "bns", "audio", "custody", "login")
 NOTIFICATION_SEVERITIES = ("info", "warning", "critical")
 
 # A connected browser has one queue.  Database rows remain the source of truth;

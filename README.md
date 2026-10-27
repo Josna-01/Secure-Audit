@@ -1,14 +1,12 @@
-# Secure Audit — Digital Forensics & Investigation Support System
+# Secure Audit — Digital Evidence & Investigation Support System
 
 [![React](https://img.shields.io/badge/Frontend-React%2018%20%7C%20Vite-blue?logo=react)](audit-frontend/)
 [![FastAPI](https://img.shields.io/badge/Backend-FastAPI%20%7C%20Python%203.10-009688?logo=fastapi)](backend/)
-[![Blockchain](https://img.shields.io/badge/Blockchain-Ethereum%20%7C%20Solidity%200.8.28-3C3C3D?logo=ethereum)](blockchain/)
-[![PostgreSQL](https://img.shields.io/badge/Database-PostgreSQL%2015-336791?logo=postgresql)](docs/)
-[![AI-Vision](https://img.shields.io/badge/AI-YOLOv8%20%7C%20COLMAP%203D-FF6F00)](best/)
-[![AI-NLP](https://img.shields.io/badge/NLP-Legal--BERT%20%7C%20HGAT%20%7C%20BNS-8E24AA)](bns-backend/)
-[![License](https://img.shields.io/badge/License-MIT-green.svg)](LICENSE)
+[![Blockchain](https://img.shields.io/badge/Blockchain-Ethereum%20%7C%20Solidity-3C3C3D?logo=ethereum)](blockchain/)
 
-An enterprise-grade, multi-service digital forensics and investigation management platform for law enforcement agencies, cyber cells, and forensic examiners. Provides end-to-end evidence chain-of-custody tracking, tamper-evident cryptographic verification, Ethereum-anchored blockchain logging, multilingual document OCR, AI crime object detection, 3D crime scene photogrammetry, audio deepfake & speech forensics, and automated legal classification under the **Bharatiya Nyaya Sanhita (BNS)**.
+Secure Audit is a digital-evidence management application that provides case management, role-based access, evidence upload, SHA-256 integrity verification, local Ethereum/Ganache ledger integration, multilingual OCR, audit logging, and notifications.
+
+> **Public submission scope:** this repository includes the frontend, core backend, OCR workflow, PostgreSQL schema, and blockchain module. Private/experimental AI services, their models and datasets, local evidence, runtime data, and all real configuration values are intentionally excluded.
 
 ---
 
@@ -168,14 +166,14 @@ Secure Audit is built as a modular, distributed microservices architecture commu
              |                                              |                                                   |
              v                                              v                                                   v
 +------------------------+                    +---------------------------+               +-----------------------------------+
-|  Crime Detection (8003)|                    |    BNS Backend (8001)     |               |   Photogrammetry Backend (8002)   |
+|  Crime Detection (8003)|                    |    BNS Backend (8001)     |               |   Photogrammetry Backend (8004)   |
 |   YOLOv8 Computer      |                    | Legal-BERT + HGAT Network |               |   COLMAP SfM + Open3D Meshing     |
 |   Vision Service       |                    | + FAISS Statutory Search  |               |   Jobs: input_video -> GLB model  |
 +------------------------+                    +---------------------------+               +-----------------------------------+
              |
              v
 +------------------------+
-|  Audio Backend (8004)  |
+|  Audio Backend (8002)  |
 |  WhisperX + pyannote   |
 |  Speech & Deepfake AI  |
 +------------------------+
@@ -198,41 +196,18 @@ Secure Audit/
 │
 ├── backend/                    # Core API Gateway (FastAPI, Port 8000)
 │   ├── services/               # Blockchain, OCR, Translation, AI orchestration
-│   ├── uploads/                # Local evidence storage (partitioned by case UUID)
-│   │   └── cases/              # Active case evidence files
 │   ├── app.py                  # Main FastAPI application router and endpoints
 │   ├── models.py               # SQLAlchemy database models
-│   ├── schemas.py              # Pydantic validation schemas
-│   └── database.py             # PostgreSQL connection lifecycle
-│
-├── bns-backend/                # Bharatiya Nyaya Sanhita NLP Service (Port 8001)
-│   ├── app/                    # FastAPI routes, HGAT inference engine, FAISS search
-│   ├── Model_Data/             # HGAT weights, FAISS embeddings, metadata
-│   ├── hgat_model.py           # Hierarchical Graph Attention Network definition
-│   └── main.py                 # Microservice entrypoint
-│
-├── photogrammetry-backend/     # 3D Reconstruction Microservice (Port 8002)
-│   ├── services/               # FrameExtractor, FrameSelector, ColmapRunner, Open3DProcessor
-│   ├── jobs/                   # Isolated 3D job workspaces (frames, COLMAP, GLB)
-│   ├── app.py                  # Job queue and execution lifecycle API
-│   └── models.py               # 3D job database models
-│
-├── best/                       # YOLOv8 Weapon & Crime Vision Service (Port 8003)
-│   ├── best.pt                 # Fine-tuned YOLOv8 model weights
-│   ├── app.py                  # FastAPI detection endpoints
-│   └── main.py                 # Real-time frame & image inference server
-│
-├── audio-backend/              # Speech & Audio Forensics Service (Port 8004)
-│   ├── services/               # WhisperX transcriber, pyannote diarizer, deepfake scorer
-│   └── app.py                  # Audio analysis endpoints
+│   ├── db.py                   # PostgreSQL connection lifecycle
+│   └── requirements.txt        # Python dependencies
 │
 ├── blockchain/                 # Ethereum Smart Contracts & Migrations
 │   ├── contracts/              # EvidenceRegistry.sol
-│   ├── migrations/             # Truffle deployment scripts
-│   └── truffle-config.js       # Ganache / EVM network settings
+│   ├── scripts/                # Hardhat deployment scripts
+│   └── hardhat.config.ts       # Hardhat / Ganache network settings
 │
-├── docs/                       # Architectural documentation & technical papers
-└── README.md                   # Project documentation
+├── schema.sql                  # PostgreSQL schema
+└── README.md                   # Setup and submission documentation
 ```
 
 ---
@@ -245,11 +220,7 @@ Secure Audit/
 | **Core Backend** | Python 3.10, FastAPI, Uvicorn, SQLAlchemy, Pydantic, Web3.py |
 | **Database** | PostgreSQL 15, Supabase Database |
 | **Authentication** | Supabase Auth, JWT Tokens, PBKDF2 Hashing |
-| **Blockchain** | Ethereum, Solidity 0.8.28, Truffle Suite, Ganache CLI / Local Node |
-| **Computer Vision** | YOLOv8 (Ultralytics), OpenCV, Pillow |
-| **3D Reconstruction** | COLMAP (Structure-from-Motion & Multi-View Stereo), Open3D, NumPy |
-| **NLP & Legal AI** | Legal-BERT, PyTorch, PyTorch Geometric (HGAT), FAISS, Hugging Face Transformers |
-| **Speech & Audio** | WhisperX (Faster-Whisper), pyannote.audio, Librosa, SoundFile, spaCy |
+| **Blockchain** | Ethereum, Solidity, Hardhat, Ganache CLI / Local Node |
 | **OCR & Text** | PaddleOCR (PP-OCRv5), Tesseract 5, PyMuPDF, pdf2image |
 
 ---
@@ -302,23 +273,7 @@ Secure Audit/
 ## 8. Module Descriptions
 
 ### Core API Gateway (`backend/`)
-The central orchestrator of Secure Audit. Exposes RESTful endpoints for case lifecycles, user administration, evidence ingestion, SHA-256 computation, Web3 smart contract calls, and dispatches asynchronous tasks to downstream AI microservices.
-
-### BNS Legal Prediction Service (`bns-backend/`)
-Consumes FIR narratives, incident facts, and metadata (victim demographics, weapons used). Utilizes a fine-tuned Legal-BERT model coupled with a Hierarchical Graph Attention Network (HGAT) to classify applicable sections of the **Bharatiya Nyaya Sanhita, 2023** and provide sentence-level XAI explanations.
-
-### Photogrammetry & 3D Reconstruction (`photogrammetry-backend/`)
-Processes crime scene walkthrough videos into high-density 3D spatial models. Operates an end-to-end pipeline: video frame extraction $
-ightarrow$ sharpness-based keyframe selection $
-ightarrow$ COLMAP Structure-from-Motion (SfM) $
-ightarrow$ Open3D Poisson surface reconstruction $
-ightarrow$ web-optimized `.glb` export.
-
-### Crime Object Detection (`best/`)
-A high-throughput computer vision service utilizing YOLOv8. Scans uploaded crime scene photos and CCTV stills to locate, classify, and score confidence for lethal weapons (firearms, knives), contraband, and forensic artifacts.
-
-### Audio Forensics Service (`audio-backend/`)
-Dedicated speech processing engine. Performs GPU-accelerated WhisperX transcription, pyannote speaker diarization, named entity recognition (NER), and spectral analysis to calculate synthetic voice (deepfake) probability.
+The central FastAPI application. It manages authentication, users, cases, evidence upload, SHA-256 computation, OCR results, audit logs, notifications, and blockchain verification.
 
 ### Blockchain Evidence Registry (`blockchain/`)
 Contains the Solidity smart contract `EvidenceRegistry.sol`. Serves as the immutable root of trust, recording cryptographic hashes, case mappings, and chronological custody transfers across Ganache or any EVM-compatible network.
@@ -327,7 +282,7 @@ Contains the Solidity smart contract `EvidenceRegistry.sol`. Serves as the immut
 
 ## 9. API Overview
 
-The platform exposes structured REST APIs across all running microservices:
+The public submission exposes these core API groups:
 
 | Group | Base Route | Description |
 | :--- | :--- | :--- |
@@ -335,11 +290,7 @@ The platform exposes structured REST APIs across all running microservices:
 | **Cases** | `GET/POST /cases/`, `GET /cases/{id}` | Case creation, FIR details, investigator assignment, POLE data |
 | **Evidence** | `POST /evidence/upload`, `GET /evidence/{id}` | File ingestion, SHA-256 calculation, metadata retrieval |
 | **Blockchain** | `POST /blockchain/verify`, `GET /blockchain/custody/{id}` | On-chain hash verification, block info, custody logs |
-| **OCR & Text** | `POST /ocr/extract`, `POST /ocr/translate` | PaddleOCR/Tesseract parsing and multilingual translation |
-| **BNS AI** | `POST http://localhost:8001/predict` | BNS section prediction, XAI rationale, penalty lookup |
-| **Photogrammetry** | `POST http://localhost:8002/reconstruct` | Trigger 3D scene reconstruction job, status polling, GLB output |
-| **Crime Vision** | `POST http://localhost:8003/detect` | YOLOv8 object and weapon bounding box detection |
-| **Audio Forensics**| `POST http://localhost:8004/analyze` | WhisperX transcription, diarization, and deepfake scoring |
+| **OCR & Text** | `POST /ai/ocr`, `GET /ocr/search` | PaddleOCR/Tesseract parsing, search, and multilingual translation |
 | **Audit Logs** | `GET /audit/logs`, `GET /audit/case/{id}` | Immutable system activity logs and compliance history |
 | **Users** | `GET/POST /users/`, `PATCH /users/{id}/role` | Officer administration, RBAC roles, profile management |
 
@@ -485,7 +436,7 @@ ightarrow$ Diarized Transcript + Fake Score |
 - **Node.js:** v18.0 or higher
 - **Python:** v3.10
 - **PostgreSQL:** v15 or higher (or Supabase PostgreSQL instance)
-- **Ganache / Truffle:** `npm install -g ganache truffle`
+- **Local blockchain:** Node.js packages installed with `npm install` in `blockchain/`; Ganache is started with `npm run chain`.
 - **COLMAP:** Installed and available on system `PATH` (for 3D photogrammetry)
 
 ### 1. Clone the Repository
@@ -494,103 +445,72 @@ git clone https://github.com/Josna-01/Secure-Audit.git
 cd "Secure Audit"
 ```
 
-### 2. Blockchain Setup
-```bash
-cd blockchain
-npm install
-npx ganache --server.host 127.0.0.1 --server.port 8545 --chain.chainId 1337
-truffle migrate --network development
-cd ..
+### 2. Prerequisites
+
+- Windows with PowerShell, Node.js 18+ and Python 3.10 available as `py -3.10`.
+- PostgreSQL 15+ running locally (or a configured Supabase PostgreSQL database).
+- Tesseract 5 plus the required Indic language data if multilingual OCR fallback is required.
+
+### 3. Configure services
+
+Copy the available `.env.example` files to `.env`, then populate the required values. Do not commit the resulting `.env` files.
+
+```powershell
+Copy-Item backend\.env.example backend\.env
+Copy-Item audit-frontend\.env.example audit-frontend\.env
 ```
 
-### 3. Backend Setup
-```bash
-cd backend
-python -m venv venv
-# Windows:
-.\venv\Scripts\activate
-# Linux/macOS:
-# source venv/bin/activate
-pip install -r requirements.txt
-cd ..
+At minimum, configure PostgreSQL credentials in `backend/.env`. Configure Supabase and SMTP credentials for their respective integrations. The frontend needs `VITE_API_BASE_URL=http://localhost:8000`; it also needs Supabase URL and anonymous key when Supabase-backed features are enabled.
+
+### 4. Install dependencies
+
+Install Node packages for the frontend and local blockchain:
+
+```powershell
+cd blockchain; npm install; cd ..
+cd audit-frontend; npm install; cd ..
 ```
 
-### 4. AI Services Setup
-```bash
-# BNS Backend:
-cd bns-backend && pip install -r requirements.txt && cd ..
+Create a Python 3.10 environment for the core backend and install its dependencies.
 
-# Object Detection:
-cd best && pip install -r requirements.txt && cd ..
-
-# Photogrammetry Backend:
-cd photogrammetry-backend && pip install -r requirements.txt && cd ..
-
-# Audio Backend:
-cd audio-backend && pip install -r requirements.txt && cd ..
-```
-
-### 5. Frontend Setup
-```bash
-cd audit-frontend
-npm install
-cd ..
+```powershell
+cd backend; py -3.10 -m venv venv; .\venv\Scripts\python.exe -m pip install -r requirements.txt; cd ..
 ```
 
 ---
 
 ## 15. Running the Project
 
-Start all microservices in separate terminal windows:
+Run each public component in a separate terminal:
 
-| Service | Command | URL / Port |
+| Service | Command | URL / port |
 | :--- | :--- | :--- |
-| **Ganache Blockchain** | `npx ganache --server.host 127.0.0.1 --server.port 8545 --chain.chainId 1337` | `http://127.0.0.1:8545` |
-| **Core Backend Gateway** | `cd backend && python app.py` | `http://127.0.0.1:8000` |
-| **BNS Legal Backend** | `cd bns-backend && python -m uvicorn app.main:app --port 8001 --reload` | `http://127.0.0.1:8001` |
-| **Photogrammetry 3D** | `cd photogrammetry-backend && python app.py` | `http://127.0.0.1:8002` |
-| **Object Detection** | `cd best && .\venv\Scripts\python.exe main.py` | `http://127.0.0.1:8003` |
-| **Audio Forensics** | `cd audio-backend && python app.py` | `http://127.0.0.1:8004` |
-| **React Frontend** | `cd audit-frontend && npm run dev` | `http://localhost:5173` |
+| Blockchain node | `cd blockchain; npm run chain` | `http://127.0.0.1:8545` |
+| Core API | `cd backend; $env:AUTO_SPAWN_MICROSERVICES="False"; .\venv\Scripts\python.exe app.py` | `http://127.0.0.1:8000` (`/docs`) |
+| Frontend | `cd audit-frontend; npm run dev` | `http://localhost:5173` |
+
+### Blockchain deployment
+
+Ganache persists local chain data in `blockchain/ganache-data`. After a deliberately new Ganache database, deploy the contract once, then restart the backend:
+
+```powershell
+cd blockchain
+npx hardhat compile
+node scripts/deploy.js
+```
 
 ---
 
 ## 16. Environment Variables
 
-Create `.env` files in each service directory based on the following templates:
+Use the committed `.env.example` templates as the canonical, current reference. Key settings are:
 
-### `backend/.env`
-```ini
-DATABASE_URL=postgresql://postgres:password@localhost:5432/secure_audit
-SUPABASE_URL=https://your-project.supabase.co
-SUPABASE_SERVICE_ROLE_KEY=your-supabase-service-role-key
-USE_LOCAL_STORAGE=True
-WEB3_PROVIDER_URI=http://127.0.0.1:8545
-CONTRACT_ADDRESS=0xYourDeployedEvidenceRegistryAddress
-CONTRACT_ABI_PATH=../blockchain/build/contracts/EvidenceRegistry.json
-```
+| Service | Required local configuration |
+| :--- | :--- |
+| `backend` | PostgreSQL via `DATABASE_URL` or `DB_HOST`, `DB_PORT`, `DB_NAME`, `DB_USER`, and `DB_PASSWORD`; optional Supabase, SMTP, R2/S3, OCR, and blockchain variables. |
+| `audit-frontend` | `VITE_API_BASE_URL`, plus `VITE_SUPABASE_URL` and `VITE_SUPABASE_ANON_KEY` where Supabase is used. |
 
-### `bns-backend/.env`
-```ini
-PORT=8001
-DEVICE=cpu
-MODEL_PATH=./Model_Data
-```
-
-### `photogrammetry-backend/.env`
-```ini
-PORT=8002
-SUPABASE_URL=https://your-project.supabase.co
-SUPABASE_SERVICE_ROLE_KEY=your-supabase-service-role-key
-COLMAP_PATH=colmap
-```
-
-### `audit-frontend/.env`
-```ini
-VITE_API_URL=http://127.0.0.1:8000
-VITE_SUPABASE_URL=https://your-project.supabase.co
-VITE_SUPABASE_ANON_KEY=your-supabase-anon-key
-```
+The backend uses local evidence storage by default (`STORAGE_BACKEND=local`). Configure Supabase and/or S3-compatible R2 only when those services are intentionally part of the deployment.
 
 ---
 
@@ -619,15 +539,4 @@ VITE_SUPABASE_ANON_KEY=your-supabase-anon-key
 
 ## 19. Contributors
 
-| Name | USN | Module Ownership & Key Responsibilities |
-| :--- | :--- | :--- |
-| **Ancilla Josna** | `4SO23CS026` | **Project Lead**, BNS Legal Classification Backend (HGAT), Multilingual OCR Extraction & Blockchain Backend |
-| **Amisha** | `4SO23CS019` | React Frontend Architecture, Core FastAPI Gateway, 3D Photogrammetry Scene Reconstruction |
-| **Apeksha** | `4SO23CS031` | Audio Forensics (WhisperX / Deepfake Detection) & Audio Frontend Module |
-| **Alisha** | `4SO23CS017` | Crime & Weapon Detection (YOLOv8 Computer Vision Service) |
-
----
-
-## 20. License
-
-This project is licensed under the **MIT License** — see the [LICENSE](LICENSE) file for details.
+Secure Audit was developed by the project team as an academic digital-forensics project.

@@ -1,4 +1,4 @@
-import React, { useEffect, useState } from 'react'
+import React, { useEffect, useRef, useState } from 'react'
 import { useNavigate, useLocation } from 'react-router-dom'
 import { useAuth } from '../context/AuthContext'
 import { useTheme } from '../context/ThemeContext'
@@ -155,9 +155,10 @@ export function Sidebar() {
   const navigate = useNavigate()
   const location = useLocation()
   const { user } = useAuth()
+  const isAdmin = user?.role?.toLowerCase() === 'admin'
 
-  const visibleNav = [...NAV]
-  if (user?.role === 'Admin' || user?.role?.toLowerCase() === 'admin') {
+  const visibleNav = NAV.filter((item) => !('id' in item) || item.id !== '/blockchain' || isAdmin)
+  if (isAdmin) {
     visibleNav.push({ id: '/users', label: 'User Management', icon: 'cog' })
   }
 
@@ -344,12 +345,65 @@ export function Topbar({ title, onNewCase }: { title: string; onNewCase: () => v
   const [unreadCount, setUnreadCount] = useState(0)
   const [notificationRevision, setNotificationRevision] = useState(0)
   const { user } = useAuth()
+  const notificationAudioRef = useRef<AudioContext | null>(null)
+  const audioUnlockedRef = useRef(false)
+  const unreadCountRef = useRef(0)
+  const unreadCountInitializedRef = useRef(false)
+
+  const playNotificationChime = () => {
+    const audio = notificationAudioRef.current
+    if (!audio || !audioUnlockedRef.current || audio.state !== 'running') return
+
+    const startAt = audio.currentTime
+    ;[[880, 0], [1175, 0.13]].forEach(([frequency, delay]) => {
+      const oscillator = audio.createOscillator()
+      const gain = audio.createGain()
+      oscillator.type = 'sine'
+      oscillator.frequency.setValueAtTime(frequency, startAt + delay)
+      gain.gain.setValueAtTime(0.0001, startAt + delay)
+      gain.gain.exponentialRampToValueAtTime(0.09, startAt + delay + 0.01)
+      gain.gain.exponentialRampToValueAtTime(0.0001, startAt + delay + 0.16)
+      oscillator.connect(gain).connect(audio.destination)
+      oscillator.start(startAt + delay)
+      oscillator.stop(startAt + delay + 0.18)
+    })
+  }
+
+  const updateUnreadCount = (count: number, playSound = false) => {
+    if (playSound && unreadCountInitializedRef.current && count > unreadCountRef.current) {
+      playNotificationChime()
+    }
+    unreadCountRef.current = count
+    unreadCountInitializedRef.current = true
+    setUnreadCount(count)
+  }
+
+  useEffect(() => {
+    const unlockAudio = () => {
+      try {
+        const AudioContextClass = window.AudioContext || (window as typeof window & { webkitAudioContext?: typeof AudioContext }).webkitAudioContext
+        if (!AudioContextClass) return
+        const audio = notificationAudioRef.current || new AudioContextClass()
+        notificationAudioRef.current = audio
+        void audio.resume().then(() => { audioUnlockedRef.current = true }).catch(() => {})
+      } catch {
+        // Sound is an enhancement; notification delivery must still work without it.
+      }
+    }
+    window.addEventListener('pointerdown', unlockAudio, { once: true })
+    window.addEventListener('keydown', unlockAudio, { once: true })
+    return () => {
+      window.removeEventListener('pointerdown', unlockAudio)
+      window.removeEventListener('keydown', unlockAudio)
+      void notificationAudioRef.current?.close().catch(() => {})
+    }
+  }, [])
 
   useEffect(() => {
     let active = true
     const refresh = () => {
       api.getUnreadNotificationCount()
-        .then((res) => { if (active) setUnreadCount(res.data.count) })
+        .then((res) => { if (active) updateUnreadCount(res.data.count, true) })
         .catch(() => {})
     }
     refresh()
@@ -473,7 +527,7 @@ export function Topbar({ title, onNewCase }: { title: string; onNewCase: () => v
           )}
         </div>
       </header>
-      <NotificationPanel open={notifOpen} refreshKey={notificationRevision} onClose={() => setNotifOpen(false)} onUnreadChange={setUnreadCount} />
+      <NotificationPanel open={notifOpen} refreshKey={notificationRevision} onClose={() => setNotifOpen(false)} onUnreadChange={(count) => updateUnreadCount(count)} />
     </>
   )
 }

@@ -484,7 +484,7 @@ export default function Dashboard() {
               <path d="M18 8l-4 6h8l-4-6z"/>
               <path d="M3 8h18"/>
             </svg>
-            BNS Legal Dossier
+            BNS Legal Analysis
           </button>
           <button
             onClick={() => navigate('/detection')}

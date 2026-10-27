@@ -404,3 +404,27 @@ blockchain/ganache-data/
 # Temporary and scratch directories
 scratch/
 .scratch/
+
+# ============================================================================
+# LOCAL-ONLY MODULES AND WORKSPACE FILES
+# Retained locally but intentionally excluded from public submissions.
+# ============================================================================
+/audio-backend/
+/best/
+/bns-backend/
+/photogrammetry-backend/
+
+# Local demo-production tooling and outputs
+/demo_recording/
+/demo_tools/
+/tmp_report.txt
+/backend/runtime-logs/
+/backend/bash.exe.stackdump
+
+# Local development/editor files
+/.vscode/
+
+# Private-service launcher scripts. They remain local because they start
+# services intentionally excluded from the public submission.
+/start_all.py
+/start_all.ps1

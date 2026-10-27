@@ -104,7 +104,7 @@ export default function Cases() {
       <Card>
         <CardHeader>
           <div>
-            <CardTitle>Registered Cases & FIR Dossiers</CardTitle>
+            <CardTitle>Registered Cases & FIR Records</CardTitle>
             <div style={{ fontSize: '12px', color: 'var(--text3)' }}>
               Showing {cases.length} of {total} total recorded cases
             </div>
@@ -181,7 +181,7 @@ export default function Cases() {
                     <td><Badge label={c.status} /></td>
                     <td style={{ textAlign: 'right' }}>
                       <Btn size="xs" variant="default" onClick={() => navigate(`/cases/${c.id}`)}>
-                        Open Dossier
+                        Open Case
                       </Btn>
                     </td>
                   </tr>

@@ -33,6 +33,19 @@ function ProtectedRoute({ children }: { children: React.ReactNode }) {
   return <>{children}</>
 }
 
+function AdminRoute({ children }: { children: React.ReactNode }) {
+  const { isAuthenticated, isLoading, user } = useAuth()
+  if (isLoading) return (
+    <div style={{ display: 'flex', alignItems: 'center', justifyContent: 'center', height: '100vh', background: 'var(--bg)' }}>
+      <div style={{ width: '32px', height: '32px', borderRadius: '50%', border: '2px solid var(--border2)', borderTopColor: 'var(--blue)', animation: 'spin 0.8s linear infinite' }} />
+    </div>
+  )
+  if (!isAuthenticated) return <Navigate to="/login" replace />
+  if (user?.must_change_password) return <Navigate to="/forced-password-change" replace />
+  if (user?.role?.toLowerCase() !== 'admin') return <Navigate to="/dashboard" replace />
+  return <>{children}</>
+}
+
 function ForcedPasswordRoute({ children }: { children: React.ReactNode }) {
   const { isAuthenticated, isLoading, user } = useAuth()
   if (isLoading) return (
@@ -67,7 +80,7 @@ function AppRoutes() {
       <Route path="/audit" element={<ProtectedRoute><AuditPage /></ProtectedRoute>} />
       <Route path="/profile" element={<ProtectedRoute><ProfilePage /></ProtectedRoute>} />
       <Route path="/users" element={<ProtectedRoute><UsersPage /></ProtectedRoute>} />
-      <Route path="/blockchain" element={<ProtectedRoute><BlockchainDashboard /></ProtectedRoute>} />
+      <Route path="/blockchain" element={<AdminRoute><BlockchainDashboard /></AdminRoute>} />
       <Route path="/forced-password-change" element={<ForcedPasswordRoute><ForcedPasswordPage /></ForcedPasswordRoute>} />
 
       <Route path="*" element={<Navigate to="/dashboard" replace />} />

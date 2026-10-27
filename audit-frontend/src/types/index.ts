@@ -270,7 +270,7 @@ export interface AuditLog {
 }
 
 // ── NOTIFICATIONS ─────────────────────────────────────────────────────────
-export type NotificationType = 'tamper' | 'bns' | 'upload' | 'yolo' | 'system' | 'custody'
+export type NotificationType = 'tamper' | 'bns' | 'upload' | 'yolo' | 'audio' | 'system' | 'custody' | 'login'
 export type NotificationSeverity = 'info' | 'warning' | 'critical'
 
 export interface Notification {

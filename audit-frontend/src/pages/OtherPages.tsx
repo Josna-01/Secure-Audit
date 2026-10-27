@@ -40,6 +40,8 @@ function CaseSearchResult({ item }: { item: Case }) {
 // ── EVIDENCE ──────────────────────────────────────────────────────────────
 export function EvidencePage() {
   const navigate = useNavigate()
+  const { user } = useAuth()
+  const isAdmin = user?.role?.toLowerCase() === 'admin'
   // Set when opened from a notification link: /evidence?evidence_id=…&case_id=…
   const [searchParams] = useSearchParams()
   const focusCaseId = searchParams.get('case_id')
@@ -56,10 +58,24 @@ export function EvidencePage() {
   const [uploading, setUploading] = useState(false)
   const [uploadDone, setUploadDone] = useState(false)
   const [evidence, setEvidence] = useState<Evidence[]>([])
+  const [evidenceSearch, setEvidenceSearch] = useState('')
+  const [evidenceTypeFilter, setEvidenceTypeFilter] = useState('All Types')
+  const [evidenceStatusFilter, setEvidenceStatusFilter] = useState('All Statuses')
   const [err, setErr] = useState('')
   const [verifyResult, setVerifyResult] = useState<Record<string, string>>({})
   const fileRef = useRef<HTMLInputElement>(null)
   const visibleCaseResults = filterCasesByCreatorRole(caseResults, caseRoleFilter)
+  const evidenceTypes = Array.from(new Set(evidence.map((item) => item.file_type))).sort()
+  const evidenceStatuses = Array.from(new Set(evidence.map((item) => item.status))).sort()
+  const normalizedEvidenceSearch = evidenceSearch.trim().toLowerCase()
+  const filteredEvidence = evidence.filter((item) => {
+    const matchesSearch = !normalizedEvidenceSearch || [item.file_name, item.file_type, item.status, item.sha256_hash]
+      .some((value) => value?.toLowerCase().includes(normalizedEvidenceSearch))
+    return matchesSearch
+      && (evidenceTypeFilter === 'All Types' || item.file_type === evidenceTypeFilter)
+      && (evidenceStatusFilter === 'All Statuses' || item.status === evidenceStatusFilter)
+  })
+  const hasEvidenceFilters = Boolean(evidenceSearch || evidenceTypeFilter !== 'All Types' || evidenceStatusFilter !== 'All Statuses')
 
   const searchCases = async (q: string) => {
     if (q.length < 2) { setCaseResults([]); return }
@@ -197,13 +213,33 @@ export function EvidencePage() {
         </div>
 
         {/* Evidence List */}
-        <Card>
+        <Card style={{ display: 'flex', flexDirection: 'column', maxHeight: 'calc(100vh - 108px)', minHeight: 0 }}>
           <CardHeader>
             <CardTitle>Evidence Files{selectedCase ? ` · ${selectedCase.case_number}` : ''}</CardTitle>
-            <span style={{ fontSize: '11px', color: 'var(--text3)' }}>{evidence.length} files</span>
+            <span style={{ fontSize: '11px', color: 'var(--text3)' }}>{filteredEvidence.length}{hasEvidenceFilters ? ` of ${evidence.length}` : ''} files</span>
           </CardHeader>
+          <div style={{ display: 'grid', gridTemplateColumns: 'minmax(0, 1fr) 120px 120px', gap: '8px', marginBottom: '12px' }}>
+            <input
+              value={evidenceSearch}
+              onChange={(event) => setEvidenceSearch(event.target.value)}
+              placeholder="Search file or hash..."
+              aria-label="Search evidence files"
+              style={{ minWidth: 0, background: 'var(--bg3)', border: '1px solid var(--border)', borderRadius: 'var(--r)', padding: '7px 9px', fontSize: '12px', color: 'var(--text)', fontFamily: 'var(--font)', outline: 'none' }}
+            />
+            <select value={evidenceTypeFilter} onChange={(event) => setEvidenceTypeFilter(event.target.value)} aria-label="Filter by evidence type" style={{ background: 'var(--bg3)', border: '1px solid var(--border)', borderRadius: 'var(--r)', padding: '7px 8px', fontSize: '11px', color: 'var(--text)', fontFamily: 'var(--font)', outline: 'none' }}>
+              <option>All Types</option>
+              {evidenceTypes.map((type) => <option key={type}>{type}</option>)}
+            </select>
+            <select value={evidenceStatusFilter} onChange={(event) => setEvidenceStatusFilter(event.target.value)} aria-label="Filter by verification status" style={{ background: 'var(--bg3)', border: '1px solid var(--border)', borderRadius: 'var(--r)', padding: '7px 8px', fontSize: '11px', color: 'var(--text)', fontFamily: 'var(--font)', outline: 'none' }}>
+              <option>All Statuses</option>
+              {evidenceStatuses.map((status) => <option key={status}>{status}</option>)}
+            </select>
+          </div>
+          {hasEvidenceFilters && <div style={{ marginTop: '-5px', marginBottom: '10px', textAlign: 'right' }}><span onClick={() => { setEvidenceSearch(''); setEvidenceTypeFilter('All Types'); setEvidenceStatusFilter('All Statuses') }} style={{ color: 'var(--blue)', cursor: 'pointer', fontSize: '11px' }}>Clear filters</span></div>}
           {evidence.length === 0 && <div style={{ textAlign: 'center', padding: '40px', color: 'var(--text3)', fontSize: '12px' }}>No evidence uploaded yet</div>}
-          {evidence.map((f) => (
+          {evidence.length > 0 && filteredEvidence.length === 0 && <div style={{ textAlign: 'center', padding: '40px', color: 'var(--text3)', fontSize: '12px' }}>No evidence matches these filters.</div>}
+          <div style={{ overflowY: 'auto', flex: 1, minHeight: 0, paddingRight: '4px' }}>
+          {filteredEvidence.map((f) => (
             <div key={f.id} id={`evidence-${f.id}`} style={{ border: '1px solid var(--border)', borderLeft: `3px solid ${f.status === 'Tampered' || f.status === 'Missing' ? 'var(--red)' : f.status === 'Unregistered' ? 'var(--amber)' : 'var(--green)'}`, borderRadius: 'var(--r)', padding: '10px 12px', background: 'var(--bg3)', marginBottom: '8px', boxShadow: f.id === focusEvidenceId ? '0 0 0 2px var(--blue)' : undefined }}>
               <div style={{ display: 'flex', alignItems: 'center', gap: '10px' }}>
                 <div style={{ flex: 1, minWidth: 0 }}>
@@ -213,13 +249,22 @@ export function EvidencePage() {
                 <Badge label={f.status} />
               </div>
               <div style={{ display: 'flex', alignItems: 'center', gap: '8px', marginTop: '8px' }}>
-                <HashChip hash={f.sha256_hash} />
+                {isAdmin && <HashChip hash={f.sha256_hash} />}
                 <div style={{ flex: 1 }} />
                 {f.file_type === 'Audio' && (
                   <Btn size="xs" onClick={() => navigate(f.case_id ? `/audio?case_id=${f.case_id}&evidence_id=${f.id}` : `/audio?evidence_id=${f.id}`)}>Analyze Audio</Btn>
                 )}
                 {f.file_type === 'Video' && f.case_id && (
                   <Btn size="xs" onClick={() => navigate(`/photo3d?case_id=${f.case_id}&evidence_id=${f.id}`)}>3D Reconstruct</Btn>
+                )}
+                {f.file_type === 'Image' && f.case_id && (
+                  <Btn size="xs" onClick={() => navigate(`/detection?case_id=${f.case_id}&evidence_id=${f.id}`)}>Object Detection</Btn>
+                )}
+                {f.file_type === 'Document' && (
+                  <Btn size="xs" onClick={() => navigate('/ocr')}>OCR Extract</Btn>
+                )}
+                {f.file_type === 'FIR' && (
+                  <Btn size="xs" onClick={() => navigate('/bns')}>BNS Classification</Btn>
                 )}
                 <Btn size="xs" onClick={() => verifyHash(f.id)}>Verify Hash</Btn>
               </div>
@@ -229,6 +274,7 @@ export function EvidencePage() {
               {verifyResult[f.id] && <div style={{ marginTop: '6px', fontSize: '11px', color: verifyResult[f.id].startsWith('✓') && !verifyResult[f.id].includes('⚠') ? 'var(--green)' : verifyResult[f.id].startsWith('Verifying') ? 'var(--text2)' : 'var(--red)' }}>{verifyResult[f.id]}</div>}
             </div>
           ))}
+          </div>
         </Card>
       </div>
     </AppShell>
@@ -237,6 +283,9 @@ export function EvidencePage() {
 
 // ── OBJECT DETECTION ──────────────────────────────────────────────────────
 export function DetectionPage() {
+  const [searchParams] = useSearchParams()
+  const requestedCaseId = searchParams.get('case_id')
+  const requestedEvidenceId = searchParams.get('evidence_id')
   const [selectedCase, setSelectedCase] = useState<Case | null>(null)
   const [caseSearch, setCaseSearch] = useState('')
   const [caseResults, setCaseResults] = useState<Case[]>([])
@@ -262,6 +311,27 @@ export function DetectionPage() {
     const ev = await api.getEvidence(c.id)
     setEvidenceFiles(ev.data.filter((e) => e.file_type === 'Image'))
   }
+
+  // An evidence-row action can open detection with its case and image already selected.
+  useEffect(() => {
+    if (!requestedCaseId || selectedCase?.id === requestedCaseId) return
+    let active = true
+    Promise.all([api.getCase(requestedCaseId), api.getEvidence(requestedCaseId)])
+      .then(([caseResult, evidenceResult]) => {
+        if (!active) return
+        const detectionEvidence = evidenceResult.data.filter((item) => item.file_type === 'Image')
+        setSelectedCase(caseResult.data)
+        setEvidenceFiles(detectionEvidence)
+        if (requestedEvidenceId && detectionEvidence.some((item) => item.id === requestedEvidenceId)) {
+          setSelectedEvidence(requestedEvidenceId)
+          setImgSource('evidence')
+        }
+      })
+      .catch(() => {
+        if (active) setErr('Unable to load the selected evidence for object detection.')
+      })
+    return () => { active = false }
+  }, [requestedCaseId, requestedEvidenceId, selectedCase?.id])
 
   const runDetection = async () => {
     if (!selectedCase) { setErr('Select a case first.'); return }
@@ -615,11 +685,11 @@ export function BNSPage() {
           </Card>
         </div>
 
-        {/* Right Column: Multi-Label Predictions & Explainability Dossier */}
+        {/* Right Column: Multi-Label Predictions & Explainability Results */}
         <div style={{ display: 'flex', flexDirection: 'column', gap: '16px', minWidth: 0, width: '100%' }}>
           <Card>
             <CardHeader>
-              <CardTitle>BNS Legal Classification Dossier</CardTitle>
+              <CardTitle>BNS Legal Classification Results</CardTitle>
               <span style={{ fontSize: '11px', color: result ? 'var(--green)' : 'var(--text3)', fontWeight: 500 }}>
                 {result ? `${displayedSections.length} ${displayedSections.length === 1 ? 'Applicable Section Identified' : 'Applicable Sections Identified'}` : 'Awaiting FIR Analysis'}
               </span>

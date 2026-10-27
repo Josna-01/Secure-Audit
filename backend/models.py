@@ -212,7 +212,7 @@ class Notification(Base):
     recipient_id = Column(UUID(as_uuid=True), ForeignKey("users.id", ondelete="CASCADE"), nullable=False)
     case_id = Column(UUID(as_uuid=True), ForeignKey("cases.id", ondelete="RESTRICT"), nullable=True)
     evidence_id = Column(UUID(as_uuid=True), ForeignKey("evidence.id", ondelete="RESTRICT"), nullable=True)
-    type = Column(String, nullable=False)  # tamper | system | upload | yolo | bns | custody
+    type = Column(String, nullable=False)  # tamper | system | upload | yolo | bns | audio | custody | login
     title = Column(String, nullable=False)
     description = Column(String, nullable=False)
     severity = Column(String, nullable=False, server_default="info", default="info")  # info | warning | critical

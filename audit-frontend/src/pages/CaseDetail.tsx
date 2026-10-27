@@ -104,7 +104,7 @@ export default function CaseDetail() {
             <Btn size="xs" onClick={() => navigate('/bns')}>BNS Classify</Btn>
             <Btn size="xs" onClick={() => navigate(`/audio?case_id=${cas.id}`)}>Audio Forensics</Btn>
             <Btn size="xs" onClick={() => navigate(`/photo3d?case_id=${cas.id}`)}>3D Reconstruction</Btn>
-            <Btn size="xs" onClick={() => navigate('/evidence')}>Add Evidence</Btn>
+            <Btn size="xs" onClick={() => navigate(`/evidence?case_id=${encodeURIComponent(cas.id)}`)}>Add Evidence</Btn>
           </div>
         </div>
       </div>
@@ -183,7 +183,7 @@ export default function CaseDetail() {
       {activeTab === 1 && (
         <div>
           <div style={{ display: 'flex', justifyContent: 'flex-end', marginBottom: '12px' }}>
-            <Btn variant="primary" size="sm" onClick={() => navigate('/evidence')}>+ Add Evidence</Btn>
+            <Btn variant="primary" size="sm" onClick={() => navigate(`/evidence?case_id=${encodeURIComponent(cas.id)}`)}>+ Add Evidence</Btn>
           </div>
           {evidence.length === 0 && (
             <Card style={{ textAlign: 'center', padding: '40px' }}>
@@ -200,10 +200,10 @@ export default function CaseDetail() {
                 <Badge label={f.status} />
               </div>
               <div style={{ display: 'flex', alignItems: 'center', gap: '8px', marginTop: '8px' }}>
-                <HashChip hash={f.sha256_hash} />
+                {isAdmin && <HashChip hash={f.sha256_hash} />}
                 <div style={{ flex: 1 }} />
                 <Btn size="xs" onClick={() => verifyIntegrity(f.id)}>Verify Integrity</Btn>
-                <Btn size="xs" onClick={() => loadBlockchain(f.id)}>Blockchain Details</Btn>
+                {isAdmin && <Btn size="xs" onClick={() => loadBlockchain(f.id)}>Blockchain Details</Btn>}
                 {f.file_type === 'Audio' ? (
                   <Btn size="xs" onClick={() => navigate(`/audio?case_id=${cas.id}&evidence_id=${f.id}`)}>Analyze Audio</Btn>
                 ) : f.file_type === 'Video' ? (
@@ -393,7 +393,7 @@ export default function CaseDetail() {
           ) : (
             <Card>
               <CardHeader>
-                <CardTitle>BNS Section Predictions &amp; Legal Dossier</CardTitle>
+                <CardTitle>BNS Section Predictions &amp; Legal Analysis</CardTitle>
                 <span style={{ fontSize: '11px', color: 'var(--green)', fontWeight: 500 }}>
                   {(bnsResult?.bns || bnsResult?.sections)?.length || 0} Applicable Sections
                 </span>

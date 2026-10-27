@@ -11,6 +11,7 @@ const TYPE_META: Record<string, { icon: string; color: string }> = {
   yolo:    { icon: '[*]', color: 'var(--amber)'   },
   custody: { icon: '[>]', color: 'var(--blue)'    },
   audio:   { icon: '[~]', color: 'var(--purple)'  },
+  login:   { icon: '[@]', color: 'var(--green)'   },
   system:  { icon: '[i]', color: 'var(--text3)'   }
 }
 
@@ -20,11 +21,11 @@ const SEVERITY_COLOR: Record<string, string> = {
 
 // Fallback when a notification has no link of its own
 const TYPE_ROUTE: Record<string, string> = {
-  tamper: '/evidence', bns: '/bns', upload: '/evidence', yolo: '/detection', custody: '/evidence', audio: '/audio', system: '/audit'
+  tamper: '/evidence', bns: '/bns', upload: '/evidence', yolo: '/detection', custody: '/evidence', audio: '/audio', login: '/users', system: '/audit'
 }
 
 function notificationUser(notification: Notification) {
-  const match = notification.description.match(/^(.+?)\s+(uploaded|transferred)\b/i)
+  const match = notification.description.match(/^(.+?)\s+(uploaded|transferred|signed in)\b/i)
   return match?.[1] || (notification.type === 'system' || notification.type === 'tamper' ? 'System' : 'Forensic service')
 }
 
@@ -144,8 +145,10 @@ export default function NotificationPanel({ open, refreshKey, onClose, onUnreadC
                       </>}
                       <span style={{ color: 'var(--text3)' }}>Date &amp; time</span>
                       <span style={{ color: 'var(--text2)' }}>{notificationDate(n.created_at)}</span>
-                      <span style={{ color: 'var(--text3)' }}>Details</span>
-                      <span style={{ color: 'var(--text2)', overflowWrap: 'anywhere' }}>{notificationDetails(n)}</span>
+                      {n.type !== 'login' && <>
+                        <span style={{ color: 'var(--text3)' }}>Details</span>
+                        <span style={{ color: 'var(--text2)', overflowWrap: 'anywhere' }}>{notificationDetails(n)}</span>
+                      </>}
                     </div>
                   </div>
                 </div>
