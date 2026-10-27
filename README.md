@@ -1,10 +1,10 @@
 # Secure Audit — Digital Evidence & Investigation Support System
 
-> **Authoritative public-submission guide:** The following section describes exactly what is included in this repository. Private AI services, models, datasets, evidence uploads, backups, local runtime output, and real configuration values are not included.
+> **Repository note:** This README describes the complete Secure Audit system. The frontend, core backend, OCR workflow, database schema, and blockchain module are published to GitHub. The BNS, audio-forensics, object-detection, and photogrammetry services remain part of the local project but are intentionally excluded from GitHub through `.gitignore`.
 
-## Public project overview
+## Overall system overview
 
-Secure Audit is a digital-evidence management application. Its submitted core lets authorised users create cases, upload evidence, compute SHA-256 hashes, register/verify evidence through a local Ethereum ledger, perform multilingual OCR, and view audit logs and notifications.
+Secure Audit is a digital-evidence management application. Its full local system lets authorised users create cases, upload evidence, compute SHA-256 hashes, register/verify evidence through a local Ethereum ledger, perform multilingual OCR, classify BNS sections, detect relevant objects, analyse audio, reconstruct 3D scenes, and view audit logs and notifications.
 
 ### Included workflow
 
@@ -13,7 +13,8 @@ Secure Audit is a digital-evidence management application. Its submitted core le
 3. Generate a SHA-256 evidence digest.
 4. Register or verify the digest against the local blockchain ledger.
 5. Run OCR on eligible image/document evidence.
-6. Search OCR text and review audit history.
+6. Run optional BNS, object-detection, audio-forensics, or 3D reconstruction analysis when the corresponding local service is available.
+7. Search OCR text and review audit history.
 
 ### Included technologies
 
@@ -25,11 +26,12 @@ Secure Audit is a digital-evidence management application. Its submitted core le
 | Integrity | SHA-256 |
 | Blockchain | Solidity, Web3.py, Hardhat, Ganache |
 | OCR | PaddleOCR, Tesseract, PyMuPDF, pdf2image |
+| Optional local AI modules | Legal-BERT/HGAT, YOLOv8, WhisperX, COLMAP, Open3D |
 
-## Exact public structure
+## Complete system structure
 
 ```text
-Secure-Audit/
+Secure-Audit/  (folders marked local-only are Git-ignored)
 ├── .gitignore                        # Ignores secrets, generated data, and private modules
 ├── README.md                         # This documentation
 ├── schema.sql                        # PostgreSQL schema for a fresh installation
@@ -66,6 +68,11 @@ Secure-Audit/
 │   ├── scripts/                      # Administration/storage utilities
 │   ├── setup_tessdata.py             # Tesseract language-data setup
 │   └── migrate_*.py                  # Older-database upgrade helpers
+├── bns-backend/                       # BNS legal-classification service — local-only / Git-ignored
+├── best/                              # YOLO object-detection service — local-only / Git-ignored
+├── audio-backend/                     # Audio-forensics service — local-only / Git-ignored
+├── photogrammetry-backend/            # 3D reconstruction service — local-only / Git-ignored
+├── backups/                           # Local recovery data — Git-ignored
 └── blockchain/                        # Local Ethereum evidence ledger
     ├── contracts/EvidenceRegistry.sol # Solidity contract
     ├── scripts/deploy.js             # Local deployment script
@@ -165,9 +172,17 @@ node scripts/deploy.js
 
 The root `.gitignore` prevents publishing real configuration values, keys, credentials, uploads, backups, logs, caches, virtual environments, `node_modules`, blockchain runtime data, build artifacts, and private modules. Only safe `.env.example` templates are version-controlled.
 
-## Excluded local modules
+## Local-only modules and GitHub exclusions
 
-The following remain local-only and are not part of the public repository: `audio-backend/`, `best/` (object detection), `bns-backend/`, `photogrammetry-backend/`, `backups/`, local uploads, models, datasets, and generated outputs.
+The following folders are part of the full local system but are ignored by GitHub to protect private implementation work, large models/datasets, and generated data:
+
+- `bns-backend/` — BNS legal classification and supporting model/retrieval assets
+- `best/` — object/weapon detection service and model assets
+- `audio-backend/` — audio transcription and forensic-analysis service
+- `photogrammetry-backend/` — video-to-3D reconstruction service
+- `backups/`, uploads, models, datasets, logs, runtime output, and local `.env` files
+
+The main frontend and backend contain integration routes for these optional local services. They become available when the relevant ignored folder is present and configured locally.
 
 ## Future scope
 
