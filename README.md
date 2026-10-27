@@ -189,14 +189,14 @@ The main frontend and backend contain integration routes for these optional loca
 - Add investigation storyboards and evidence visualisation.
 - Validate modules using real-world datasets.
 - Improve 3D reconstruction efficiency and accuracy.
-- Assess scalable, production-grade deployment.
+- Assess scalable deployment.
 
 ## Contributors
 
-- Alisha Anton Fernandis (`4SO23CS017`)
-- Ancilla Teresa Dsouza (`4SO23CS026`)
 - Amisha Josna Dsouza (`4SO23CS019`)
+- Ancilla Teresa Dsouza (`4SO23CS026`)
 - Apeksha A Govekar (`4SO23CS031`)
+- Alisha Anton Fernandis (`4SO23CS017`)
 
 <details>
 <summary>Legacy full-development reference — not part of the public submission</summary>
@@ -733,15 +733,11 @@ The backend uses local evidence storage by default (`STORAGE_BACKEND=local`). Co
 
 ## 18. Future Scope
 
-- **Edge Deployment for Patrol Units:** Lightweight mobile edge inference for on-scene evidence hashing and instant weapon scanning.
-- **Zero-Knowledge Proofs (ZKP):** Implement zk-SNARKs for selective evidence disclosure without revealing sensitive case details.
-- **Multimodal Video Diarization:** Synchronized facial recognition and voice diarization across multi-camera interrogation rooms.
-- **National Crime Records Integration:** Automated interoperability with national criminal databases and CCTNS frameworks.
 
 ---
 
 ## 19. Contributors
 
-Secure Audit was developed by the project team as an academic digital-forensics project.
+
 
 </details>
