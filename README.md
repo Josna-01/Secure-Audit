@@ -169,6 +169,20 @@ The root `.gitignore` prevents publishing real configuration values, keys, crede
 
 The following remain local-only and are not part of the public repository: `audio-backend/`, `best/` (object detection), `bns-backend/`, `photogrammetry-backend/`, `backups/`, local uploads, models, datasets, and generated outputs.
 
+## Future scope
+
+- Add investigation storyboards and evidence visualisation.
+- Validate modules using real-world datasets.
+- Improve 3D reconstruction efficiency and accuracy.
+- Assess scalable, production-grade deployment.
+
+## Contributors
+
+- Alisha Anton Fernandis (`4SO23CS017`)
+- Ancilla Teresa Dsouza (`4SO23CS026`)
+- Amisha Josna Dsouza (`4SO23CS019`)
+- Apeksha A Govekar (`4SO23CS031`)
+
 <details>
 <summary>Legacy full-development reference — not part of the public submission</summary>
 
