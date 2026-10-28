@@ -1,0 +1,16 @@
+fastapi
+uvicorn
+python-multipart
+python-dotenv
+requests
+numpy
+scipy
+soundfile
+miniaudio
+pydub
+SpeechRecognition
+torch
+torchaudio
+whisperx
+pyannote.audio
+

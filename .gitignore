@@ -237,15 +237,10 @@ best/version
 crime-detection/model/best.pt
 crime-detection/model/yolov8n.pt
 
-# BNS backend — trained HGAT model + FAISS retrieval files
-# best_rag_hgat_model.pth  → 76 MB trained weight. Use Git LFS:
-#   git lfs track "bns-backend/Model_Data/best_rag_hgat_model.pth"
-# The three small files below (total < 300 KB) are required at runtime and
-# should remain tracked in Git:
-#   faiss.index            (124 KB)
-#   section_embeddings.npy (124 KB)
-#   sections_meta.json     (22 KB — has a fallback, but track anyway)
-bns-backend/Model_Data/best_rag_hgat_model.pth
+# Required service weights. These files are below GitHub's 100 MB per-file
+# limit and let collaborators run the checked-in BNS and YOLO services.
+!best/best.pt
+!bns-backend/Model_Data/best_rag_hgat_model.pth
 
 # HuggingFace model cache (downloaded at runtime via transformers library)
 .cache/huggingface/
@@ -391,6 +386,7 @@ backups/
 *.sql
 *.sql.gz
 !schema.sql
+!photogrammetry-backend/migration.sql
 
 # Local evidence stores (contain confidential digital exhibits)
 backend/uploads/
@@ -405,15 +401,6 @@ blockchain/ganache-data/
 scratch/
 .scratch/
 
-# ============================================================================
-# LOCAL-ONLY MODULES AND WORKSPACE FILES
-# Retained locally but intentionally excluded from public submissions.
-# ============================================================================
-/audio-backend/
-/best/
-/bns-backend/
-/photogrammetry-backend/
-
 # Local demo-production tooling and outputs
 /demo_recording/
 /demo_tools/
@@ -424,7 +411,4 @@ scratch/
 # Local development/editor files
 /.vscode/
 
-# Private-service launcher scripts. They remain local because they start
-# services intentionally excluded from the public submission.
-/start_all.py
-/start_all.ps1
+# Shared launcher scripts are tracked; they start the checked-in local services.

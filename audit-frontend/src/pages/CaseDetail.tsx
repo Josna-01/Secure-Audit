@@ -100,8 +100,8 @@ export default function CaseDetail() {
             <div style={{ fontSize: '12px', color: 'var(--text3)' }}>{cas.offence_type} · {cas.investigator_name || 'Unassigned'} · {format(new Date(cas.created_at), 'dd MMM yyyy')}</div>
           </div>
           <div style={{ display: 'flex', gap: '8px', flexWrap: 'wrap' }}>
-            <Btn size="xs" onClick={() => navigate('/detection')}>Run Detection</Btn>
-            <Btn size="xs" onClick={() => navigate('/bns')}>BNS Classify</Btn>
+            <Btn size="xs" onClick={() => navigate(`/detection?case_id=${encodeURIComponent(cas.id)}`)}>Run Detection</Btn>
+            <Btn size="xs" onClick={() => navigate(`/bns?case_id=${encodeURIComponent(cas.id)}`)}>BNS Classify</Btn>
             <Btn size="xs" onClick={() => navigate(`/audio?case_id=${cas.id}`)}>Audio Forensics</Btn>
             <Btn size="xs" onClick={() => navigate(`/photo3d?case_id=${cas.id}`)}>3D Reconstruction</Btn>
             <Btn size="xs" onClick={() => navigate(`/evidence?case_id=${encodeURIComponent(cas.id)}`)}>Add Evidence</Btn>
@@ -208,8 +208,15 @@ export default function CaseDetail() {
                   <Btn size="xs" onClick={() => navigate(`/audio?case_id=${cas.id}&evidence_id=${f.id}`)}>Analyze Audio</Btn>
                 ) : f.file_type === 'Video' ? (
                   <Btn size="xs" onClick={() => navigate(`/photo3d?case_id=${cas.id}&evidence_id=${f.id}`)}>3D Reconstruct</Btn>
+                ) : f.file_type === 'Document' ? (
+                  <Btn size="xs" onClick={() => {
+                    setSelectedOcrEvidenceId(f.id)
+                    setOcrResult(null)
+                    setOcrError('')
+                    setActiveTab(3)
+                  }}>OCR Extract</Btn>
                 ) : (
-                  <Btn size="xs" onClick={() => navigate('/detection')}>Run YOLO</Btn>
+                  <Btn size="xs" onClick={() => navigate(`/detection?case_id=${encodeURIComponent(cas.id)}&evidence_id=${encodeURIComponent(f.id)}`)}>Run YOLO</Btn>
                 )}
               </div>
               {f.status === 'Missing' && (
@@ -242,7 +249,7 @@ export default function CaseDetail() {
       {activeTab === 2 && (
         <Card style={{ textAlign: 'center', padding: '40px' }}>
           <div style={{ fontSize: '13px', color: 'var(--text3)', marginBottom: '16px' }}>Run YOLO Object Detection on crime scene images for this case</div>
-          <Btn variant="primary" onClick={() => navigate('/detection')}>Go to Object Detection</Btn>
+          <Btn variant="primary" onClick={() => navigate(`/detection?case_id=${encodeURIComponent(cas.id)}`)}>Go to Object Detection</Btn>
         </Card>
       )}
 
@@ -388,7 +395,7 @@ export default function CaseDetail() {
           {!bnsResult ? (
             <Card style={{ textAlign: 'center', padding: '40px' }}>
               <div style={{ fontSize: '13px', color: 'var(--text3)', marginBottom: '16px' }}>BNS classification not yet run for this case</div>
-              <Btn variant="primary" onClick={() => navigate('/bns')}>Run BNS Classification</Btn>
+              <Btn variant="primary" onClick={() => navigate(`/bns?case_id=${encodeURIComponent(cas.id)}`)}>Run BNS Classification</Btn>
             </Card>
           ) : (
             <Card>
@@ -402,7 +409,7 @@ export default function CaseDetail() {
                 <div>
                   Bharatiya Nyaya Sanhita (BNS) · Crime Type: <span style={{ fontWeight: 700 }}>{bnsResult.crime_type}</span>
                 </div>
-                <Btn size="xs" onClick={() => navigate('/bns')}>Re-Classify</Btn>
+                <Btn size="xs" onClick={() => navigate(`/bns?case_id=${encodeURIComponent(cas.id)}`)}>Re-Classify</Btn>
               </div>
 
               <div style={{ display: 'flex', flexDirection: 'column', gap: '10px' }}>

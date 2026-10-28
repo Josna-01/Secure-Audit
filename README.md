@@ -1,6 +1,6 @@
 # Secure Audit — Digital Evidence & Investigation Support System
 
-> **Repository note:** This README describes the complete Secure Audit system. The frontend, core backend, OCR workflow, database schema, and blockchain module are published to GitHub. The BNS, audio-forensics, object-detection, and photogrammetry services remain part of the local project but are intentionally excluded from GitHub through `.gitignore`.
+> **Repository note:** This repository contains the complete runnable Secure Audit system: the frontend, API gateway, blockchain module, OCR, BNS classification, object detection, audio forensics, and photogrammetry services. Only secrets, local environments, evidence uploads, generated output, caches, datasets, backups, and logs are Git-ignored.
 
 ## Overall system overview
 
@@ -13,7 +13,7 @@ Secure Audit is a digital-evidence management application. Its full local system
 3. Generate a SHA-256 evidence digest.
 4. Register or verify the digest against the local blockchain ledger.
 5. Run OCR on eligible image/document evidence.
-6. Run optional BNS, object-detection, audio-forensics, or 3D reconstruction analysis when the corresponding local service is available.
+6. Run BNS, object-detection, audio-forensics, or 3D reconstruction analysis through their dedicated services.
 7. Search OCR text and review audit history.
 
 ### Included technologies
@@ -26,13 +26,13 @@ Secure Audit is a digital-evidence management application. Its full local system
 | Integrity | SHA-256 |
 | Blockchain | Solidity, Web3.py, Hardhat, Ganache |
 | OCR | PaddleOCR, Tesseract, PyMuPDF, pdf2image |
-| Optional local AI modules | Legal-BERT/HGAT, YOLOv8, WhisperX, COLMAP, Open3D |
+| AI services | Legal-BERT/HGAT, YOLOv8, WhisperX, COLMAP, Open3D |
 
 ## Complete system structure
 
 ```text
-Secure-Audit/  (folders marked local-only are Git-ignored)
-├── .gitignore                        # Ignores secrets, generated data, and private modules
+Secure-Audit/
+├── .gitignore                        # Ignores secrets and local/generated runtime data
 ├── README.md                         # This documentation
 ├── schema.sql                        # PostgreSQL schema for a fresh installation
 ├── audit-frontend/                   # React/Vite frontend
@@ -68,10 +68,22 @@ Secure-Audit/  (folders marked local-only are Git-ignored)
 │   ├── scripts/                      # Administration/storage utilities
 │   ├── setup_tessdata.py             # Tesseract language-data setup
 │   └── migrate_*.py                  # Older-database upgrade helpers
-├── bns-backend/                       # BNS legal-classification service — local-only / Git-ignored
-├── best/                              # YOLO object-detection service — local-only / Git-ignored
-├── audio-backend/                     # Audio-forensics service — local-only / Git-ignored
-├── photogrammetry-backend/            # 3D reconstruction service — local-only / Git-ignored
+├── bns-backend/                       # BNS legal-classification service
+│   ├── app/                           # FastAPI routes, HGAT model and retrieval wrapper
+│   ├── Model_Data/                    # Checked-in model weight, FAISS index and metadata
+│   └── requirements.txt
+├── best/                              # YOLOv8 object-detection service
+│   ├── app.py / main.py               # API application and service entry point
+│   ├── best.pt                        # Required YOLO model weight
+│   ├── sample_data/                   # Small safe demo images
+│   └── requirements.txt
+├── audio-backend/                     # Audio-forensics FastAPI service
+│   ├── app.py
+│   └── requirements.txt
+├── photogrammetry-backend/            # COLMAP/Open3D 3D reconstruction service
+│   ├── app.py / models.py / db.py
+│   ├── services/                      # Frame extraction, COLMAP, Open3D and evaluation
+│   └── requirements.txt
 ├── backups/                           # Local recovery data — Git-ignored
 └── blockchain/                        # Local Ethereum evidence ledger
     ├── contracts/EvidenceRegistry.sol # Solidity contract
@@ -123,9 +135,28 @@ npm install
 cd ..
 ```
 
+Install the remaining Python services in their own virtual environments. The environments themselves are intentionally not committed.
+
+```powershell
+foreach ($service in 'bns-backend', 'audio-backend', 'best', 'photogrammetry-backend') {
+  Push-Location $service
+  py -3.10 -m venv venv
+  .\venv\Scripts\python.exe -m pip install -r requirements.txt
+  Pop-Location
+}
+```
+
+Additional system tools are required for specific features: COLMAP for photogrammetry, and FFmpeg/Poppler/Tesseract when their associated media or PDF workflows are used. Model downloads performed by third-party libraries are cached locally and are not committed.
+
 ### Initialise and run
 
-Import `schema.sql` into an empty PostgreSQL database, then use three PowerShell terminals:
+Import `schema.sql` into an empty PostgreSQL database. After installing all dependencies, launch every service from one PowerShell terminal:
+
+```powershell
+.\start_all.ps1
+```
+
+Use `.\start_all.ps1 -NewWindows` when you want a dedicated terminal for each service. Alternatively, start the core services manually:
 
 ```powershell
 # Terminal 1: blockchain
@@ -146,6 +177,20 @@ npm run dev
 ```
 
 Open `http://localhost:5173`. The API documentation is at `http://127.0.0.1:8000/docs`.
+
+### Service map
+
+| Service | Local address | Purpose |
+| --- | --- | --- |
+| React frontend | `http://localhost:5173` | User interface |
+| Main FastAPI backend | `http://localhost:8000` | Authentication, cases, evidence, OCR gateway, notifications and audit trail |
+| BNS service | `http://localhost:8001` | Legal-section classification |
+| Audio service | `http://localhost:8002` | Audio transcription and forensic analysis |
+| Object detection | `http://localhost:8003` | YOLO image analysis |
+| Photogrammetry | `http://localhost:8004` | Video-to-3D reconstruction |
+| Ganache | `http://127.0.0.1:8545` | Local Ethereum development ledger |
+
+The services communicate through HTTP, so an analysis request can run in one service while a user moves to another page. For deployment across multiple computers, host the API and AI services on reachable shared servers and replace `localhost` service URLs with those server addresses.
 
 To deploy the local evidence contract after starting Ganache:
 
@@ -168,21 +213,11 @@ node scripts/deploy.js
 | Audit | `/audit` |
 | Users | `/users` |
 
-## Security and Git policy
+## Collaboration and Git policy
 
-The root `.gitignore` prevents publishing real configuration values, keys, credentials, uploads, backups, logs, caches, virtual environments, `node_modules`, blockchain runtime data, build artifacts, and private modules. Only safe `.env.example` templates are version-controlled.
+All application source, dependency manifests, safe `.env.example` templates, shared launchers, small demo fixtures, and the two required runtime model weights are version-controlled so teammates can clone or pull the same system.
 
-## Local-only modules and GitHub exclusions
-
-The following folders are part of the full local system but are ignored by GitHub to protect private implementation work, large models/datasets, and generated data:
-
-- `bns-backend/` — BNS legal classification and supporting model/retrieval assets
-- `best/` — object/weapon detection service and model assets
-- `audio-backend/` — audio transcription and forensic-analysis service
-- `photogrammetry-backend/` — video-to-3D reconstruction service
-- `backups/`, uploads, models, datasets, logs, runtime output, and local `.env` files
-
-The main frontend and backend contain integration routes for these optional local services. They become available when the relevant ignored folder is present and configured locally.
+The root `.gitignore` deliberately excludes only machine-specific or sensitive data: real `.env` files and credentials, virtual environments, `node_modules`, evidence uploads, backups/database dumps, local Ganache data, logs, caches, downloaded datasets, generated AI/3D output, and temporary files. Each teammate creates their own `.env` files from the committed examples and runs the dependency-install commands above.
 
 ## Future scope
 

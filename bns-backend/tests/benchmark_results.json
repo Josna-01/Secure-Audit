@@ -1,0 +1,943 @@
+{
+  "total_test_cases": 30,
+  "macro_avg_precision": 0.436,
+  "macro_avg_recall": 0.9072,
+  "macro_avg_f1_score": 0.5602,
+  "micro_precision": 0.3688,
+  "micro_recall": 0.9151,
+  "micro_f1_score": 0.5257,
+  "multi_label_coverage_rate": 80.0,
+  "case_details": [
+    {
+      "id": "FIR_01",
+      "description": "Multi-offence Armed Robbery + Assault + Intimidation + Mischief + Common Intention",
+      "expected": [
+        "118(1)",
+        "306",
+        "324",
+        "351",
+        "3(5)"
+      ],
+      "predicted": [
+        "118(2)",
+        "118(1)",
+        "306",
+        "309(2)",
+        "3(5)",
+        "117(4)",
+        "117(2)",
+        "115(2)",
+        "351",
+        "324(2)",
+        "324",
+        "115(1)",
+        "114",
+        "117(1)",
+        "305"
+      ],
+      "confidence_scores": {
+        "118(2)": "91%",
+        "118(1)": "91%",
+        "306": "89%",
+        "309(2)": "89%",
+        "3(5)": "85%"
+      },
+      "tp": 5,
+      "precision": 0.333,
+      "recall": 1.0,
+      "f1": 0.5
+    },
+    {
+      "id": "FIR_02",
+      "description": "Burglary + House-Breaking by Night + Theft in Dwelling + Mischief",
+      "expected": [
+        "331(1)",
+        "324",
+        "303(2)",
+        "305"
+      ],
+      "predicted": [
+        "331(1)",
+        "303(2)",
+        "324(2)",
+        "329(3)",
+        "305",
+        "304",
+        "329(1)",
+        "324"
+      ],
+      "confidence_scores": {
+        "331(1)": "90%",
+        "303(2)": "85%",
+        "324(2)": "83%",
+        "329(3)": "82%",
+        "305": "81%"
+      },
+      "tp": 4,
+      "precision": 0.5,
+      "recall": 1.0,
+      "f1": 0.667
+    },
+    {
+      "id": "FIR_03",
+      "description": "Attempt to Murder + Dangerous Weapon Assault + Criminal Intimidation",
+      "expected": [
+        "118(1)",
+        "109",
+        "351"
+      ],
+      "predicted": [
+        "109",
+        "110"
+      ],
+      "confidence_scores": {
+        "109": "92%",
+        "110": "90%"
+      },
+      "tp": 1,
+      "precision": 0.5,
+      "recall": 0.333,
+      "f1": 0.4
+    },
+    {
+      "id": "FIR_04",
+      "description": "Premeditated Murder + Dangerous Weapon + Criminal Conspiracy",
+      "expected": [
+        "101",
+        "103(1)",
+        "61(1)",
+        "118(1)"
+      ],
+      "predicted": [
+        "101",
+        "102",
+        "100",
+        "61(1)",
+        "103(1)",
+        "105",
+        "118(1)",
+        "118(2)",
+        "61(2)",
+        "117(2)",
+        "3(5)",
+        "117(4)",
+        "115(2)",
+        "115(1)",
+        "117(3)"
+      ],
+      "confidence_scores": {
+        "101": "93%",
+        "102": "92%",
+        "100": "91%",
+        "61(1)": "90%",
+        "103(1)": "89%"
+      },
+      "tp": 4,
+      "precision": 0.267,
+      "recall": 1.0,
+      "f1": 0.421
+    },
+    {
+      "id": "FIR_05",
+      "description": "Cyber Fraud + Online Cheating + Forged Electronic Records",
+      "expected": [
+        "336",
+        "340",
+        "318",
+        "318(4)"
+      ],
+      "predicted": [
+        "336",
+        "318(4)",
+        "340",
+        "338",
+        "319",
+        "318"
+      ],
+      "confidence_scores": {
+        "336": "94%",
+        "318(4)": "94%",
+        "340": "90%",
+        "338": "89%",
+        "319": "88%"
+      },
+      "tp": 4,
+      "precision": 0.667,
+      "recall": 1.0,
+      "f1": 0.8
+    },
+    {
+      "id": "FIR_06",
+      "description": "Kidnapping for Ransom + Criminal Intimidation + Joint Liability",
+      "expected": [
+        "137(1)(b)",
+        "351",
+        "140(2)",
+        "3(5)"
+      ],
+      "predicted": [
+        "140(2)",
+        "137(1)",
+        "140(1)",
+        "137(2)",
+        "140(4)",
+        "137(1)(b)",
+        "138",
+        "140(3)",
+        "351",
+        "3(5)"
+      ],
+      "confidence_scores": {
+        "140(2)": "96%",
+        "137(1)": "95%",
+        "140(1)": "95%",
+        "137(2)": "94%",
+        "140(4)": "94%"
+      },
+      "tp": 4,
+      "precision": 0.4,
+      "recall": 1.0,
+      "f1": 0.571
+    },
+    {
+      "id": "FIR_07",
+      "description": "Domestic Violence + Matrimonial Cruelty + Dowry Harassment + Voluntarily Causing Hurt",
+      "expected": [
+        "115(2)",
+        "86",
+        "85"
+      ],
+      "predicted": [
+        "85",
+        "86",
+        "118(2)",
+        "118(1)",
+        "117(4)",
+        "117(2)",
+        "115(2)",
+        "115(1)",
+        "117(3)",
+        "117(1)",
+        "114",
+        "116"
+      ],
+      "confidence_scores": {
+        "85": "93%",
+        "86": "91%",
+        "118(2)": "87%",
+        "118(1)": "86%",
+        "117(4)": "80%"
+      },
+      "tp": 3,
+      "precision": 0.25,
+      "recall": 1.0,
+      "f1": 0.4
+    },
+    {
+      "id": "FIR_08",
+      "description": "Armed Violent Rioting + Unlawful Assembly + Public Property Mischief",
+      "expected": [
+        "189(1)",
+        "324(5)",
+        "324(4)",
+        "189(2)",
+        "191(1)",
+        "190"
+      ],
+      "predicted": [
+        "324(5)",
+        "189(2)",
+        "189(1)",
+        "324(4)",
+        "191(1)",
+        "190",
+        "324",
+        "324(2)",
+        "115(2)",
+        "115(1)",
+        "114",
+        "116"
+      ],
+      "confidence_scores": {
+        "324(5)": "95%",
+        "189(2)": "94%",
+        "189(1)": "92%",
+        "324(4)": "91%",
+        "191(1)": "90%"
+      },
+      "tp": 6,
+      "precision": 0.5,
+      "recall": 1.0,
+      "f1": 0.667
+    },
+    {
+      "id": "FIR_09",
+      "description": "Criminal Breach of Trust by Employee + Forgery of Accounts",
+      "expected": [
+        "336",
+        "316(2)",
+        "316(1)",
+        "338"
+      ],
+      "predicted": [
+        "316(2)",
+        "316(1)",
+        "318(4)",
+        "318",
+        "319"
+      ],
+      "confidence_scores": {
+        "316(2)": "90%",
+        "316(1)": "89%",
+        "318(4)": "84%",
+        "318": "82%",
+        "319": "79%"
+      },
+      "tp": 2,
+      "precision": 0.4,
+      "recall": 0.5,
+      "f1": 0.444
+    },
+    {
+      "id": "FIR_09B",
+      "description": "Extortion + Threat of Injury + Joint Action",
+      "expected": [
+        "308",
+        "351",
+        "3(5)"
+      ],
+      "predicted": [
+        "309",
+        "308",
+        "351"
+      ],
+      "confidence_scores": {
+        "309": "89%",
+        "308": "89%",
+        "351": "76%"
+      },
+      "tp": 3,
+      "precision": 1.0,
+      "recall": 1.0,
+      "f1": 1.0
+    },
+    {
+      "id": "FIR_11",
+      "description": "Rash and Negligent Driving + Hit and Run + Causing Hurt",
+      "expected": [
+        "115(2)",
+        "125",
+        "281"
+      ],
+      "predicted": [
+        "281",
+        "125",
+        "115(1)",
+        "117(2)",
+        "117(1)",
+        "115(2)",
+        "117(3)",
+        "114",
+        "117(4)",
+        "116"
+      ],
+      "confidence_scores": {
+        "281": "96%",
+        "125": "91%",
+        "115(1)": "82%",
+        "117(2)": "81%",
+        "117(1)": "79%"
+      },
+      "tp": 3,
+      "precision": 0.3,
+      "recall": 1.0,
+      "f1": 0.462
+    },
+    {
+      "id": "FIR_12",
+      "description": "Outraging Modesty of Woman + Stalking + Criminal Intimidation",
+      "expected": [
+        "74",
+        "351",
+        "78",
+        "79"
+      ],
+      "predicted": [
+        "74",
+        "124(2)",
+        "79",
+        "76",
+        "75",
+        "78",
+        "124(1)",
+        "351",
+        "77",
+        "69",
+        "64"
+      ],
+      "confidence_scores": {
+        "74": "96%",
+        "124(2)": "93%",
+        "79": "93%",
+        "76": "93%",
+        "75": "91%"
+      },
+      "tp": 4,
+      "precision": 0.364,
+      "recall": 1.0,
+      "f1": 0.533
+    },
+    {
+      "id": "FIR_13",
+      "description": "Financial Investment Scam + Cheating + Inducement",
+      "expected": [
+        "319",
+        "318",
+        "318(4)"
+      ],
+      "predicted": [
+        "318(4)",
+        "318",
+        "319"
+      ],
+      "confidence_scores": {
+        "318(4)": "87%",
+        "318": "83%",
+        "319": "78%"
+      },
+      "tp": 3,
+      "precision": 1.0,
+      "recall": 1.0,
+      "f1": 1.0
+    },
+    {
+      "id": "FIR_14",
+      "description": "Criminal Trespass + Vandalism / Mischief + Insult to Provoke Breach of Peace",
+      "expected": [
+        "324",
+        "329(1)",
+        "324(2)",
+        "352"
+      ],
+      "predicted": [
+        "324(2)",
+        "324",
+        "329(1)",
+        "329(3)",
+        "331(1)",
+        "352"
+      ],
+      "confidence_scores": {
+        "324(2)": "87%",
+        "324": "87%",
+        "329(1)": "81%",
+        "329(3)": "78%",
+        "331(1)": "76%"
+      },
+      "tp": 4,
+      "precision": 0.667,
+      "recall": 1.0,
+      "f1": 0.8
+    },
+    {
+      "id": "FIR_15",
+      "description": "Dacoity + Armed Gang Attack + Grievous Hurt",
+      "expected": [
+        "118(1)",
+        "306",
+        "117(2)",
+        "310(2)",
+        "3(5)"
+      ],
+      "predicted": [
+        "309(2)",
+        "310(2)",
+        "306",
+        "117(4)",
+        "305",
+        "3(5)",
+        "115(2)",
+        "304",
+        "117(2)",
+        "115(1)",
+        "303(2)",
+        "114",
+        "116",
+        "117(1)",
+        "117(3)"
+      ],
+      "confidence_scores": {
+        "309(2)": "94%",
+        "310(2)": "92%",
+        "306": "90%",
+        "117(4)": "81%",
+        "305": "80%"
+      },
+      "tp": 4,
+      "precision": 0.267,
+      "recall": 0.8,
+      "f1": 0.4
+    },
+    {
+      "id": "FIR_16",
+      "description": "Culpable Homicide Not Amounting to Murder + Sudden Fight",
+      "expected": [
+        "105",
+        "100"
+      ],
+      "predicted": [
+        "102",
+        "118(2)",
+        "100",
+        "101",
+        "118(1)",
+        "105",
+        "117(2)",
+        "117(4)",
+        "115(1)",
+        "115(2)",
+        "117(1)",
+        "103(1)",
+        "116",
+        "117(3)",
+        "114"
+      ],
+      "confidence_scores": {
+        "102": "93%",
+        "118(2)": "90%",
+        "100": "90%",
+        "101": "89%",
+        "118(1)": "89%"
+      },
+      "tp": 2,
+      "precision": 0.133,
+      "recall": 1.0,
+      "f1": 0.235
+    },
+    {
+      "id": "FIR_17",
+      "description": "Abetment of Suicide + Continuous Harassment",
+      "expected": [
+        "351",
+        "108",
+        "45"
+      ],
+      "predicted": [
+        "108",
+        "107",
+        "45",
+        "49",
+        "351"
+      ],
+      "confidence_scores": {
+        "108": "94%",
+        "107": "92%",
+        "45": "84%",
+        "49": "84%",
+        "351": "81%"
+      },
+      "tp": 3,
+      "precision": 0.6,
+      "recall": 1.0,
+      "f1": 0.75
+    },
+    {
+      "id": "FIR_18",
+      "description": "Arson / Mischief by Fire + Criminal Intimidation",
+      "expected": [
+        "324(4)",
+        "324",
+        "351"
+      ],
+      "predicted": [
+        "324(4)",
+        "351",
+        "324(2)",
+        "324"
+      ],
+      "confidence_scores": {
+        "324(4)": "92%",
+        "351": "81%",
+        "324(2)": "78%",
+        "324": "77%"
+      },
+      "tp": 3,
+      "precision": 0.75,
+      "recall": 1.0,
+      "f1": 0.857
+    },
+    {
+      "id": "FIR_19",
+      "description": "Wrongful Confinement + Physical Assault + Extortion",
+      "expected": [
+        "140(3)",
+        "308",
+        "115(2)",
+        "3(5)"
+      ],
+      "predicted": [
+        "137(2)",
+        "140(4)",
+        "306",
+        "140(3)",
+        "137(1)",
+        "140(2)",
+        "140(1)",
+        "309(2)",
+        "305",
+        "138",
+        "137(1)(b)",
+        "115(2)",
+        "303(2)",
+        "304",
+        "115(1)"
+      ],
+      "confidence_scores": {
+        "137(2)": "87%",
+        "140(4)": "85%",
+        "306": "85%",
+        "140(3)": "84%",
+        "137(1)": "81%"
+      },
+      "tp": 3,
+      "precision": 0.2,
+      "recall": 0.75,
+      "f1": 0.316
+    },
+    {
+      "id": "FIR_20",
+      "description": "Snatching on Public Street + Causing Hurt",
+      "expected": [
+        "115(2)",
+        "306",
+        "303(2)",
+        "3(5)"
+      ],
+      "predicted": [
+        "304",
+        "116",
+        "115(1)",
+        "115(2)",
+        "305",
+        "114",
+        "303(2)",
+        "3(5)"
+      ],
+      "confidence_scores": {
+        "304": "78%",
+        "116": "75%",
+        "115(1)": "75%",
+        "115(2)": "75%",
+        "305": "73%"
+      },
+      "tp": 4,
+      "precision": 0.5,
+      "recall": 1.0,
+      "f1": 0.667
+    },
+    {
+      "id": "FIR_21",
+      "description": "Forgery of Will & Property Title Documents",
+      "expected": [
+        "336",
+        "318",
+        "338"
+      ],
+      "predicted": [
+        "336",
+        "340",
+        "338",
+        "318(4)",
+        "318",
+        "319"
+      ],
+      "confidence_scores": {
+        "336": "97%",
+        "340": "95%",
+        "338": "92%",
+        "318(4)": "86%",
+        "318": "84%"
+      },
+      "tp": 3,
+      "precision": 0.5,
+      "recall": 1.0,
+      "f1": 0.667
+    },
+    {
+      "id": "FIR_22",
+      "description": "Sexual Harassment at Workplace + Words Insulting Modesty",
+      "expected": [
+        "75",
+        "79"
+      ],
+      "predicted": [
+        "75",
+        "79",
+        "74",
+        "69",
+        "76",
+        "77",
+        "78",
+        "64",
+        "305",
+        "189(1)",
+        "304",
+        "303(2)"
+      ],
+      "confidence_scores": {
+        "75": "97%",
+        "79": "93%",
+        "74": "93%",
+        "69": "92%",
+        "76": "91%"
+      },
+      "tp": 2,
+      "precision": 0.167,
+      "recall": 1.0,
+      "f1": 0.286
+    },
+    {
+      "id": "FIR_23",
+      "description": "Rape under Pretext of Marriage + Deceitful Promise",
+      "expected": [
+        "351",
+        "69",
+        "64"
+      ],
+      "predicted": [
+        "69",
+        "74",
+        "75",
+        "76",
+        "79",
+        "64",
+        "351",
+        "77",
+        "78"
+      ],
+      "confidence_scores": {
+        "69": "95%",
+        "74": "91%",
+        "75": "90%",
+        "76": "88%",
+        "79": "86%"
+      },
+      "tp": 3,
+      "precision": 0.333,
+      "recall": 1.0,
+      "f1": 0.5
+    },
+    {
+      "id": "FIR_24",
+      "description": "Acid Attack + Grievous Hurt with Permanent Disfigurement",
+      "expected": [
+        "117(2)",
+        "124(1)"
+      ],
+      "predicted": [
+        "124(2)",
+        "124(1)",
+        "115(2)",
+        "115(1)",
+        "116",
+        "114"
+      ],
+      "confidence_scores": {
+        "124(2)": "95%",
+        "124(1)": "94%",
+        "115(2)": "81%",
+        "115(1)": "78%",
+        "116": "75%"
+      },
+      "tp": 1,
+      "precision": 0.167,
+      "recall": 0.5,
+      "f1": 0.25
+    },
+    {
+      "id": "FIR_25",
+      "description": "Mob Lynching on Identity Grounds + Murder by 5+ Persons",
+      "expected": [
+        "103(2)",
+        "190",
+        "189(2)",
+        "191(1)",
+        "3(5)"
+      ],
+      "predicted": [
+        "103(2)",
+        "189(2)",
+        "101",
+        "191(1)",
+        "102",
+        "103(1)",
+        "100",
+        "105",
+        "190",
+        "189(1)",
+        "3(5)"
+      ],
+      "confidence_scores": {
+        "103(2)": "98%",
+        "189(2)": "92%",
+        "101": "91%",
+        "191(1)": "90%",
+        "102": "89%"
+      },
+      "tp": 5,
+      "precision": 0.455,
+      "recall": 1.0,
+      "f1": 0.625
+    },
+    {
+      "id": "FIR_26",
+      "description": "Dowry Death within 7 Years of Marriage + Cruelty",
+      "expected": [
+        "86",
+        "80",
+        "85"
+      ],
+      "predicted": [
+        "80",
+        "86",
+        "85",
+        "100",
+        "102",
+        "101",
+        "105",
+        "103(1)"
+      ],
+      "confidence_scores": {
+        "80": "99%",
+        "86": "93%",
+        "85": "93%",
+        "100": "92%",
+        "102": "92%"
+      },
+      "tp": 3,
+      "precision": 0.375,
+      "recall": 1.0,
+      "f1": 0.545
+    },
+    {
+      "id": "FIR_27",
+      "description": "Cheating by Personation + Impersonating Public Servant",
+      "expected": [
+        "319",
+        "318",
+        "308"
+      ],
+      "predicted": [
+        "319",
+        "318(4)",
+        "305",
+        "318",
+        "351",
+        "303(2)",
+        "304"
+      ],
+      "confidence_scores": {
+        "319": "85%",
+        "318(4)": "84%",
+        "305": "82%",
+        "318": "82%",
+        "351": "82%"
+      },
+      "tp": 2,
+      "precision": 0.286,
+      "recall": 0.667,
+      "f1": 0.4
+    },
+    {
+      "id": "FIR_28",
+      "description": "Attempted Acid Attack + Stalking + Threat to Kill",
+      "expected": [
+        "351",
+        "124(2)",
+        "78"
+      ],
+      "predicted": [
+        "124(2)",
+        "74",
+        "124(1)",
+        "76",
+        "64",
+        "78",
+        "79",
+        "75",
+        "69",
+        "77"
+      ],
+      "confidence_scores": {
+        "124(2)": "95%",
+        "74": "91%",
+        "124(1)": "90%",
+        "76": "87%",
+        "64": "86%"
+      },
+      "tp": 2,
+      "precision": 0.2,
+      "recall": 0.667,
+      "f1": 0.308
+    },
+    {
+      "id": "FIR_29",
+      "description": "Petty Organized Theft Gang + Multi-Location Snatching",
+      "expected": [
+        "112",
+        "303(2)",
+        "3(5)"
+      ],
+      "predicted": [
+        "111",
+        "112",
+        "304",
+        "305",
+        "189(1)",
+        "303(2)"
+      ],
+      "confidence_scores": {
+        "111": "90%",
+        "112": "88%",
+        "304": "87%",
+        "305": "82%",
+        "189(1)": "82%"
+      },
+      "tp": 3,
+      "precision": 0.5,
+      "recall": 1.0,
+      "f1": 0.667
+    },
+    {
+      "id": "FIR_30",
+      "description": "Extortion by Threat of Death + Forcible Cheque Signing",
+      "expected": [
+        "309",
+        "308",
+        "351",
+        "3(5)"
+      ],
+      "predicted": [
+        "308",
+        "309",
+        "101",
+        "102",
+        "105",
+        "103(1)",
+        "351",
+        "100"
+      ],
+      "confidence_scores": {
+        "308": "93%",
+        "309": "92%",
+        "101": "86%",
+        "102": "85%",
+        "105": "84%"
+      },
+      "tp": 4,
+      "precision": 0.5,
+      "recall": 1.0,
+      "f1": 0.667
+    }
+  ]
+}

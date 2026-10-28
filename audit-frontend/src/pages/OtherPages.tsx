@@ -261,10 +261,10 @@ export function EvidencePage() {
                   <Btn size="xs" onClick={() => navigate(`/detection?case_id=${f.case_id}&evidence_id=${f.id}`)}>Object Detection</Btn>
                 )}
                 {f.file_type === 'Document' && (
-                  <Btn size="xs" onClick={() => navigate('/ocr')}>OCR Extract</Btn>
+                  <Btn size="xs" onClick={() => navigate(`/ocr?case_id=${encodeURIComponent(f.case_id)}`)}>OCR Extract</Btn>
                 )}
                 {f.file_type === 'FIR' && (
-                  <Btn size="xs" onClick={() => navigate('/bns')}>BNS Classification</Btn>
+                  <Btn size="xs" onClick={() => navigate(`/bns?case_id=${encodeURIComponent(f.case_id)}`)}>BNS Classification</Btn>
                 )}
                 <Btn size="xs" onClick={() => verifyHash(f.id)}>Verify Hash</Btn>
               </div>
@@ -507,6 +507,8 @@ export function DetectionPage() {
 
 // ── BNS CLASSIFICATION ────────────────────────────────────────────────────
 export function BNSPage() {
+  const [searchParams] = useSearchParams()
+  const requestedCaseId = searchParams.get('case_id')
   const [caseSearch, setCaseSearch] = useState('')
   const [selectedCase, setSelectedCase] = useState<Case | null>(null)
   const [caseResults, setCaseResults] = useState<Case[]>([])
@@ -532,6 +534,25 @@ export function BNSPage() {
     setSelectedCase(c); setCaseSearch(''); setCaseResults([])
     setFirText(c.fir_description || '')
   }
+
+  // A case-page action opens BNS with its case and FIR narrative already linked.
+  useEffect(() => {
+    if (!requestedCaseId || selectedCase?.id === requestedCaseId) return
+    let active = true
+    api.getCase(requestedCaseId)
+      .then((res) => {
+        if (!active) return
+        const requestedCase = res.data
+        setSelectedCase(requestedCase)
+        setCaseSearch('')
+        setCaseResults([])
+        setFirText(requestedCase.fir_description || '')
+      })
+      .catch(() => {
+        if (active) setErr('Unable to load the selected case for BNS classification.')
+      })
+    return () => { active = false }
+  }, [requestedCaseId, selectedCase?.id])
 
   const classify = async () => {
     if (!selectedCase) { setErr('Select a case first.'); return }
@@ -1018,6 +1039,8 @@ export function BNSPage() {
 // ── OCR ───────────────────────────────────────────────────────────────────
 export function OCRPage() {
   const navigate = useNavigate()
+  const [searchParams] = useSearchParams()
+  const requestedCaseId = searchParams.get('case_id')
   const [subTab, setSubTab] = useState(0)
 
   // Extract Tab States
@@ -1044,12 +1067,19 @@ export function OCRPage() {
   const [searchResults, setSearchResults] = useState<any[]>([])
 
   useEffect(() => {
-    api.getCases({ per_page: 1 }).then((res) => {
-      if (res.data && res.data.length > 0) {
-        setSelectedCase(res.data[0])
-      }
-    }).catch(() => { })
-  }, [])
+    let active = true
+    if (requestedCaseId) {
+      api.getCase(requestedCaseId).then((res) => {
+        if (active) setSelectedCase(res.data)
+      }).catch(() => { })
+    } else {
+      api.getCases({ per_page: 1 }).then((res) => {
+        if (active && res.data?.[0]) setSelectedCase(res.data[0])
+      }).catch(() => { })
+    }
+
+    return () => { active = false }
+  }, [requestedCaseId])
 
   useEffect(() => {
     if (!file || !file.type.startsWith('image/')) {
