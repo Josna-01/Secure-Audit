@@ -412,3 +412,7 @@ scratch/
 /.vscode/
 
 # Shared launcher scripts are tracked; they start the checked-in local services.
+
+
+
+bns-backend
